@@ -1,6 +1,6 @@
 # Modbus TCP IO Module
 
-A flexible Ethernet-based Modbus TCP IO module built on the Waveshare W5500-EVB-Pico board (RP2040). Features a modern web interface for configuration and real-time monitoring.
+A flexible Ethernet-based Modbus TCP IO module built on the Wiznet W5500-EVB-Pico board (RP2040). Features a modern web interface for configuration and real-time monitoring.
 
 ![W5500-EVB-PoE-Pico Pinout](images/W5500-EVB-PoE-Pico-pinout.png)
 
