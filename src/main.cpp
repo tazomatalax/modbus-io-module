@@ -7,8 +7,15 @@
 #include <EEPROM.h>
 
 // Pin Definitions
+#define PIN_ETH_MISO 16
 #define PIN_ETH_CS 17
+#define PIN_ETH_SCK 18
+#define PIN_ETH_MOSI 19
+#define PIN_ETH_RST 20
 #define PIN_ETH_IRQ 21
+#define PIN_EXT_LED 22
+
+// Constants
 #define EEPROM_SIZE 512
 #define CONFIG_ADDR 0
 #define CONFIG_VERSION 2  // Increment this when config structure changes
@@ -16,6 +23,7 @@
 
 // Global flags
 bool modbusClientConnected = false;
+bool core0setupComplete = false;
 
 // Digital IO pins
 const uint8_t DIGITAL_INPUTS[] = {0, 1, 2, 3, 4, 5, 6, 7};  // Digital input pins
@@ -47,8 +55,9 @@ const Config DEFAULT_CONFIG = {
 // Ethernet and Server instances
 Wiznet5500lwIP eth(PIN_ETH_CS, SPI, PIN_ETH_IRQ);
 WiFiServer modbusServer(502);
-ModbusTCPServer ModbusTCPServer;
+ModbusTCPServer modbus;
 WebServer webServer(80);
+WiFiClient client;
 
 // Function declarations
 void loadConfig();
@@ -80,6 +89,8 @@ void setup() {
         pinMode(pin, OUTPUT);
     }
 
+    pinMode(LED_BUILTIN, OUTPUT);
+
     analogReadResolution(12);
     
     // Initialize EEPROM
@@ -92,9 +103,16 @@ void setup() {
     setupEthernet();
     setupModbus();
     setupWebServer();
+    core0setupComplete = true;
 }
 
-WiFiClient client;
+void setup1() {
+    pinMode(PIN_EXT_LED, OUTPUT);
+    while (!core0setupComplete) {
+        delay(100);
+    }
+    digitalWrite(PIN_EXT_LED, HIGH);
+}
 
 void loop() {
     if (!modbusClientConnected) {
@@ -106,22 +124,29 @@ void loop() {
             Serial.println("new client");
 
             // let the Modbus TCP accept the connection 
-            ModbusTCPServer.accept(client);
+            modbus.accept(client);
 
             modbusClientConnected = true;
+            digitalWrite(LED_BUILTIN, HIGH);
         }
     } else {
         if(!client.connected()) {
             Serial.println("client disconnected");
             modbusClientConnected = false;
+            digitalWrite(LED_BUILTIN, LOW);
         } else {
             // poll for Modbus TCP requests, while client connected
-            ModbusTCPServer.poll();
+            modbus.poll();
             // update IO
             updateIO();
         }
     }
     webServer.handleClient();
+}
+
+void loop1() {
+    delay(500);
+    digitalWrite(PIN_EXT_LED, !digitalRead(PIN_EXT_LED));
 }
 
 void loadConfig() {
@@ -144,6 +169,9 @@ void saveConfig() {
 void setupEthernet() {
     // Set hostname first
     eth.hostname(config.hostname);
+
+    eth.setSPISpeed(30000000);
+    lwipPollingPeriod(3);
 
     if (config.dhcpEnabled) {
         if (!eth.begin()) {
@@ -189,7 +217,7 @@ void setupEthernet() {
 void setupModbus() {
     modbusServer.begin();
     
-    if (!ModbusTCPServer.begin()) {
+    if (!modbus.begin()) {
         Serial.println("Failed to start Modbus TCP Server!");
         return;
     }
@@ -197,10 +225,10 @@ void setupModbus() {
     Serial.println("Modbus TCP Server started");
     
     // Configure Modbus registers
-    ModbusTCPServer.configureHoldingRegisters(0x00, 16);  // 16 holding registers
-    ModbusTCPServer.configureInputRegisters(0x00, 16);    // 16 input registers
-    ModbusTCPServer.configureCoils(0x00, 16);            // 16 coils
-    ModbusTCPServer.configureDiscreteInputs(0x00, 16);   // 16 discrete inputs
+    modbus.configureHoldingRegisters(0x00, 16);  // 16 holding registers
+    modbus.configureInputRegisters(0x00, 16);    // 16 input registers
+    modbus.configureCoils(0x00, 16);            // 16 coils
+    modbus.configureDiscreteInputs(0x00, 16);   // 16 discrete inputs
 }
 
 void setupWebServer() {
@@ -225,6 +253,9 @@ void handleRoot() {
             --warning-color: #ff9800;
             --background-color: #f5f5f5;
             --card-background: #ffffff;
+            --on-color:rgb(0, 190, 41);
+            --off-color:rgb(124, 124, 124);
+            --analog-color:rgb(0, 83, 151);
         }
         
         body { 
@@ -446,15 +477,15 @@ void handleRoot() {
         }
         
         .io-on {
-            background-color: var(--success-color);
+            background-color: var(--on-color);
         }
         
         .io-off {
-            background-color: var(--error-color);
+            background-color: var(--off-color);
         }
         
         .analog-value {
-            background-color: var(--primary-color);
+            background-color: var(--analog-color);
         }
     </style>
 </head>
@@ -853,7 +884,7 @@ void handleGetIOStatus() {
 void updateIO() {
     // Update discrete inputs from digital input pins
     for (size_t i = 0; i < sizeof(DIGITAL_INPUTS)/sizeof(DIGITAL_INPUTS[0]); i++) {
-        ModbusTCPServer.discreteInputWrite(i, digitalRead(DIGITAL_INPUTS[i]));
+        modbus.discreteInputWrite(i, digitalRead(DIGITAL_INPUTS[i]));
     }
 
     // Update input registers from analog input pins (convert to millivolts)
@@ -861,11 +892,11 @@ void updateIO() {
         uint32_t rawValue = analogRead(ANALOG_INPUTS[i]);
         // Convert to millivolts: (raw * 3300) / 4095
         uint32_t millivolts = (rawValue * 3300UL) / 4095UL;
-        ModbusTCPServer.inputRegisterWrite(i, millivolts);
+        modbus.inputRegisterWrite(i, millivolts);
     }
 
     // Update digital outputs from coils
     for (size_t i = 0; i < sizeof(DIGITAL_OUTPUTS)/sizeof(DIGITAL_OUTPUTS[0]); i++) {
-        digitalWrite(DIGITAL_OUTPUTS[i], ModbusTCPServer.coilRead(i));
+        digitalWrite(DIGITAL_OUTPUTS[i], modbus.coilRead(i));
     }
 }
