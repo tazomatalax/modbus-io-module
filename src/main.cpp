@@ -68,6 +68,7 @@ void setupWebServer();
 void handleRoot();
 void handleGetConfig();
 void handleSetConfig();
+void handleSetOutput();
 void updateIO();
 void handleGetIOStatus();
 
@@ -236,6 +237,7 @@ void setupWebServer() {
     webServer.on("/config", HTTP_GET, handleGetConfig);
     webServer.on("/config", HTTP_POST, handleSetConfig);
     webServer.on("/iostatus", HTTP_GET, handleGetIOStatus);
+    webServer.on("/setoutput", HTTP_POST, handleSetOutput);
     webServer.begin();
 }
 
@@ -487,6 +489,23 @@ void handleRoot() {
         .analog-value {
             background-color: var(--analog-color);
         }
+        
+        .io-item {
+            cursor: default;
+            user-select: none;
+        }
+        
+        .output-item {
+            cursor: pointer;
+        }
+        
+        .output-item:hover {
+            opacity: 0.8;
+        }
+        
+        .output-item:active {
+            transform: scale(0.98);
+        }
     </style>
 </head>
 <body>
@@ -554,17 +573,17 @@ void handleRoot() {
             <div class="io-grid">
                 <div class="io-group">
                     <h3>Digital Inputs</h3>
-                    <div id="digital-inputs"></div>
+                    <div id="digital-inputs" class="io-grid"></div>
                 </div>
                 
                 <div class="io-group">
                     <h3>Digital Outputs</h3>
-                    <div id="digital-outputs"></div>
+                    <div id="digital-outputs" class="io-grid"></div>
                 </div>
                 
                 <div class="io-group">
                     <h3>Analog Inputs</h3>
-                    <div id="analog-inputs"></div>
+                    <div id="analog-inputs" class="io-grid"></div>
                 </div>
             </div>
         </div>
@@ -650,6 +669,27 @@ void handleRoot() {
             });
         }
 
+        function toggleOutput(index, currentState) {
+            const newState = currentState ? 0 : 1;
+            fetch('/setoutput', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: `output=${index}&state=${newState}`
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Network response was not ok');
+                }
+                // Update will happen on next status refresh
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('Failed to toggle output');
+            });
+        }
+
         function updateIOStatus() {
             fetch('/iostatus')
                 .then(response => response.json())
@@ -675,10 +715,11 @@ void handleRoot() {
                         </div>`
                     ).join('');
 
-                    // Update digital outputs
+                    // Update digital outputs with click handlers
                     const doDiv = document.getElementById('digital-outputs');
                     doDiv.innerHTML = data.do.map((value, index) => 
-                        `<div class="io-item ${value ? 'io-on' : 'io-off'}">
+                        `<div class="io-item output-item ${value ? 'io-on' : 'io-off'}" 
+                              onclick="toggleOutput(${index}, ${value})">
                             <span>DO${index + 1}</span>
                             <span>${value ? 'ON' : 'OFF'}</span>
                         </div>`
@@ -694,7 +735,7 @@ void handleRoot() {
                     ).join('');
                 });
         }
-
+        
         // Load initial configuration
         loadConfig();
 
@@ -847,6 +888,28 @@ void handleSetConfig() {
     webServer.send(200, "application/json", response);
     Serial.println("Config update complete, rebooting...");
     rp2040.reboot();
+}
+
+void handleSetOutput() {
+    if (!webServer.hasArg("output") || !webServer.hasArg("state")) {
+        webServer.send(400, "text/plain", "Missing output or state parameter");
+        return;
+    }
+
+    int output = webServer.arg("output").toInt();
+    int state = webServer.arg("state").toInt();
+
+    // Validate output number
+    if (output < 0 || output >= sizeof(DIGITAL_OUTPUTS)/sizeof(DIGITAL_OUTPUTS[0])) {
+        webServer.send(400, "text/plain", "Invalid output number");
+        return;
+    }
+
+    // Set the output state
+    digitalWrite(DIGITAL_OUTPUTS[output], state ? HIGH : LOW);
+    modbus.coilWrite(output, state);
+
+    webServer.send(200, "text/plain", "OK");
 }
 
 void handleGetIOStatus() {
