@@ -388,17 +388,27 @@ button:hover {
     display: none;
 }
 
-/* Footer and logo styles */
-.footer {
+/* Button and logo container */
+.button-logo-container {
     display: flex;
-    justify-content: flex-end;
-    margin-top: 30px;
-    margin-bottom: 20px;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 20px;
+}
+
+.button-logo-container button {
+    margin-right: 20px;
+}
+
+.button-logo-container .status {
+    flex-grow: 1;
+    margin-top: 0;
 }
 
 .logo-link {
     text-decoration: none;
     transition: opacity 0.2s;
+    margin-left: auto;
 }
 
 .logo-link:hover {
@@ -406,6 +416,6 @@ button:hover {
 }
 
 .footer-logo {
-    max-width: 216px; /* Half of the original size */
+    max-width: 216px; /* Smaller to fit in the row */
     height: auto;
 }

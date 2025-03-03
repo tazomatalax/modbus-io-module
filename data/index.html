@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Modbus IO Module Configuration</title>
+    <title>Modbus TCP IO Module Configuration</title>
     <link rel="stylesheet" href="styles.css">
     <link rel="icon" href="favicon.ico" type="image/x-icon">
 </head>
@@ -9,7 +9,7 @@
     <div class="container">
         <div class="device-info-card">
             <div class="device-header">
-                <h1>Modbus IO Module</h1>
+                <h1>Modbus TCP IO Module</h1>
                 <div class="status-item">
                     <span class="status-indicator" id="modbus-status"></span>
                     <span id="modbus-status-text">Loading...</span>
@@ -125,14 +125,13 @@
                     <div id="ai-config"></div>
                 </div>
             </div>
-            <button onclick="saveIOConfig()">Save IO Configuration</button>
-            <div id="io-config-status" class="status"></div>
-        </div>
-        
-        <div class="footer">
-            <a href="https://github.com/PeakeElectronicInnovation/modbus-io-module" target="_blank" class="logo-link">
-                <img src="logo.png" alt="Peake Electronic Innovation Logo" class="footer-logo">
-            </a>
+            <div class="button-logo-container">
+                <button onclick="saveIOConfig()">Save IO Configuration</button>
+                <div id="io-config-status" class="status"></div>
+                <a href="https://github.com/PeakeElectronicInnovation/modbus-io-module" target="_blank" class="logo-link">
+                    <img src="logo.png" alt="Peake Electronic Innovation Logo" class="footer-logo">
+                </a>
+            </div>
         </div>
     </div>
     <script src="script.js"></script>
