@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Modbus IO Module Configuration</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="icon" href="favicon.ico" type="image/x-icon">
+</head>
+<body>
+    <div class="container">
+        <div class="device-info-card">
+            <div class="device-header">
+                <h1>Modbus IO Module</h1>
+                <div class="status-item">
+                    <span class="status-indicator" id="modbus-status"></span>
+                    <span id="modbus-status-text">Loading...</span>
+                </div>
+            </div>
+            
+            <div class="device-details">
+                <div class="device-detail-column">
+                    <div class="device-detail">
+                        <div class="device-detail-label">IP Address</div>
+                        <div class="device-detail-value" id="current-ip">Loading...</div>
+                    </div>
+                    <div class="device-detail">
+                        <div class="device-detail-label">Hostname</div>
+                        <div class="device-detail-value" id="current-hostname">Loading...</div>
+                    </div>
+                </div>
+                <div class="device-detail-column">
+                    <div class="device-detail">
+                        <div class="device-detail-label">Modbus Port</div>
+                        <div class="device-detail-value" id="current-modbus-port">Loading...</div>
+                    </div>
+                    <div class="device-detail">
+                        <div class="device-detail-label">Connected Clients</div>
+                        <div class="device-detail-value" id="client-count">0</div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="client-section" id="client-section" style="display: none;">
+                <h2>Connected Clients</h2>
+                <div class="client-grid" id="client-list">
+                    <div class="no-clients">No clients connected</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="card">
+            <h1>Network Configuration</h1>
+            
+            <div class="switch-wrapper">
+                <label class="switch">
+                    <input type="checkbox" id="dhcp">
+                    <span class="slider"></span>
+                </label>
+                <span class="switch-label">Enable DHCP</span>
+            </div>
+            
+            <div class="form-group">
+                <label for="hostname">Hostname</label>
+                <input type="text" id="hostname">
+            </div>
+            
+            <div class="form-group">
+                <label for="ip">IP Address</label>
+                <input type="text" id="ip">
+            </div>
+            
+            <div class="form-group">
+                <label for="subnet">Subnet Mask</label>
+                <input type="text" id="subnet">
+            </div>
+            
+            <div class="form-group">
+                <label for="gateway">Gateway</label>
+                <input type="text" id="gateway">
+            </div>
+            
+            <div class="form-group">
+                <label for="modbus_port">Modbus Port</label>
+                <input type="text" id="modbus_port">
+            </div>
+            
+            <button onclick="saveConfig()">Save Configuration</button>
+            <div id="status" class="status"></div>
+        </div>
+
+        <div class="card">
+            <h1>IO Status</h1>
+            <div class="io-section">
+                <div class="io-group">
+                    <h3>Digital Inputs</h3>
+                    <div id="digital-inputs" class="io-grid"></div>
+                </div>
+                
+                <div class="io-group">
+                    <h3>Digital Outputs</h3>
+                    <div id="digital-outputs" class="io-grid"></div>
+                </div>
+                
+                <div class="io-group">
+                    <h3>Analog Inputs</h3>
+                    <div id="analog-inputs" class="io-grid"></div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="card">
+            <h1>IO Configuration</h1>
+            <div class="io-section">
+                <div class="io-group">
+                    <h3>Digital Input Configuration</h3>
+                    <div id="di-config"></div>
+                </div>
+                
+                <div class="io-group">
+                    <h3>Digital Output Configuration</h3>
+                    <div id="do-config"></div>
+                </div>
+                
+                <div class="io-group">
+                    <h3>Analog Input Configuration</h3>
+                    <div id="ai-config"></div>
+                </div>
+            </div>
+            <button onclick="saveIOConfig()">Save IO Configuration</button>
+            <div id="io-config-status" class="status"></div>
+        </div>
+        
+        <div class="footer">
+            <a href="https://github.com/PeakeElectronicInnovation/modbus-io-module" target="_blank" class="logo-link">
+                <img src="logo.png" alt="Peake Electronic Innovation Logo" class="footer-logo">
+            </a>
+        </div>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html>

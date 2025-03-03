@@ -1,101 +1,4 @@
-#include <Arduino.h>
-#include <SPI.h>
-#include <W5500lwIP.h>
-#include <WebServer.h>
-#include <ArduinoModbus.h>
-#include <ArduinoJson.h>
-#include <EEPROM.h>
-
-// Pin Definitions
-#define PIN_ETH_MISO 16
-#define PIN_ETH_CS 17
-#define PIN_ETH_SCK 18
-#define PIN_ETH_MOSI 19
-#define PIN_ETH_RST 20
-#define PIN_ETH_IRQ 21
-#define PIN_EXT_LED 22
-
-// Constants
-#define EEPROM_SIZE 1024
-#define CONFIG_ADDR 0
-#define CONFIG_VERSION 5  // Increment this when config structure changes
-#define HOSTNAME_MAX_LENGTH 32
-#define MAX_MODBUS_CLIENTS 4  // Maximum number of concurrent Modbus clients
-
-// Global flags
-bool core0setupComplete = false;
-
-// Digital IO pins
-const uint8_t DIGITAL_INPUTS[] = {0, 1, 2, 3, 4, 5, 6, 7};  // Digital input pins
-const uint8_t DIGITAL_OUTPUTS[] = {8, 9, 10, 11, 12, 13, 14, 15}; // Digital output pins
-const uint8_t ANALOG_INPUTS[] = {26, 27, 28};   // ADC pins
-
-// Network and Modbus Configuration
-struct Config {
-    uint8_t version;
-    bool dhcpEnabled;
-    uint8_t ip[4];
-    uint8_t gateway[4];
-    uint8_t subnet[4];
-    uint16_t modbusPort;
-    char hostname[HOSTNAME_MAX_LENGTH];
-    bool diPullup[8];         // Enable internal pullup for digital inputs
-    bool diInvert[8];         // Invert logic for digital inputs
-    bool doInvert[8];         // Invert logic for digital outputs
-    bool aiPulldown[3];       // Enable internal pulldown for analog inputs
-    bool aiRawFormat[3];      // Use RAW format (true) or millivolts (false)
-} config;
-
-// Default configuration
-const Config DEFAULT_CONFIG = {
-    CONFIG_VERSION,              // version
-    true,                       // DHCP enabled
-    {192, 168, 1, 10},         // Default IP
-    {192, 168, 1, 1},          // Default Gateway
-    {255, 255, 255, 0},        // Default Subnet
-    502,                       // Default Modbus port
-    "modbus-io",                // Default hostname
-    {false, false, false, false, false, false, false, false},  // diPullup (all disabled)
-    {false, false, false, false, false, false, false, false},  // diInvert (no inversion)
-    {false, false, false, false, false, false, false, false},  // doInvert (no inversion)
-    {false, false, false},  // aiPulldown (all disabled)
-    {true, true, true}      // aiRawFormat (all RAW format by default)
-};
-
-// Ethernet and Server instances
-Wiznet5500lwIP eth(PIN_ETH_CS, SPI, PIN_ETH_IRQ);
-WiFiServer modbusServer(502);
-WebServer webServer(80);
-WiFiClient client;
-
-// Client management
-struct ModbusClientConnection {
-    WiFiClient client;
-    ModbusTCPServer server;
-    bool connected;
-    IPAddress clientIP;
-    unsigned long connectionTime;
-};
-
-ModbusClientConnection modbusClients[MAX_MODBUS_CLIENTS];
-int connectedClients = 0;
-int IO_CONFIG_ADDRESS = sizeof(config);
-
-// Function declarations
-void loadConfig();
-void saveConfig();
-void setPinModes();
-void setupEthernet();
-void setupModbus();
-void setupWebServer();
-void handleRoot();
-void handleGetConfig();
-void handleSetConfig();
-void handleSetOutput();
-void updateIOForClient(int clientIndex);
-void handleGetIOStatus();
-void handleGetIOConfig();
-void handleSetIOConfig();
+#include "sys_init.h"
 
 void setup() {
     Serial.begin(115200);
@@ -111,8 +14,19 @@ void setup() {
 
     analogReadResolution(12);
     
-    // Initialize EEPROM
-    EEPROM.begin(EEPROM_SIZE);
+    // Initialize LittleFS
+    if (!LittleFS.begin()) {
+        Serial.println("Failed to mount LittleFS filesystem");
+        // Format if mount failed
+        if (LittleFS.format()) {
+            Serial.println("LittleFS formatted successfully");
+            if (!LittleFS.begin()) {
+                Serial.println("Failed to mount LittleFS after formatting");
+            }
+        } else {
+            Serial.println("Failed to format LittleFS");
+        }
+    }
     
     Serial.println("Loading config...");
     delay(500);
@@ -190,29 +104,198 @@ void loop() {
             }
         }
     }
-    
+    updateIOpins();
     webServer.handleClient();
 }
 
 void loadConfig() {
-    // Read config from EEPROM
-    rp2040.idleOtherCore();     // Make sure we are not trying to access EEPROM while the other core is using flash
-    EEPROM.get(CONFIG_ADDR, config);
-    rp2040.resumeOtherCore();   // Resume other core after reading from EEPROM
-    
-    // Check if config is valid
-    if (config.version != CONFIG_VERSION) {
-        Serial.println("Invalid config version, using defaults");
-        config = DEFAULT_CONFIG;
-        saveConfig();
+    // Read config from LittleFS
+    if (LittleFS.exists(CONFIG_FILE)) {
+        File configFile = LittleFS.open(CONFIG_FILE, "r");
+        if (configFile) {
+            // Create a JSON document to store the configuration
+            StaticJsonDocument<2048> doc;
+            
+            // Deserialize the JSON document
+            DeserializationError error = deserializeJson(doc, configFile);
+            configFile.close();
+            
+            if (!error) {
+                // Extract configuration values
+                config.version = doc["version"] | CONFIG_VERSION;
+                config.dhcpEnabled = doc["dhcpEnabled"] | DEFAULT_CONFIG.dhcpEnabled;
+                config.modbusPort = doc["modbusPort"] | DEFAULT_CONFIG.modbusPort;
+                
+                // Get IP addresses
+                JsonArray ipArray = doc["ip"].as<JsonArray>();
+                if (ipArray) {
+                    for (int i = 0; i < 4; i++) {
+                        config.ip[i] = ipArray[i] | DEFAULT_CONFIG.ip[i];
+                    }
+                } else {
+                    memcpy(config.ip, DEFAULT_CONFIG.ip, 4);
+                }
+                
+                JsonArray gatewayArray = doc["gateway"].as<JsonArray>();
+                if (gatewayArray) {
+                    for (int i = 0; i < 4; i++) {
+                        config.gateway[i] = gatewayArray[i] | DEFAULT_CONFIG.gateway[i];
+                    }
+                } else {
+                    memcpy(config.gateway, DEFAULT_CONFIG.gateway, 4);
+                }
+                
+                JsonArray subnetArray = doc["subnet"].as<JsonArray>();
+                if (subnetArray) {
+                    for (int i = 0; i < 4; i++) {
+                        config.subnet[i] = subnetArray[i] | DEFAULT_CONFIG.subnet[i];
+                    }
+                } else {
+                    memcpy(config.subnet, DEFAULT_CONFIG.subnet, 4);
+                }
+                
+                // Get hostname
+                const char* hostname = doc["hostname"] | DEFAULT_CONFIG.hostname;
+                strncpy(config.hostname, hostname, HOSTNAME_MAX_LENGTH - 1);
+                config.hostname[HOSTNAME_MAX_LENGTH - 1] = '\0';  // Ensure null termination
+                
+                // Get digital input configurations
+                JsonArray diPullupArray = doc["diPullup"].as<JsonArray>();
+                if (diPullupArray) {
+                    for (int i = 0; i < 8; i++) {
+                        config.diPullup[i] = diPullupArray[i] | DEFAULT_CONFIG.diPullup[i];
+                    }
+                } else {
+                    memcpy(config.diPullup, DEFAULT_CONFIG.diPullup, 8);
+                }
+                
+                JsonArray diInvertArray = doc["diInvert"].as<JsonArray>();
+                if (diInvertArray) {
+                    for (int i = 0; i < 8; i++) {
+                        config.diInvert[i] = diInvertArray[i] | DEFAULT_CONFIG.diInvert[i];
+                    }
+                } else {
+                    memcpy(config.diInvert, DEFAULT_CONFIG.diInvert, 8);
+                }
+                
+                // Get digital output configurations
+                JsonArray doInvertArray = doc["doInvert"].as<JsonArray>();
+                if (doInvertArray) {
+                    for (int i = 0; i < 8; i++) {
+                        config.doInvert[i] = doInvertArray[i] | DEFAULT_CONFIG.doInvert[i];
+                    }
+                } else {
+                    memcpy(config.doInvert, DEFAULT_CONFIG.doInvert, 8);
+                }
+                
+                // Get analog input configurations
+                JsonArray aiPulldownArray = doc["aiPulldown"].as<JsonArray>();
+                if (aiPulldownArray) {
+                    for (int i = 0; i < 3; i++) {
+                        config.aiPulldown[i] = aiPulldownArray[i] | DEFAULT_CONFIG.aiPulldown[i];
+                    }
+                } else {
+                    memcpy(config.aiPulldown, DEFAULT_CONFIG.aiPulldown, 3);
+                }
+                
+                JsonArray aiRawFormatArray = doc["aiRawFormat"].as<JsonArray>();
+                if (aiRawFormatArray) {
+                    for (int i = 0; i < 3; i++) {
+                        config.aiRawFormat[i] = aiRawFormatArray[i] | DEFAULT_CONFIG.aiRawFormat[i];
+                    }
+                } else {
+                    memcpy(config.aiRawFormat, DEFAULT_CONFIG.aiRawFormat, 3);
+                }
+                
+                Serial.println("Configuration loaded from file");
+                return;
+            } else {
+                Serial.print("Failed to parse config file: ");
+                Serial.println(error.c_str());
+            }
+        } else {
+            Serial.println("Failed to open config file for reading");
+        }
+    } else {
+        Serial.println("Config file does not exist, using defaults");
     }
+    
+    // If we get here, use default config
+    config = DEFAULT_CONFIG;
+    saveConfig();
 }
 
 void saveConfig() {
-    EEPROM.put(CONFIG_ADDR, config);
-    rp2040.idleOtherCore();     // Make sure we are not trying to access EEPROM while the other core is using flash
-    EEPROM.commit();
-    rp2040.resumeOtherCore();   // Resume other core after reading from EEPROM
+    // Create a JSON document to store the configuration
+    StaticJsonDocument<2048> doc;
+    
+    // Store configuration values
+    doc["version"] = config.version;
+    doc["dhcpEnabled"] = config.dhcpEnabled;
+    doc["modbusPort"] = config.modbusPort;
+    
+    // Store IP addresses
+    JsonArray ipArray = doc.createNestedArray("ip");
+    for (int i = 0; i < 4; i++) {
+        ipArray.add(config.ip[i]);
+    }
+    
+    JsonArray gatewayArray = doc.createNestedArray("gateway");
+    for (int i = 0; i < 4; i++) {
+        gatewayArray.add(config.gateway[i]);
+    }
+    
+    JsonArray subnetArray = doc.createNestedArray("subnet");
+    for (int i = 0; i < 4; i++) {
+        subnetArray.add(config.subnet[i]);
+    }
+    
+    // Store hostname
+    doc["hostname"] = config.hostname;
+    
+    // Store digital input configurations
+    JsonArray diPullupArray = doc.createNestedArray("diPullup");
+    for (int i = 0; i < 8; i++) {
+        diPullupArray.add(config.diPullup[i]);
+    }
+    
+    JsonArray diInvertArray = doc.createNestedArray("diInvert");
+    for (int i = 0; i < 8; i++) {
+        diInvertArray.add(config.diInvert[i]);
+    }
+    
+    // Store digital output configurations
+    JsonArray doInvertArray = doc.createNestedArray("doInvert");
+    for (int i = 0; i < 8; i++) {
+        doInvertArray.add(config.doInvert[i]);
+    }
+    
+    // Store analog input configurations
+    JsonArray aiPulldownArray = doc.createNestedArray("aiPulldown");
+    for (int i = 0; i < 3; i++) {
+        aiPulldownArray.add(config.aiPulldown[i]);
+    }
+    
+    JsonArray aiRawFormatArray = doc.createNestedArray("aiRawFormat");
+    for (int i = 0; i < 3; i++) {
+        aiRawFormatArray.add(config.aiRawFormat[i]);
+    }
+    
+    // Open file for writing
+    File configFile = LittleFS.open(CONFIG_FILE, "w");
+    if (!configFile) {
+        Serial.println("Failed to open config file for writing");
+        return;
+    }
+    
+    // Serialize JSON to file
+    if (serializeJson(doc, configFile) == 0) {
+        Serial.println("Failed to write to config file");
+    } else {
+        Serial.println("Configuration saved to file");
+    }
+    
+    configFile.close();
 }
 
 void setPinModes() {
@@ -332,10 +415,15 @@ void setupWebServer() {
     delay(50);
     
     webServer.on("/", HTTP_GET, handleRoot);
+    webServer.on("/index.html", HTTP_GET, handleRoot);
+    webServer.on("/styles.css", HTTP_GET, handleCSS);
+    webServer.on("/script.js", HTTP_GET, handleJS);
+    webServer.on("/favicon.ico", HTTP_GET, handleFavicon);
+    webServer.on("/logo.png", HTTP_GET, handleLogo);
     webServer.on("/config", HTTP_GET, handleGetConfig);
     webServer.on("/config", HTTP_POST, handleSetConfig);
     webServer.on("/iostatus", HTTP_GET, handleGetIOStatus);
-    webServer.on("/io/setoutput", HTTP_POST, handleSetOutput);
+    webServer.on("/setoutput", HTTP_POST, handleSetOutput);
     webServer.on("/ioconfig", HTTP_GET, handleGetIOConfig);
     webServer.on("/ioconfig", HTTP_POST, handleSetIOConfig);
     webServer.begin();
@@ -343,1000 +431,105 @@ void setupWebServer() {
     Serial.println("Web server started");
 }
 
+void updateIOpins() {
+    // Update Modbus registers with current IO state
+    
+    // Update digital inputs - account for invert configuration
+    for (int i = 0; i < 8; i++) {
+        uint16_t value = digitalRead(DIGITAL_INPUTS[i]);
+        
+        // Apply inversion if configured
+        if (config.diInvert[i]) {
+            value = !value;
+        }
+        
+        ioStatus.dIn[i] = value;
+    }
+    
+    // Update digital outputs - account for inversion
+    for (int i = 0; i < 8; i++) {
+        // Check the coil state for each client and update the actual pin state
+        bool newState = ioStatus.dOut[i];
+        for (int j = 0; j < MAX_MODBUS_CLIENTS; j++) {
+            if (modbusClients[j].connected) {
+                newState = modbusClients[j].server.coilRead(i);
+            }
+        }
+        
+        // Apply inversion if configured
+        if (config.doInvert[i]) {
+            newState = !newState;
+        }
+        
+        digitalWrite(DIGITAL_OUTPUTS[i], newState);
+        ioStatus.dOut[i] = newState;
+    }
+    
+    // Update analog inputs, using either raw values or millivolts
+    for (int i = 0; i < 3; i++) {
+        uint32_t rawValue = analogRead(ANALOG_INPUTS[i]);
+        uint16_t valueToWrite;
+        
+        if (config.aiRawFormat[i]) {
+            // Use RAW format (0-4095)
+            valueToWrite = rawValue;
+        } else {
+            // Convert to millivolts: (raw * 3300) / 4095
+            valueToWrite = (rawValue * 3300UL) / 4095UL;
+        }
+        
+        ioStatus.aIn[i] = valueToWrite;
+    }
+}
+
 void handleRoot() {
-    const char WEBPAGE_HTML[] = R"=====(
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Modbus IO Module Configuration</title>
-    <style>
-        :root {
-            --primary-color: #2196F3;
-            --primary-hover: #0b7dda;
-            --success-color: #4CAF50;
-            --error-color: #f44336;
-            --warning-color: #ff9800;
-            --background-color: #f5f5f5;
-            --card-background: #ffffff;
-            --on-color: rgb(0, 170, 41);
-            --off-color: rgb(124, 124, 124);
-            --analog-color: rgb(0, 103, 181);
-            --border-color: rgba(0, 0, 0, 0.1);
-            --io-group-bg: #f9f9f9;
-        }
-        
-        body { 
-            font-family: 'Segoe UI', Arial, sans-serif; 
-            margin: 0;
-            padding: 20px;
-            background-color: var(--background-color);
-            color: #333;
-        }
-        
-        .container { 
-            max-width: 800px; 
-            margin: 0 auto;
-        }
-        
-        .card {
-            background: var(--card-background);
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            padding: 20px;
-            margin-bottom: 20px;
-        }
-        
-        h1 {
-            color: var(--primary-color);
-            margin: 0 0 20px 0;
-            font-weight: 300;
-            font-size: 2.2em;
-        }
-        
-        h2 {
-            color: #555;
-            font-weight: 500;
-            margin: 0 0 15px 0;
-            font-size: 1.5em;
-        }
-        
-        .device-status {
-            margin-bottom: 20px;
-        }
-        
-        .status-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 10px;
-        }
-        
-        .status-item {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        
-        .status-indicator {
-            display: inline-block;
-            width: 10px;
-            height: 10px;
-            border-radius: 50%;
-            background-color: var(--error-color);
-        }
-        
-        .status-connected {
-            background-color: var(--success-color);
-        }
-        
-        .status-disconnected {
-            background-color: var(--error-color);
-        }
-        
-        .form-group {
-            margin-bottom: 15px;
-        }
-        
-        .form-group label {
-            display: block;
-            margin-bottom: 5px;
-            font-weight: 500;
-        }
-        
-        .form-group input {
-            width: 100%;
-            padding: 8px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            box-sizing: border-box;
-        }
-        
-        .switch-wrapper {
-            display: flex;
-            align-items: center;
-            margin-bottom: 15px;
-        }
-        
-        .switch {
-            position: relative;
-            display: inline-block;
-            width: 50px;
-            height: 24px;
-            margin-right: 10px;
-        }
-        
-        .slider {
-            position: absolute;
-            cursor: pointer;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background-color: #ccc;
-            transition: .4s;
-            border-radius: 24px;
-        }
-        
-        .slider:before {
-            position: absolute;
-            content: "";
-            height: 16px;
-            width: 16px;
-            left: 4px;
-            bottom: 4px;
-            background-color: white;
-            transition: .4s;
-            border-radius: 50%;
-        }
-        
-        input:checked + .slider {
-            background-color: var(--primary-color);
-        }
-        
-        input:checked + .slider:before {
-            transform: translateX(26px);
-        }
-        
-        .switch-label {
-            font-weight: 500;
-        }
-        
-        /* IO styling */
-        .io-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-            gap: 10px;
-        }
-        
-        .io-section {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 20px;
-        }
-        
-        .io-group {
-            flex: 1;
-            min-width: 250px;
-            margin-bottom: 20px;
-            background-color: var(--io-group-bg);
-            border-radius: 6px;
-            padding: 15px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-            border: 1px solid rgba(0,0,0,0.03);
-        }
-        
-        .io-group h3 {
-            margin: 0 0 15px 0;
-            color: #444;
-            font-size: 1.1em;
-            font-weight: 500;
-            padding-bottom: 8px;
-            border-bottom: 1px solid rgba(0,0,0,0.05);
-            display: flex;
-            align-items: center;
-        }
-        
-        .io-group h3::before {
-            content: "";
-            display: inline-block;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            margin-right: 8px;
-        }
-        
-        .io-group:nth-child(1) h3::before {
-            background-color: var(--off-color);
-        }
-        
-        .io-group:nth-child(2) h3::before {
-            background-color: var(--on-color);
-        }
-        
-        .io-group:nth-child(3) h3::before {
-            background-color: var(--analog-color);
-        }
-        
-        .io-item {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 10px 15px;
-            border-radius: 6px;
-            background-color: var(--off-color);
-            color: white;
-            margin-bottom: 8px;
-            box-shadow: 0 1px 2px rgba(0,0,0,0.1);
-            transition: all 0.2s ease;
-        }
-        
-        .io-on {
-            background-color: var(--on-color);
-        }
-        
-        .analog-value {
-            background-color: var(--analog-color);
-        }
-        
-        .output-item {
-            cursor: pointer;
-            transition: transform 0.1s, box-shadow 0.2s;
-        }
-        
-        .output-item:hover {
-            opacity: 0.9;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-        }
-        
-        .output-item:active {
-            transform: scale(0.98);
-        }
-        
-        /* Client list styling */
-        .client-list {
-            padding: 0;
-            margin: 0;
-        }
-        
-        .client-item {
-            background-color: white;
-            padding: 10px;
-            border-radius: 4px;
-            margin-bottom: 10px;
-            border: 1px solid var(--border-color);
-        }
-        
-        .client-item h4 {
-            margin: 0 0 8px 0;
-            color: var(--primary-color);
-            font-size: 1em;
-            font-weight: 500;
-        }
-        
-        .client-item p {
-            margin: 5px 0;
-            font-size: 0.9em;
-        }
-        
-        .no-clients {
-            color: #777;
-            font-style: italic;
-            padding: 10px 0;
-        }
-        
-        /* New device status card */
-        .device-info-card {
-            background: var(--card-background);
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            margin-bottom: 20px;
-            overflow: hidden;
-        }
-        
-        .device-header {
-            background-color: var(--primary-color);
-            color: white;
-            padding: 15px 20px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        
-        .device-header h1 {
-            margin: 0;
-            color: white;
-            font-size: 1.5em;
-            font-weight: 400;
-        }
-        
-        .device-details {
-            display: flex;
-            flex-wrap: wrap;
-            padding: 15px 20px;
-        }
-        
-        .device-detail-column {
-            flex: 1;
-            min-width: 200px;
-        }
-        
-        .device-detail {
-            margin-bottom: 10px;
-        }
-        
-        .device-detail-label {
-            font-weight: 500;
-            color: #555;
-            margin-bottom: 3px;
-        }
-        
-        .device-detail-value {
-            color: #333;
-        }
-        
-        .client-section {
-            border-top: 1px solid var(--border-color);
-            padding: 15px 20px;
-        }
-        
-        .client-section h2 {
-            margin: 0 0 15px 0;
-            font-size: 1.2em;
-            color: var(--primary-color);
-        }
-        
-        .client-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-            gap: 10px;
-        }
-        
-        /* IO Configuration */
-        .io-config-item {
-            margin-bottom: 15px;
-        }
-        
-        .io-config-title {
-            font-weight: 500;
-            margin-bottom: 5px;
-        }
-        
-        .io-config-options {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 10px;
-        }
-        
-        .switch-label {
-            display: inline-flex;
-            align-items: center;
-            margin-right: 15px;
-            cursor: pointer;
-        }
-        
-        .switch-text {
-            margin-left: 5px;
-        }
-        
-        button {
-            background-color: var(--primary-color);
-            color: white;
-            border: none;
-            border-radius: 4px;
-            padding: 8px 15px;
-            cursor: pointer;
-            font-size: 14px;
-            margin-top: 10px;
-            transition: background-color 0.2s;
-        }
-        
-        button:hover {
-            background-color: var(--primary-hover);
-        }
-        
-        .status {
-            margin-top: 15px;
-            padding: 10px;
-            border-radius: 4px;
-            display: none;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="device-info-card">
-            <div class="device-header">
-                <h1>Modbus IO Module</h1>
-                <div class="status-item">
-                    <span class="status-indicator" id="modbus-status"></span>
-                    <span id="modbus-status-text">Loading...</span>
-                </div>
-            </div>
-            
-            <div class="device-details">
-                <div class="device-detail-column">
-                    <div class="device-detail">
-                        <div class="device-detail-label">IP Address</div>
-                        <div class="device-detail-value" id="current-ip">Loading...</div>
-                    </div>
-                    <div class="device-detail">
-                        <div class="device-detail-label">Hostname</div>
-                        <div class="device-detail-value" id="current-hostname">Loading...</div>
-                    </div>
-                </div>
-                <div class="device-detail-column">
-                    <div class="device-detail">
-                        <div class="device-detail-label">Modbus Port</div>
-                        <div class="device-detail-value" id="current-modbus-port">Loading...</div>
-                    </div>
-                    <div class="device-detail">
-                        <div class="device-detail-label">Connected Clients</div>
-                        <div class="device-detail-value" id="client-count">0</div>
-                    </div>
-                </div>
-            </div>
-            
-            <div class="client-section" id="client-section" style="display: none;">
-                <h2>Connected Clients</h2>
-                <div class="client-grid" id="client-list">
-                    <div class="no-clients">No clients connected</div>
-                </div>
-            </div>
-        </div>
-        
-        <div class="card">
-            <h1>Network Configuration</h1>
-            
-            <div class="switch-wrapper">
-                <label class="switch">
-                    <input type="checkbox" id="dhcp">
-                    <span class="slider"></span>
-                </label>
-                <span class="switch-label">Enable DHCP</span>
-            </div>
-            
-            <div class="form-group">
-                <label for="hostname">Hostname</label>
-                <input type="text" id="hostname">
-            </div>
-            
-            <div class="form-group">
-                <label for="ip">IP Address</label>
-                <input type="text" id="ip">
-            </div>
-            
-            <div class="form-group">
-                <label for="subnet">Subnet Mask</label>
-                <input type="text" id="subnet">
-            </div>
-            
-            <div class="form-group">
-                <label for="gateway">Gateway</label>
-                <input type="text" id="gateway">
-            </div>
-            
-            <div class="form-group">
-                <label for="modbus_port">Modbus Port</label>
-                <input type="text" id="modbus_port">
-            </div>
-            
-            <button onclick="saveConfig()">Save Configuration</button>
-            <div id="status" class="status"></div>
-        </div>
+    if (LittleFS.exists("/index.html")) {
+        File file = LittleFS.open("/index.html", "r");
+        webServer.streamFile(file, "text/html");
+        file.close();
+    } else {
+        webServer.send(404, "text/plain", "File not found");
+    }
+}
 
-        <div class="card">
-            <h1>IO Status</h1>
-            <div class="io-section">
-                <div class="io-group">
-                    <h3>Digital Inputs</h3>
-                    <div id="digital-inputs" class="io-grid"></div>
-                </div>
-                
-                <div class="io-group">
-                    <h3>Digital Outputs</h3>
-                    <div id="digital-outputs" class="io-grid"></div>
-                </div>
-                
-                <div class="io-group">
-                    <h3>Analog Inputs</h3>
-                    <div id="analog-inputs" class="io-grid"></div>
-                </div>
-            </div>
-        </div>
-        
-        <div class="card">
-            <h1>IO Configuration</h1>
-            <div class="io-section">
-                <div class="io-group">
-                    <h3>Digital Input Configuration</h3>
-                    <div id="di-config"></div>
-                </div>
-                
-                <div class="io-group">
-                    <h3>Digital Output Configuration</h3>
-                    <div id="do-config"></div>
-                </div>
-                
-                <div class="io-group">
-                    <h3>Analog Input Configuration</h3>
-                    <div id="ai-config"></div>
-                </div>
-            </div>
-            <button onclick="saveIOConfig()">Save IO Configuration</button>
-            <div id="io-config-status" class="status"></div>
-        </div>
-    </div>
+void handleCSS() {
+    if (LittleFS.exists("/styles.css")) {
+        File file = LittleFS.open("/styles.css", "r");
+        webServer.streamFile(file, "text/css");
+        file.close();
+    } else {
+        webServer.send(404, "text/plain", "File not found");
+    }
+}
 
-    <script>
-        let configLoadAttempts = 0;
-        const MAX_CONFIG_LOAD_ATTEMPTS = 5;
-        
-        function loadConfig() {
-            console.log("Attempting to load configuration...");
-            fetch('/config')
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error('Network response was not ok');
-                    }
-                    return response.json();
-                })
-                .then(data => {
-                    // Check if we got valid data (current_ip should exist)
-                    if (!data.current_ip) {
-                        throw new Error('Incomplete data received');
-                    }
-                    
-                    console.log("Configuration loaded successfully:", data);
-                    document.getElementById('dhcp').checked = data.dhcp;
-                    document.getElementById('ip').value = data.ip;
-                    document.getElementById('subnet').value = data.subnet;
-                    document.getElementById('gateway').value = data.gateway;
-                    document.getElementById('hostname').value = data.hostname;
-                    document.getElementById('modbus_port').value = data.modbus_port;
-                    document.getElementById('current-ip').textContent = data.current_ip || data.ip;
-                    document.getElementById('current-hostname').textContent = data.hostname;
-                    document.getElementById('current-modbus-port').textContent = data.modbus_port;
-                    document.getElementById('client-count').textContent = data.modbus_client_count;
-                    
-                    // Update connected clients information
-                    const clientList = document.getElementById('client-list');
-                    if (data.modbus_client_count > 0 && data.modbus_clients) {
-                        document.getElementById('client-section').style.display = 'block';
-                        clientList.innerHTML = data.modbus_clients.map(client => 
-                            `<div class="client-item">
-                                <h4>Client ${client.slot + 1}</h4>
-                                <p>IP Address: ${client.ip}</p>
-                                <p>Connected for: ${formatDuration(client.connected_for)}</p>
-                            </div>`
-                        ).join('');
-                    } else {
-                        document.getElementById('client-section').style.display = 'none';
-                        clientList.innerHTML = '<div class="no-clients">No clients connected</div>';
-                    }
-                    
-                    // Disable IP fields if DHCP is enabled
-                    const dhcpEnabled = data.dhcp;
-                    ['ip', 'subnet', 'gateway'].forEach(id => {
-                        document.getElementById(id).disabled = dhcpEnabled;
-                    });
-                    
-                    // Reset attempts counter on success
-                    configLoadAttempts = 0;
-                    
-                    // Once config is loaded successfully, wait a moment then start loading IO status
-                    setTimeout(() => {
-                        console.log("Starting IO status updates...");
-                        updateIOStatus();
-                    }, 500);
-                })
-                .catch(error => {
-                    console.error('Error loading config:', error);
-                    configLoadAttempts++;
-                    
-                    if (configLoadAttempts < MAX_CONFIG_LOAD_ATTEMPTS) {
-                        // Retry after a delay with exponential backoff
-                        const retryDelay = Math.min(1000 * Math.pow(1.5, configLoadAttempts), 5000);
-                        console.log(`Retrying config load (attempt ${configLoadAttempts+1}/${MAX_CONFIG_LOAD_ATTEMPTS}) in ${retryDelay}ms...`);
-                        setTimeout(loadConfig, retryDelay);
-                    } else {
-                        // Even after max attempts, try one more time after a longer delay
-                        console.log("Maximum config load attempts reached. Trying one final attempt in 5 seconds...");
-                        setTimeout(loadConfig, 5000);
-                    }
-                });
-        }
+void handleJS() {
+    if (LittleFS.exists("/script.js")) {
+        File file = LittleFS.open("/script.js", "r");
+        webServer.streamFile(file, "application/javascript");
+        file.close();
+    } else {
+        webServer.send(404, "text/plain", "File not found");
+    }
+}
 
-        let ioStatusLoadAttempts = 0;
-        const MAX_IO_STATUS_LOAD_ATTEMPTS = 5;
-        
-        function updateIOStatus() {
-            console.log("Fetching IO status...");
-            fetch('/iostatus')
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error('Network response was not ok');
-                    }
-                    return response.json();
-                })
-                .then(data => {
-                    console.log("IO status loaded successfully:", data);
-                    
-                    // Update Modbus status
-                    const statusIndicator = document.getElementById('modbus-status');
-                    const statusText = document.getElementById('modbus-status-text');
-                    
-                    if (data.modbus_connected) {
-                        statusIndicator.className = 'status-indicator status-connected';
-                        statusText.textContent = 'Connected';
-                    } else {
-                        statusIndicator.className = 'status-indicator status-disconnected';
-                        statusText.textContent = 'Disconnected';
-                    }
+void handleFavicon() {
+    if (LittleFS.exists("/favicon.ico")) {
+        File file = LittleFS.open("/favicon.ico", "r");
+        webServer.streamFile(file, "image/x-icon");
+        file.close();
+    } else {
+        webServer.send(404, "text/plain", "File not found");
+    }
+}
 
-                    // Update client count
-                    document.getElementById('client-count').textContent = data.modbus_client_count;
-
-                    // Update digital inputs
-                    const diDiv = document.getElementById('digital-inputs');
-                    diDiv.innerHTML = data.di.map((value, index) => 
-                        `<div class="io-item ${value ? 'io-on' : 'io-off'}">
-                            <span><strong>DI${index + 1}</strong></span>
-                            <span>${value ? 'ON' : 'OFF'}</span>
-                        </div>`
-                    ).join('');
-
-                    // Update digital outputs with click handlers
-                    const doDiv = document.getElementById('digital-outputs');
-                    doDiv.innerHTML = data.do.map((value, index) => 
-                        `<div class="io-item output-item ${value ? 'io-on' : 'io-off'}" 
-                              onclick="toggleOutput(${index}, ${value})">
-                            <span><strong>DO${index + 1}</strong></span>
-                            <span>${value ? 'ON' : 'OFF'}</span>
-                        </div>`
-                    ).join('');
-
-                    // Update analog inputs
-                    const aiDiv = document.getElementById('analog-inputs');
-                    aiDiv.innerHTML = data.ai.map((value, index) => 
-                        `<div class="io-item analog-value">
-                            <span><strong>AI${index + 1}</strong></span>
-                            <span>${value} mV</span>
-                        </div>`
-                    ).join('');
-                    
-                    // Update connected clients
-                    const clientList = document.getElementById('client-list');
-                    if (data.modbus_client_count > 0) {
-                        document.getElementById('client-section').style.display = 'block';
-                        clientList.innerHTML = data.modbus_clients.map(client => 
-                            `<div class="client-item">
-                                <h4>Client ${client.slot + 1}</h4>
-                                <p>IP Address: ${client.ip}</p>
-                                <p>Connected for: ${formatDuration(client.connected_for)}</p>
-                            </div>`
-                        ).join('');
-                    } else {
-                        document.getElementById('client-section').style.display = 'none';
-                        clientList.innerHTML = '<div class="no-clients">No clients connected</div>';
-                    }
-                    
-                    // Reset attempts counter on success
-                    ioStatusLoadAttempts = 0;
-                    
-                    // Schedule next update
-                    setTimeout(updateIOStatus, 1000);
-                })
-                .catch(error => {
-                    console.error('Error updating IO status:', error);
-                    ioStatusLoadAttempts++;
-                    
-                    if (ioStatusLoadAttempts < MAX_IO_STATUS_LOAD_ATTEMPTS) {
-                        // Retry after a delay with exponential backoff
-                        const retryDelay = Math.min(1000 * Math.pow(1.5, ioStatusLoadAttempts), 5000);
-                        console.log(`Retrying IO status update (attempt ${ioStatusLoadAttempts+1}/${MAX_IO_STATUS_LOAD_ATTEMPTS}) in ${retryDelay}ms...`);
-                        setTimeout(updateIOStatus, retryDelay);
-                    } else {
-                        // After max attempts, still try again but less frequently
-                        console.log("Maximum IO status load attempts reached. Continuing with reduced frequency...");
-                        setTimeout(updateIOStatus, 5000);
-                    }
-                });
-        }
-        
-        // Helper function to format duration in seconds to a readable format
-        function formatDuration(seconds) {
-            if (seconds < 60) {
-                return seconds + " seconds";
-            } else if (seconds < 3600) {
-                const minutes = Math.floor(seconds / 60);
-                const remainingSeconds = seconds % 60;
-                return minutes + " min " + remainingSeconds + " sec";
-            } else {
-                const hours = Math.floor(seconds / 3600);
-                const minutes = Math.floor((seconds % 3600) / 60);
-                return hours + " hr " + minutes + " min";
-            }
-        }
-        
-        // Wait a short time before loading initial configuration to ensure server is ready
-        setTimeout(() => {
-            console.log("Starting initial data load sequence...");
-            
-            // First attempt at loading config
-            loadConfig();
-            
-            // Load IO configuration after a short delay
-            setTimeout(() => {
-                loadIOConfig();
-            }, 500);
-        }, 500);
-        
-        // Add the IO configuration handling
-        let ioConfigLoadAttempts = 0;
-        const MAX_IO_CONFIG_LOAD_ATTEMPTS = 5;
-        
-        function loadIOConfig() {
-            console.log("Loading IO configuration...");
-            fetch('/ioconfig')
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error('Network response was not ok');
-                    }
-                    return response.json();
-                })
-                .then(data => {
-                    console.log("IO configuration loaded successfully:", data);
-                    
-                    // Digital Inputs configuration
-                    const diConfigDiv = document.getElementById('di-config');
-                    let diConfigHtml = '';
-                    
-                    for (let i = 0; i < data.di_pullup.length; i++) {
-                        diConfigHtml += `
-                            <div class="io-config-item">
-                                <div class="io-config-title">DI${i + 1}</div>
-                                <div class="io-config-options">
-                                    <label class="switch-label">
-                                        <input type="checkbox" id="di-pullup-${i}" ${data.di_pullup[i] ? 'checked' : ''}>
-                                        <span class="switch-text">Pullup</span>
-                                    </label>
-                                    <label class="switch-label">
-                                        <input type="checkbox" id="di-invert-${i}" ${data.di_invert[i] ? 'checked' : ''}>
-                                        <span class="switch-text">Invert</span>
-                                    </label>
-                                </div>
-                            </div>
-                        `;
-                    }
-                    diConfigDiv.innerHTML = diConfigHtml;
-                    
-                    // Digital Outputs configuration
-                    const doConfigDiv = document.getElementById('do-config');
-                    let doConfigHtml = '';
-                    
-                    for (let i = 0; i < data.do_invert.length; i++) {
-                        doConfigHtml += `
-                            <div class="io-config-item">
-                                <div class="io-config-title">DO${i + 1}</div>
-                                <div class="io-config-options">
-                                    <label class="switch-label">
-                                        <input type="checkbox" id="do-invert-${i}" ${data.do_invert[i] ? 'checked' : ''}>
-                                        <span class="switch-text">Invert</span>
-                                    </label>
-                                </div>
-                            </div>
-                        `;
-                    }
-                    doConfigDiv.innerHTML = doConfigHtml;
-                    
-                    // Analog Inputs configuration
-                    const aiConfigDiv = document.getElementById('ai-config');
-                    let aiConfigHtml = '';
-                    
-                    for (let i = 0; i < data.ai_pulldown.length; i++) {
-                        aiConfigHtml += `
-                            <div class="io-config-item">
-                                <div class="io-config-title">AI${i + 1}</div>
-                                <div class="io-config-options">
-                                    <label class="switch-label">
-                                        <input type="checkbox" id="ai-pulldown-${i}" ${data.ai_pulldown[i] ? 'checked' : ''}>
-                                        <span class="switch-text">Pulldown</span>
-                                    </label>
-                                    <label class="switch-label">
-                                        <input type="checkbox" id="ai-raw-${i}" ${data.ai_raw_format[i] ? 'checked' : ''}>
-                                        <span class="switch-text">RAW Format</span>
-                                    </label>
-                                </div>
-                            </div>
-                        `;
-                    }
-                    aiConfigDiv.innerHTML = aiConfigHtml;
-                    
-                    // Reset attempts counter on success
-                    ioConfigLoadAttempts = 0;
-                })
-                .catch(error => {
-                    console.error('Error loading IO configuration:', error);
-                    ioConfigLoadAttempts++;
-                    
-                    if (ioConfigLoadAttempts < MAX_IO_CONFIG_LOAD_ATTEMPTS) {
-                        // Retry after a delay with exponential backoff
-                        const retryDelay = Math.min(1000 * Math.pow(1.5, ioConfigLoadAttempts), 5000);
-                        console.log(`Retrying IO config load (attempt ${ioConfigLoadAttempts+1}/${MAX_IO_CONFIG_LOAD_ATTEMPTS}) in ${retryDelay}ms...`);
-                        setTimeout(loadIOConfig, retryDelay);
-                    } else {
-                        // Even after max attempts, try one more time after a longer delay
-                        console.log("Maximum IO config load attempts reached. Trying one final attempt in 5 seconds...");
-                        setTimeout(loadIOConfig, 5000);
-                    }
-                });
-        }
-        
-        function saveIOConfig() {
-            // Gather all configuration data
-            const ioConfig = {
-                di_pullup: [],
-                di_invert: [],
-                do_invert: [],
-                ai_pulldown: [],
-                ai_raw_format: []
-            };
-            
-            // Get digital input configuration
-            const diLength = document.querySelectorAll('[id^="di-pullup-"]').length;
-            for (let i = 0; i < diLength; i++) {
-                ioConfig.di_pullup.push(document.getElementById(`di-pullup-${i}`).checked);
-                ioConfig.di_invert.push(document.getElementById(`di-invert-${i}`).checked);
-            }
-            
-            // Get digital output configuration
-            const doLength = document.querySelectorAll('[id^="do-invert-"]').length;
-            for (let i = 0; i < doLength; i++) {
-                ioConfig.do_invert.push(document.getElementById(`do-invert-${i}`).checked);
-            }
-            
-            // Get analog input configuration
-            const aiLength = document.querySelectorAll('[id^="ai-pulldown-"]').length;
-            for (let i = 0; i < aiLength; i++) {
-                ioConfig.ai_pulldown.push(document.getElementById(`ai-pulldown-${i}`).checked);
-                ioConfig.ai_raw_format.push(document.getElementById(`ai-raw-${i}`).checked);
-            }
-            
-            console.log("Saving IO configuration:", ioConfig);
-            
-            // Send configuration to server
-            fetch('/ioconfig', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(ioConfig)
-            })
-            .then(response => response.json())
-            .then(data => {
-                const status = document.getElementById('io-config-status');
-                status.style.display = 'block';
-                
-                if (data.success) {
-                    status.style.backgroundColor = 'var(--success-color)';
-                    status.style.color = 'white';
-                    if (data.changed) {
-                        status.textContent = 'IO Configuration saved successfully!';
-                    } else {
-                        status.textContent = 'No changes detected in IO Configuration.';
-                    }
-                    
-                    // Hide the status message after 3 seconds
-                    setTimeout(() => {
-                        status.style.display = 'none';
-                    }, 3000);
-                } else {
-                    status.style.backgroundColor = 'var(--error-color)';
-                    status.style.color = 'white';
-                    status.textContent = 'Failed to save IO Configuration. Please try again.';
-                }
-            })
-            .catch(error => {
-                console.error('Error saving IO configuration:', error);
-                const status = document.getElementById('io-config-status');
-                status.style.display = 'block';
-                status.style.backgroundColor = 'var(--error-color)';
-                status.style.color = 'white';
-                status.textContent = 'Error saving IO Configuration: ' + error.message;
-            });
-        }
-        
-        // Toggle IP fields when DHCP checkbox changes
-        document.getElementById('dhcp').addEventListener('change', function(e) {
-            const disabled = e.target.checked;
-            ['ip', 'subnet', 'gateway'].forEach(id => {
-                document.getElementById(id).disabled = disabled;
-            });
-        });
-
-        function saveConfig() {
-            const config = {
-                dhcp: document.getElementById('dhcp').checked,
-                ip: document.getElementById('ip').value,
-                subnet: document.getElementById('subnet').value,
-                gateway: document.getElementById('gateway').value,
-                hostname: document.getElementById('hostname').value,
-                modbus_port: document.getElementById('modbus_port').value
-            };
-
-            fetch('/config', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(config)
-            })
-            .then(response => response.json())
-            .then(data => {
-                const status = document.getElementById('status');
-                status.style.display = 'block';
-                
-                if (data.success) {
-                    status.style.backgroundColor = '#4CAF50';
-                    status.style.color = 'white';
-                    status.innerHTML = 'Configuration saved successfully! Rebooting now...';
-                    document.getElementById('current-ip').textContent = data.ip;
-                    
-                    // Set a countdown for reload
-                    let countdown = 5;
-                    const countdownInterval = setInterval(() => {
-                        countdown--;
-                        status.innerHTML = `Configuration saved successfully! Rebooting now... Page will reload in ${countdown} seconds`;
-                        if (countdown <= 0) {
-                            clearInterval(countdownInterval);
-                            window.location.reload();
-                        }
-                    }, 1000);
-                } else {
-                    status.style.backgroundColor = '#f44336';
-                    status.style.color = 'white';
-                    status.innerHTML = 'Error: ' + data.error;
-                }
-                
-                setTimeout(() => {
-                    status.style.display = 'none';
-                }, 3000);
-            });
-        }
-
-        function toggleOutput(index, currentState) {
-            const newState = currentState ? 0 : 1;
-            fetch('/setoutput', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                },
-                body: `output=${index}&state=${newState}`
-            })
-            .then(response => {
-                if (!response.ok) {
-                    throw new Error('Network response was not ok');
-                }
-                // Update will happen on next status refresh
-            })
-            .catch(error => {
-                console.error('Error:', error);
-                alert('Failed to toggle output');
-            });
-        }
-        
-        function updateUI() {
-            // Update IO status and client status
-            updateIOStatus();
-            updateClientStatus();
-        }
-        
-        // Set up regular polling for status updates
-        setInterval(updateUI, 2000);
-    </script>
-</body>
-</html>
-)=====";
-    webServer.send(200, "text/html", WEBPAGE_HTML);
+void handleLogo() {
+    if (LittleFS.exists("/logo.png")) {
+        File file = LittleFS.open("/logo.png", "r");
+        webServer.streamFile(file, "image/png");
+        file.close();
+    } else {
+        webServer.send(404, "text/plain", "File not found");
+    }
 }
 
 void handleGetConfig() {
@@ -1344,10 +537,14 @@ void handleGetConfig() {
     // This helps with the first request after server initialization
     delay(5);
     
-    StaticJsonDocument<768> doc;  
-    char ipStr[16], gwStr[16], subStr[16], currentIpStr[16];
-    
+    char jsonBuffer[1024];  
+    StaticJsonDocument<1024> doc;  
+
+    // Add network configuration
     doc["dhcp"] = config.dhcpEnabled;
+    
+    // Format IP addresses as strings
+    char ipStr[16], gwStr[16], subStr[16], currentIpStr[16];
     sprintf(ipStr, "%d.%d.%d.%d", config.ip[0], config.ip[1], config.ip[2], config.ip[3]);
     sprintf(gwStr, "%d.%d.%d.%d", config.gateway[0], config.gateway[1], config.gateway[2], config.gateway[3]);
     sprintf(subStr, "%d.%d.%d.%d", config.subnet[0], config.subnet[1], config.subnet[2], config.subnet[3]);
@@ -1368,8 +565,9 @@ void handleGetConfig() {
         sprintf(currentIpStr, "%d.%d.%d.%d", localIP[0], localIP[1], localIP[2], localIP[3]);
         doc["current_ip"] = currentIpStr;
     }
-    
-    // Add Modbus client information
+
+    // Add Modbus client status
+    doc["modbus_connected"] = (connectedClients > 0);
     doc["modbus_client_count"] = connectedClients;
     
     // Add detailed client information
@@ -1395,10 +593,37 @@ void handleGetConfig() {
             }
         }
     }
-    
-    String response;
-    serializeJson(doc, response);
-    webServer.send(200, "application/json", response);
+
+    // Digital inputs - account for inversion
+    JsonArray di = doc.createNestedArray("di");
+    for (int i = 0; i < 8; i++) {
+        di.add(ioStatus.dIn[i]);
+    }
+
+    // Digital outputs - account for inversion
+    JsonArray do_ = doc.createNestedArray("do");
+    for (int i = 0; i < 8; i++) {
+        do_.add(ioStatus.dOut[i]);
+    }
+
+    // Analog inputs - use either RAW or millivolts format
+    JsonArray ai = doc.createNestedArray("ai");
+    JsonArray aiFormat = doc.createNestedArray("ai_format");
+    for (int i = 0; i < sizeof(ANALOG_INPUTS)/sizeof(ANALOG_INPUTS[0]); i++) {
+        
+        if (config.aiRawFormat[i]) {
+            // Use RAW format (0-4095)
+            aiFormat.add("raw");
+        } else {
+            aiFormat.add("millivolts");
+        }
+        
+        ai.add(ioStatus.aIn[i]);
+    }
+    doc["ai_format"] = aiFormat;
+
+    serializeJson(doc, jsonBuffer);
+    webServer.send(200, "application/json", jsonBuffer);
 }
 
 void handleSetConfig() {
@@ -1508,7 +733,7 @@ void handleSetConfig() {
     strncpy(config.hostname, newHostname, HOSTNAME_MAX_LENGTH - 1);
     config.hostname[HOSTNAME_MAX_LENGTH - 1] = '\0';
 
-    Serial.println("Saving to EEPROM");
+    Serial.println("Saving to LittleFS");
     saveConfig();
 
     // Send minimal response
@@ -1525,20 +750,25 @@ void handleSetConfig() {
 void handleSetOutput() {
     if (!webServer.hasArg("output") || !webServer.hasArg("state")) {
         webServer.send(400, "text/plain", "Missing output or state parameter");
+        Serial.println("Missing output or state parameter");
         return;
     }
 
     int output = webServer.arg("output").toInt();
     int state = webServer.arg("state").toInt();
 
+    Serial.printf("Received output %d, state %d\n", output, state);
+
     // Validate output number
     if (output < 0 || output >= sizeof(DIGITAL_OUTPUTS)/sizeof(DIGITAL_OUTPUTS[0])) {
         webServer.send(400, "text/plain", "Invalid output number");
+        Serial.println("Invalid output number");
         return;
     }
 
     // Set the output state
     digitalWrite(DIGITAL_OUTPUTS[output], state ? HIGH : LOW);
+    ioStatus.dOut[output] = state;
     
     // Update coil state for all connected clients
     for (int i = 0; i < MAX_MODBUS_CLIENTS; i++) {
@@ -1551,46 +781,16 @@ void handleSetOutput() {
 }
 
 void updateIOForClient(int clientIndex) {
-    // Update Modbus registers with current IO state
+    // Update Modbus registers with current IO state, actual pin states measured in updateIOpins()
     
-    // Update digital inputs - account for invert configuration
-    for (int i = 0; i < sizeof(DIGITAL_INPUTS)/sizeof(DIGITAL_INPUTS[0]); i++) {
-        uint16_t value = digitalRead(DIGITAL_INPUTS[i]);
-        
-        // Apply inversion if configured
-        if (config.diInvert[i]) {
-            value = !value;
-        }
-        
-        modbusClients[clientIndex].server.inputRegisterWrite(i, value);
+    // Update digital inputs
+    for (int i = 0; i < 8; i++) {
+        modbusClients[clientIndex].server.discreteInputWrite(i, ioStatus.dIn[i]);
     }
-    
-    // Update digital outputs - account for invert configuration
-    for (int i = 0; i < sizeof(DIGITAL_OUTPUTS)/sizeof(DIGITAL_OUTPUTS[0]); i++) {
-        uint16_t value = digitalRead(DIGITAL_OUTPUTS[i]);
         
-        // Apply inversion if configured
-        if (config.doInvert[i]) {
-            value = !value;
-        }
-        
-        modbusClients[clientIndex].server.holdingRegisterWrite(i, value);
-    }
-    
-    // Update analog inputs, using either raw values or millivolts
-    for (int i = 0; i < sizeof(ANALOG_INPUTS)/sizeof(ANALOG_INPUTS[0]); i++) {
-        uint32_t rawValue = analogRead(ANALOG_INPUTS[i]);
-        uint16_t valueToWrite;
-        
-        if (config.aiRawFormat[i]) {
-            // Use RAW format (0-4095)
-            valueToWrite = rawValue;
-        } else {
-            // Convert to millivolts: (raw * 3300) / 4095
-            valueToWrite = (rawValue * 3300UL) / 4095UL;
-        }
-        
-        modbusClients[clientIndex].server.inputRegisterWrite(100 + i, valueToWrite);
+    // Update analog inputs
+    for (int i = 0; i < 3; i++) {
+        modbusClients[clientIndex].server.inputRegisterWrite(i, ioStatus.aIn[i]);
     }
 }
 
@@ -1599,8 +799,8 @@ void handleGetIOStatus() {
     // This helps with the first request after server initialization
     delay(5);
     
-    char jsonBuffer[1024];  // Increased from 512 to 1024
-    StaticJsonDocument<1024> doc;  // Increased from 512 to 1024
+    char jsonBuffer[1024];  
+    StaticJsonDocument<1024> doc;  
 
     // Add Modbus client status - now shows number of connected clients
     doc["modbus_connected"] = (connectedClients > 0);
@@ -1632,46 +832,31 @@ void handleGetIOStatus() {
 
     // Digital inputs - account for inversion
     JsonArray di = doc.createNestedArray("di");
-    for (int i = 0; i < sizeof(DIGITAL_INPUTS)/sizeof(DIGITAL_INPUTS[0]); i++) {
-        bool value = digitalRead(DIGITAL_INPUTS[i]);
-        
-        // Apply inversion if configured
-        if (config.diInvert[i]) {
-            value = !value;
-        }
-        
-        di.add(value);
+    for (int i = 0; i < 8; i++) {
+        di.add(ioStatus.dIn[i]);
     }
 
     // Digital outputs - account for inversion
     JsonArray do_ = doc.createNestedArray("do");
-    for (int i = 0; i < sizeof(DIGITAL_OUTPUTS)/sizeof(DIGITAL_OUTPUTS[0]); i++) {
-        bool value = digitalRead(DIGITAL_OUTPUTS[i]);
-        
-        // Apply inversion if configured
-        if (config.doInvert[i]) {
-            value = !value;
-        }
-        
-        do_.add(value);
+    for (int i = 0; i < 8; i++) {
+        do_.add(ioStatus.dOut[i]);
     }
 
     // Analog inputs - use either RAW or millivolts format
     JsonArray ai = doc.createNestedArray("ai");
+    JsonArray aiFormat = doc.createNestedArray("ai_format");
     for (int i = 0; i < sizeof(ANALOG_INPUTS)/sizeof(ANALOG_INPUTS[0]); i++) {
-        uint32_t rawValue = analogRead(ANALOG_INPUTS[i]);
-        uint32_t valueToShow;
         
         if (config.aiRawFormat[i]) {
             // Use RAW format (0-4095)
-            valueToShow = rawValue;
+            aiFormat.add("raw");
         } else {
-            // Convert to millivolts: (raw * 3300) / 4095
-            valueToShow = (rawValue * 3300UL) / 4095UL;
+            aiFormat.add("millivolts");
         }
         
-        ai.add(valueToShow);
+        ai.add(ioStatus.aIn[i]);
     }
+    doc["ai_format"] = aiFormat;
 
     serializeJson(doc, jsonBuffer);
     webServer.send(200, "application/json", jsonBuffer);
