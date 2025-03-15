@@ -34,6 +34,46 @@ body {
     margin-bottom: 20px;
 }
 
+/* Inverted IO indicator styling */
+.inverted-indicator {
+    display: inline-flex;
+    justify-content: center;
+    align-items: center;
+    width: 18px;
+    height: 18px;
+    margin-left: 26px;
+    margin-bottom: 2px;
+    border-radius: 50%;
+    background-color: #ff9800;
+    overflow: hidden;
+    cursor: help;
+    vertical-align: middle;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+}
+
+.inverted-indicator::before {
+    content: "↕";
+    color: white;
+    font-size: 16px;
+    line-height: 18px;
+    text-align: center;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding-bottom: 4px;
+}
+
+.io-on .inverted-indicator {
+    background-color: rgba(255, 152, 0, 0.9);
+    box-shadow: 0 0 2px rgba(255, 255, 255, 0.5);
+}
+
+.io-off .inverted-indicator {
+    background-color: rgba(255, 152, 0, 0.8);
+}
+
 h1 {
     color: var(--primary-color);
     margin: 0 0 20px 0;
@@ -530,4 +570,74 @@ button:hover {
 @keyframes countdown-timer {
     from { width: 100%; }
     to { width: 0%; }
+}
+
+/* Charts styles */
+.charts-container {
+    width: 100%;
+    margin: 20px 0;
+    background-color: var(--card-background);
+    border-radius: 8px;
+    padding: 15px;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+    box-sizing: border-box; /* Ensure padding is included in width */
+}
+
+.chart-wrapper {
+    width: 100%;
+    box-sizing: border-box;
+    overflow: hidden; /* Ensure no overflow */
+}
+
+.chart-area {
+    width: 100%;
+    height: 250px;
+    position: relative;
+    overflow: hidden; /* Additional overflow control */
+}
+
+.chart-wrapper h4 {
+    margin-top: 0;
+    margin-bottom: 15px;
+    color: var(--text-color);
+    font-size: 16px;
+    font-weight: 500;
+    text-align: center;
+}
+
+/* Analog input color styles */
+.analog-value.analog1 {
+    background-color: rgba(255, 99, 132, 0.2); /* Pink/Red background */
+    border-left: 4px solid rgb(255, 99, 132);
+}
+
+.analog-value.analog2 {
+    background-color: rgba(54, 162, 235, 0.2); /* Blue background */
+    border-left: 4px solid rgb(54, 162, 235);
+}
+
+.analog-value.analog3 {
+    background-color: rgba(75, 192, 192, 0.2); /* Teal background */
+    border-left: 4px solid rgb(75, 192, 192);
+}
+
+.analog-value.analog1,
+.analog-value.analog2,
+.analog-value.analog3 {
+    font-weight: 500;
+    color: #333; /* Darker text color */
+}
+
+.analog-value.analog1 strong,
+.analog-value.analog2 strong,
+.analog-value.analog3 strong {
+    color: inherit;
+    font-weight: 600; /* Make the labels more prominent */
+}
+
+/* Responsive chart */
+@media (max-width: 768px) {
+    .chart-area {
+        height: 200px;
+    }
 }

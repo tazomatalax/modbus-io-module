@@ -1,9 +1,13 @@
 <!DOCTYPE html>
 <html>
 <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Modbus TCP IO Module Configuration</title>
     <link rel="stylesheet" href="styles.css">
     <link rel="icon" href="favicon.ico" type="image/x-icon">
+    <!-- Add Chart.js library -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
     <div class="container">
@@ -103,6 +107,14 @@
                 <div class="io-group">
                     <h3>Analog Inputs</h3>
                     <div id="analog-inputs" class="io-grid"></div>
+                    <div class="charts-container">
+                        <div class="chart-wrapper">
+                            <h4>Analog Input Trends</h4>
+                            <div class="chart-area">
+                                <canvas id="analog-chart"></canvas>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -118,11 +130,6 @@
                 <div class="io-group">
                     <h3>Digital Output Configuration</h3>
                     <div id="do-config"></div>
-                </div>
-                
-                <div class="io-group">
-                    <h3>Analog Input Configuration</h3>
-                    <div id="ai-config"></div>
                 </div>
             </div>
             <div class="button-logo-container">

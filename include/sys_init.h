@@ -43,8 +43,7 @@ struct Config {
     bool diPullup[8];         // Enable internal pullup for digital inputs
     bool diInvert[8];         // Invert logic for digital inputs
     bool doInvert[8];         // Invert logic for digital outputs
-    bool aiPulldown[3];       // Enable internal pulldown for analog inputs
-    bool aiRawFormat[3];      // Use RAW format (true) or millivolts (false)
+    bool doInitialState[8];   // Initial state for digital outputs (true = ON, false = OFF)
 } config;
 
 // Default configuration
@@ -59,8 +58,7 @@ const Config DEFAULT_CONFIG = {
     {false, false, false, false, false, false, false, false},  // diPullup (all disabled)
     {false, false, false, false, false, false, false, false},  // diInvert (no inversion)
     {false, false, false, false, false, false, false, false},  // doInvert (no inversion)
-    {false, false, false},  // aiPulldown (all disabled)
-    {true, true, true}      // aiRawFormat (all RAW format by default)
+    {false, false, false, false, false, false, false, false},  // doInitialState (all OFF)
 };
 
 struct IOStatus {

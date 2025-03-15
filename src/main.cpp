@@ -206,23 +206,13 @@ void loadConfig() {
                     memcpy(config.doInvert, DEFAULT_CONFIG.doInvert, 8);
                 }
                 
-                // Get analog input configurations
-                JsonArray aiPulldownArray = doc["aiPulldown"].as<JsonArray>();
-                if (aiPulldownArray) {
-                    for (int i = 0; i < 3; i++) {
-                        config.aiPulldown[i] = aiPulldownArray[i] | DEFAULT_CONFIG.aiPulldown[i];
+                JsonArray doInitialStateArray = doc["doInitialState"].as<JsonArray>();
+                if (doInitialStateArray) {
+                    for (int i = 0; i < 8; i++) {
+                        config.doInitialState[i] = doInitialStateArray[i] | DEFAULT_CONFIG.doInitialState[i];
                     }
                 } else {
-                    memcpy(config.aiPulldown, DEFAULT_CONFIG.aiPulldown, 3);
-                }
-                
-                JsonArray aiRawFormatArray = doc["aiRawFormat"].as<JsonArray>();
-                if (aiRawFormatArray) {
-                    for (int i = 0; i < 3; i++) {
-                        config.aiRawFormat[i] = aiRawFormatArray[i] | DEFAULT_CONFIG.aiRawFormat[i];
-                    }
-                } else {
-                    memcpy(config.aiRawFormat, DEFAULT_CONFIG.aiRawFormat, 3);
+                    memcpy(config.doInitialState, DEFAULT_CONFIG.doInitialState, 8);
                 }
                 
                 Serial.println("Configuration loaded from file");
@@ -294,15 +284,9 @@ void saveConfig() {
         doInvertArray.add(config.doInvert[i]);
     }
     
-    // Store analog input configurations
-    JsonArray aiPulldownArray = doc.createNestedArray("aiPulldown");
-    for (int i = 0; i < 3; i++) {
-        aiPulldownArray.add(config.aiPulldown[i]);
-    }
-    
-    JsonArray aiRawFormatArray = doc.createNestedArray("aiRawFormat");
-    for (int i = 0; i < 3; i++) {
-        aiRawFormatArray.add(config.aiRawFormat[i]);
+    JsonArray doInitialStateArray = doc.createNestedArray("doInitialState");
+    for (int i = 0; i < 8; i++) {
+        doInitialStateArray.add(config.doInitialState[i]);
     }
     
     // Open file for writing
@@ -323,11 +307,18 @@ void saveConfig() {
 }
 
 void setPinModes() {
-    for (auto pin : DIGITAL_INPUTS) {
-        pinMode(pin, config.diPullup[pin] ? INPUT_PULLUP : INPUT);
+    for (int i = 0; i < sizeof(DIGITAL_INPUTS)/sizeof(DIGITAL_INPUTS[0]); i++) {
+        pinMode(DIGITAL_INPUTS[i], config.diPullup[i] ? INPUT_PULLUP : INPUT);
     }
-    for (auto pin : DIGITAL_OUTPUTS) {
-        pinMode(pin, OUTPUT);
+    for (int i = 0; i < sizeof(DIGITAL_OUTPUTS)/sizeof(DIGITAL_OUTPUTS[0]); i++) {
+        pinMode(DIGITAL_OUTPUTS[i], OUTPUT);
+        
+        // Set the digital output to its initial state from config
+        ioStatus.dOut[i] = config.doInitialState[i];
+        
+        // Apply any inversion logic
+        bool physicalState = config.doInvert[i] ? !ioStatus.dOut[i] : ioStatus.dOut[i];
+        digitalWrite(DIGITAL_OUTPUTS[i], physicalState);
     }
 }
 
@@ -514,19 +505,10 @@ void updateIOpins() {
         digitalWrite(DIGITAL_OUTPUTS[i], physicalState);
     }
     
-    // Update analog inputs, using either raw values or millivolts
+    // Update analog inputs, using millivolts format
     for (int i = 0; i < 3; i++) {
         uint32_t rawValue = analogRead(ANALOG_INPUTS[i]);
-        uint16_t valueToWrite;
-        
-        if (config.aiRawFormat[i]) {
-            // Use RAW format (0-4095)
-            valueToWrite = rawValue;
-        } else {
-            // Convert to millivolts: (raw * 3300) / 4095
-            valueToWrite = (rawValue * 3300UL) / 4095UL;
-        }
-        
+        uint16_t valueToWrite = (rawValue * 3300UL) / 4095UL;
         ioStatus.aIn[i] = valueToWrite;
     }
 }
@@ -655,21 +637,11 @@ void handleGetConfig() {
         do_.add(ioStatus.dOut[i]);
     }
 
-    // Analog inputs - use either RAW or millivolts format
+    // Add analog input values - always in millivolts
     JsonArray ai = doc.createNestedArray("ai");
-    JsonArray aiFormat = doc.createNestedArray("ai_format");
     for (int i = 0; i < sizeof(ANALOG_INPUTS)/sizeof(ANALOG_INPUTS[0]); i++) {
-        
-        if (config.aiRawFormat[i]) {
-            // Use RAW format (0-4095)
-            aiFormat.add("raw");
-        } else {
-            aiFormat.add("millivolts");
-        }
-        
         ai.add(ioStatus.aIn[i]);
     }
-    doc["ai_format"] = aiFormat;
 
     serializeJson(doc, jsonBuffer);
     webServer.send(200, "application/json", jsonBuffer);
@@ -932,21 +904,11 @@ void handleGetIOStatus() {
         do_.add(ioStatus.dOut[i]);
     }
 
-    // Analog inputs - use either RAW or millivolts format
+    // Add analog input values - always in millivolts
     JsonArray ai = doc.createNestedArray("ai");
-    JsonArray aiFormat = doc.createNestedArray("ai_format");
     for (int i = 0; i < sizeof(ANALOG_INPUTS)/sizeof(ANALOG_INPUTS[0]); i++) {
-        
-        if (config.aiRawFormat[i]) {
-            // Use RAW format (0-4095)
-            aiFormat.add("raw");
-        } else {
-            aiFormat.add("millivolts");
-        }
-        
         ai.add(ioStatus.aIn[i]);
     }
-    doc["ai_format"] = aiFormat;
 
     serializeJson(doc, jsonBuffer);
     webServer.send(200, "application/json", jsonBuffer);
@@ -971,18 +933,11 @@ void handleGetIOConfig() {
     
     // Add digital output configuration
     JsonArray doInvert = doc.createNestedArray("do_invert");
+    JsonArray doInitialState = doc.createNestedArray("do_initial_state");
     
     for (int i = 0; i < sizeof(DIGITAL_OUTPUTS)/sizeof(DIGITAL_OUTPUTS[0]); i++) {
         doInvert.add(config.doInvert[i]);
-    }
-    
-    // Add analog input configuration
-    JsonArray aiPulldown = doc.createNestedArray("ai_pulldown");
-    JsonArray aiRawFormat = doc.createNestedArray("ai_raw_format");
-    
-    for (int i = 0; i < sizeof(ANALOG_INPUTS)/sizeof(ANALOG_INPUTS[0]); i++) {
-        aiPulldown.add(config.aiPulldown[i]);
-        aiRawFormat.add(config.aiRawFormat[i]);
+        doInitialState.add(config.doInitialState[i]);
     }
     
     String response;
@@ -1072,46 +1027,23 @@ void handleSetIOConfig() {
         }
     }
     
-    Serial.println("Updating analog input configuration");
-    // Update analog input pulldown configuration
-    if (doc.containsKey("ai_pulldown") && doc["ai_pulldown"].is<JsonArray>()) {
-        JsonArray aiPulldown = doc["ai_pulldown"].as<JsonArray>();
+    Serial.println("Updating digital output initial state configuration");
+    // Update digital output initial state configuration
+    if (doc.containsKey("do_initial_state") && doc["do_initial_state"].is<JsonArray>()) {
+        JsonArray doInitialState = doc["do_initial_state"].as<JsonArray>();
         int index = 0;
-        for (JsonVariant value : aiPulldown) {
-            if (index < sizeof(ANALOG_INPUTS)/sizeof(ANALOG_INPUTS[0])) {
+        for (JsonVariant value : doInitialState) {
+            if (index < sizeof(DIGITAL_OUTPUTS)/sizeof(DIGITAL_OUTPUTS[0])) {
                 bool newValue = value.as<bool>();
-                if (config.aiPulldown[index] != newValue) {
-                    config.aiPulldown[index] = newValue;
+                if (config.doInitialState[index] != newValue) {
+                    config.doInitialState[index] = newValue;
                     changed = true;
-                    // Apply pulldown setting immediately (assuming the hardware supports it)
-                    if (newValue) {
-                        // Enable pulldown - may need specific implementation for your hardware
-                    } else {
-                        // Disable pulldown
-                    }
                 }
                 index++;
             }
         }
     }
     
-    Serial.println("Updating analog input format configuration");
-    // Update analog input format configuration
-    if (doc.containsKey("ai_raw_format") && doc["ai_raw_format"].is<JsonArray>()) {
-        JsonArray aiRawFormat = doc["ai_raw_format"].as<JsonArray>();
-        int index = 0;
-        for (JsonVariant value : aiRawFormat) {
-            if (index < sizeof(ANALOG_INPUTS)/sizeof(ANALOG_INPUTS[0])) {
-                bool newValue = value.as<bool>();
-                if (config.aiRawFormat[index] != newValue) {
-                    config.aiRawFormat[index] = newValue;
-                    changed = true;
-                }
-                index++;
-            }
-        }
-    }
-
     Serial.printf("Checking for changes... %s\n", changed ? "changes found" : "no changes");
     
     // Save the configuration if changes were made

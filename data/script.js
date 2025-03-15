@@ -1,3 +1,135 @@
+// Create data structures for the analog input chart
+let analogChart;
+// Define chart colors for consistency
+const chartColors = {
+    analog1: 'rgb(255, 99, 132)',  // Pink/Red
+    analog2: 'rgb(54, 162, 235)',  // Blue
+    analog3: 'rgb(75, 192, 192)'   // Teal
+};
+
+let analogChartData = {
+    labels: [],
+    datasets: [
+        {
+            label: 'Analog 1',
+            data: [],
+            borderColor: chartColors.analog1,
+            backgroundColor: 'rgba(255, 99, 132, 0.1)',
+            tension: 0.2,
+            pointRadius: 1,
+            borderWidth: 2
+        },
+        {
+            label: 'Analog 2',
+            data: [],
+            borderColor: chartColors.analog2,
+            backgroundColor: 'rgba(54, 162, 235, 0.1)',
+            tension: 0.2,
+            pointRadius: 1,
+            borderWidth: 2
+        },
+        {
+            label: 'Analog 3',
+            data: [],
+            borderColor: chartColors.analog3,
+            backgroundColor: 'rgba(75, 192, 192, 0.1)',
+            tension: 0.2,
+            pointRadius: 1,
+            borderWidth: 2
+        }
+    ]
+};
+
+// Maximum number of data points to show in the chart (1 hour at 1 point per second)
+const MAX_DATA_POINTS = 240;
+
+// Initialize the chart once document is ready
+document.addEventListener('DOMContentLoaded', function() {
+    const ctx = document.getElementById('analog-chart').getContext('2d');
+    
+    // Initialize the chart
+    analogChart = new Chart(ctx, {
+        type: 'line',
+        data: analogChartData,
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: {
+                duration: 100
+            },
+            scales: {
+                x: {
+                    display: true,
+                    title: {
+                        display: true,
+                        text: 'Time'
+                    },
+                    ticks: {
+                        maxTicksLimit: 10,
+                        maxRotation: 0
+                    },
+                    adapters: {
+                        date: {
+                            locale: 'en-US'
+                        }
+                    }
+                },
+                y: {
+                    display: true,
+                    title: {
+                        display: true,
+                        text: 'mV'
+                    },
+                    suggestedMin: 0,
+                    suggestedMax: 3300
+                }
+            },
+            interaction: {
+                mode: 'index',
+                intersect: false
+            },
+            plugins: {
+                legend: {
+                    display: false  // Hide the legend since we're color-coding the values
+                },
+                tooltip: {
+                    enabled: true
+                }
+            }
+        }
+    });
+});
+
+// Function to update the chart with new analog input values
+function updateAnalogChart(analogValues) {
+    if (!analogChart) return;
+    
+    // Add current timestamp as label
+    const now = new Date();
+    const timeString = now.getHours().toString().padStart(2, '0') + ':' + 
+                      now.getMinutes().toString().padStart(2, '0') + ':' + 
+                      now.getSeconds().toString().padStart(2, '0');
+    
+    // Add new data point with timestamp
+    analogChartData.labels.push(timeString);
+    
+    // Add data for each analog input
+    for (let i = 0; i < Math.min(analogValues.length, 3); i++) {
+        analogChartData.datasets[i].data.push(analogValues[i]);
+    }
+    
+    // Remove old data points if we exceed the maximum
+    if (analogChartData.datasets[0].data.length > MAX_DATA_POINTS) {
+        analogChartData.labels.shift();
+        analogChartData.datasets.forEach(dataset => {
+            dataset.data.shift();
+        });
+    }
+    
+    // Update chart
+    analogChart.update();
+}
+
 // Toast notification functions
 function showToast(message, type, countdown = false, duration = 3000) {
     const toastContainer = document.getElementById('toast-container');
@@ -175,31 +307,34 @@ function updateIOStatus() {
 
             // Update digital inputs
             const diDiv = document.getElementById('digital-inputs');
-            diDiv.innerHTML = data.di.map((value, index) => 
-                `<div class="io-item ${value ? 'io-on' : 'io-off'}">
-                    <span><strong>DI${index + 1}</strong></span>
+            diDiv.innerHTML = data.di.map((value, index) => {
+                const isInverted = ioConfigState.di_invert[index];
+                return `<div class="io-item ${value ? 'io-on' : 'io-off'}">
+                    <span><strong>DI${index + 1}</strong>${isInverted ? ' <span class="inverted-indicator" title="This input is inverted"></span>' : ''}</span>
                     <span>${value ? 'ON' : 'OFF'}</span>
-                </div>`
-            ).join('');
+                </div>`;
+            }).join('');
 
             // Update digital outputs with click handlers
             const doDiv = document.getElementById('digital-outputs');
-            doDiv.innerHTML = data.do.map((value, index) => 
-                `<div class="io-item output-item ${value ? 'io-on' : 'io-off'}" 
+            doDiv.innerHTML = data.do.map((value, index) => {
+                const isInverted = ioConfigState.do_invert[index];
+                return `<div class="io-item output-item ${value ? 'io-on' : 'io-off'}" 
                       onclick="toggleOutput(${index}, ${value})">
-                    <span><strong>DO${index + 1}</strong></span>
+                    <span><strong>DO${index + 1}</strong>${isInverted ? ' <span class="inverted-indicator" title="This output is inverted"></span>' : ''}</span>
                     <span>${value ? 'ON' : 'OFF'}</span>
-                </div>`
-            ).join('');
+                </div>`;
+            }).join('');
 
-            // Update analog inputs
+            // Update analog inputs with matching colors from chart
             const aiDiv = document.getElementById('analog-inputs');
-            aiDiv.innerHTML = data.ai.map((value, index) => 
-                `<div class="io-item analog-value">
+            aiDiv.innerHTML = data.ai.map((value, index) => {
+                const analogClass = `analog${index + 1}`;
+                return `<div class="io-item analog-value ${analogClass}">
                     <span><strong>AI${index + 1}</strong></span>
                     <span>${value} mV</span>
-                </div>`
-            ).join('');
+                </div>`;
+            }).join('');
             
             // Update connected clients
             const clientList = document.getElementById('client-list');
@@ -216,6 +351,9 @@ function updateIOStatus() {
                 document.getElementById('client-section').style.display = 'none';
                 clientList.innerHTML = '<div class="no-clients">No clients connected</div>';
             }
+            
+            // Update analog chart with new values
+            updateAnalogChart(data.ai);
             
             // Reset attempts counter on success
             ioStatusLoadAttempts = 0;
@@ -237,37 +375,13 @@ function updateIOStatus() {
         });
 }
 
-// Helper function to format duration in seconds to a readable format
-function formatDuration(seconds) {
-    if (seconds < 60) {
-        return seconds + " seconds";
-    } else if (seconds < 3600) {
-        const minutes = Math.floor(seconds / 60);
-        const remainingSeconds = seconds % 60;
-        return minutes + " min " + remainingSeconds + " sec";
-    } else {
-        const hours = Math.floor(seconds / 3600);
-        const minutes = Math.floor((seconds % 3600) / 60);
-        return hours + " hr " + minutes + " min";
-    }
-}
-
-// Wait a short time before loading initial configuration to ensure server is ready
-setTimeout(() => {
-    console.log("Starting initial data load sequence...");
-    
-    // First attempt at loading config
-    loadConfig();
-    
-    // Load IO configuration after a short delay
-    setTimeout(() => {
-        loadIOConfig();
-    }, 500);
-}, 500);
-
-// Add the IO configuration handling
-let ioConfigLoadAttempts = 0;
-const MAX_IO_CONFIG_LOAD_ATTEMPTS = 5;
+// Global configuration state
+let ioConfigState = {
+    di_pullup: Array(8).fill(false),
+    di_invert: Array(8).fill(false),
+    do_invert: Array(8).fill(false),
+    do_initial_state: Array(8).fill(false)
+};
 
 function loadIOConfig() {
     console.log("Loading IO configuration...");
@@ -280,6 +394,14 @@ function loadIOConfig() {
         })
         .then(data => {
             console.log("IO configuration loaded successfully:", data);
+            
+            // Store the configuration state globally
+            ioConfigState = {
+                di_pullup: [...data.di_pullup],
+                di_invert: [...data.di_invert],
+                do_invert: [...data.do_invert],
+                do_initial_state: [...data.do_initial_state]
+            };
             
             // Digital Inputs configuration
             const diConfigDiv = document.getElementById('di-config');
@@ -314,6 +436,10 @@ function loadIOConfig() {
                         <div class="io-config-title">DO${i + 1}</div>
                         <div class="io-config-options">
                             <label class="switch-label">
+                                <input type="checkbox" id="do-initial-${i}" ${data.do_initial_state[i] ? 'checked' : ''}>
+                                <span class="switch-text">Initial ON</span>
+                            </label>
+                            <label class="switch-label">
                                 <input type="checkbox" id="do-invert-${i}" ${data.do_invert[i] ? 'checked' : ''}>
                                 <span class="switch-text">Invert</span>
                             </label>
@@ -323,28 +449,7 @@ function loadIOConfig() {
             }
             doConfigDiv.innerHTML = doConfigHtml;
             
-            // Analog Inputs configuration
-            const aiConfigDiv = document.getElementById('ai-config');
-            let aiConfigHtml = '';
-            
-            for (let i = 0; i < data.ai_pulldown.length; i++) {
-                aiConfigHtml += `
-                    <div class="io-config-item">
-                        <div class="io-config-title">AI${i + 1}</div>
-                        <div class="io-config-options">
-                            <label class="switch-label">
-                                <input type="checkbox" id="ai-pulldown-${i}" ${data.ai_pulldown[i] ? 'checked' : ''}>
-                                <span class="switch-text">Pulldown</span>
-                            </label>
-                            <label class="switch-label">
-                                <input type="checkbox" id="ai-raw-${i}" ${data.ai_raw_format[i] ? 'checked' : ''}>
-                                <span class="switch-text">RAW Format</span>
-                            </label>
-                        </div>
-                    </div>
-                `;
-            }
-            aiConfigDiv.innerHTML = aiConfigHtml;
+            // Analog Input Configuration section removed as analog values are always in mV
             
             // Reset attempts counter on success
             ioConfigLoadAttempts = 0;
@@ -366,35 +471,37 @@ function loadIOConfig() {
         });
 }
 
+let ioConfigLoadAttempts = 0;
+const MAX_IO_CONFIG_LOAD_ATTEMPTS = 5;
+
 function saveIOConfig() {
     // Gather all configuration data
     const ioConfig = {
         di_pullup: [],
         di_invert: [],
         do_invert: [],
-        ai_pulldown: [],
-        ai_raw_format: []
+        do_initial_state: []
     };
     
     // Get digital input configuration
-    const diLength = document.querySelectorAll('[id^="di-pullup-"]').length;
-    for (let i = 0; i < diLength; i++) {
+    for (let i = 0; i < 8; i++) {
         ioConfig.di_pullup.push(document.getElementById(`di-pullup-${i}`).checked);
         ioConfig.di_invert.push(document.getElementById(`di-invert-${i}`).checked);
     }
     
     // Get digital output configuration
-    const doLength = document.querySelectorAll('[id^="do-invert-"]').length;
-    for (let i = 0; i < doLength; i++) {
+    for (let i = 0; i < 8; i++) {
         ioConfig.do_invert.push(document.getElementById(`do-invert-${i}`).checked);
+        ioConfig.do_initial_state.push(document.getElementById(`do-initial-${i}`).checked);
     }
     
-    // Get analog input configuration
-    const aiLength = document.querySelectorAll('[id^="ai-pulldown-"]').length;
-    for (let i = 0; i < aiLength; i++) {
-        ioConfig.ai_pulldown.push(document.getElementById(`ai-pulldown-${i}`).checked);
-        ioConfig.ai_raw_format.push(document.getElementById(`ai-raw-${i}`).checked);
-    }
+    // Update the global config state immediately
+    ioConfigState = {
+        di_pullup: [...ioConfig.di_pullup],
+        di_invert: [...ioConfig.di_invert],
+        do_invert: [...ioConfig.do_invert],
+        do_initial_state: [...ioConfig.do_initial_state]
+    };
     
     console.log("Saving IO configuration:", ioConfig);
     
@@ -405,11 +512,16 @@ function saveIOConfig() {
     fetch('/ioconfig', {
         method: 'POST',
         headers: {
-            'Content-Type': 'application/json',
+            'Content-Type': 'application/json'
         },
         body: JSON.stringify(ioConfig)
     })
-    .then(response => response.json())
+    .then(response => {
+        if (!response.ok) {
+            throw new Error('Network response was not ok');
+        }
+        return response.json();
+    })
     .then(data => {
         // Remove loading toast
         document.getElementById('toast-container').removeChild(loadingToast);
@@ -423,9 +535,12 @@ function saveIOConfig() {
         } else {
             showToast('Failed to save IO Configuration. Please try again.', 'error', false, 5000);
         }
+        
+        // Update IO status immediately to show the new inversion indicators
+        updateIOStatus();
     })
     .catch(error => {
-        // Remove loading toast
+        // Remove loading toast if it exists
         if (document.getElementById('toast-container').contains(loadingToast)) {
             document.getElementById('toast-container').removeChild(loadingToast);
         }
@@ -525,3 +640,31 @@ document.getElementById('dhcp').addEventListener('change', function(e) {
         document.getElementById(id).disabled = disabled;
     });
 });
+
+// Helper function to format duration in seconds to a readable format
+function formatDuration(seconds) {
+    if (seconds < 60) {
+        return seconds + " seconds";
+    } else if (seconds < 3600) {
+        const minutes = Math.floor(seconds / 60);
+        const remainingSeconds = seconds % 60;
+        return minutes + " min " + remainingSeconds + " sec";
+    } else {
+        const hours = Math.floor(seconds / 3600);
+        const minutes = Math.floor((seconds % 3600) / 60);
+        return hours + " hr " + minutes + " min";
+    }
+}
+
+// Wait a short time before loading initial configuration to ensure server is ready
+setTimeout(() => {
+    console.log("Starting initial data load sequence...");
+    
+    // First attempt at loading config
+    loadConfig();
+    
+    // Load IO configuration after a short delay
+    setTimeout(() => {
+        loadIOConfig();
+    }, 500);
+}, 500);
