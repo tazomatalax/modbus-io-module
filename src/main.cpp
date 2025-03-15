@@ -68,6 +68,11 @@ void loop() {
                 modbusClients[i].server.accept(modbusClients[i].client);
                 Serial.println("Modbus server accepted client connection");
                 
+                // Initialize coil states for this client to match current output states
+                for (int j = 0; j < 8; j++) {
+                    modbusClients[i].server.coilWrite(j, ioStatus.dOut[j]);
+                }
+                
                 connectedClients++;
                 clientAdded = true;
                 digitalWrite(LED_BUILTIN, HIGH);  // Turn on LED when at least one client is connected
@@ -124,7 +129,20 @@ void loadConfig() {
                 // Extract configuration values
                 config.version = doc["version"] | CONFIG_VERSION;
                 config.dhcpEnabled = doc["dhcpEnabled"] | DEFAULT_CONFIG.dhcpEnabled;
-                config.modbusPort = doc["modbusPort"] | DEFAULT_CONFIG.modbusPort;
+                
+                // Check if the modbusPort value exists in the config and extract it
+                if (doc.containsKey("modbusPort")) {
+                    config.modbusPort = doc["modbusPort"].as<uint16_t>();
+                    Serial.print("Found modbusPort in config file: ");
+                    Serial.println(config.modbusPort);
+                } else {
+                    config.modbusPort = DEFAULT_CONFIG.modbusPort;
+                    Serial.print("modbusPort not found in config, using default: ");
+                    Serial.println(config.modbusPort);
+                }
+                
+                Serial.print("Loaded Modbus port from config: ");
+                Serial.println(config.modbusPort);
                 
                 // Get IP addresses
                 JsonArray ipArray = doc["ip"].as<JsonArray>();
@@ -233,6 +251,12 @@ void saveConfig() {
     doc["version"] = config.version;
     doc["dhcpEnabled"] = config.dhcpEnabled;
     doc["modbusPort"] = config.modbusPort;
+    Serial.print("Saving Modbus port to config: ");
+    Serial.println(config.modbusPort);
+    
+    // Debug: Also print in hexadecimal to check for type issues
+    Serial.print("Modbus port in hex: 0x");
+    Serial.println(config.modbusPort, HEX);
     
     // Store IP addresses
     JsonArray ipArray = doc.createNestedArray("ip");
@@ -386,7 +410,11 @@ void setupEthernet() {
 }
 
 void setupModbus() {
-    modbusServer.begin();
+    // Begin the modbus server with the configured port
+    modbusServer.begin(config.modbusPort);
+    
+    Serial.print("Starting Modbus server on port: ");
+    Serial.println(config.modbusPort);
     
     // Initialize all ModbusTCPServer instances
     for (int i = 0; i < MAX_MODBUS_CLIENTS; i++) {
@@ -448,21 +476,42 @@ void updateIOpins() {
     
     // Update digital outputs - account for inversion
     for (int i = 0; i < 8; i++) {
-        // Check the coil state for each client and update the actual pin state
-        bool newState = ioStatus.dOut[i];
+        // Check the coil state for each client and update if any client changed an output
+        bool logicalState = ioStatus.dOut[i];
+        bool stateChanged = false;
+        
+        // First detect if any client has changed the state
         for (int j = 0; j < MAX_MODBUS_CLIENTS; j++) {
             if (modbusClients[j].connected) {
-                newState = modbusClients[j].server.coilRead(i);
+                bool clientCoilState = modbusClients[j].server.coilRead(i);
+                if (clientCoilState != logicalState) {
+                    // A client has changed this output's state, update our logical state
+                    logicalState = clientCoilState;
+                    ioStatus.dOut[i] = logicalState;
+                    stateChanged = true;
+                    break;  // We found a change, no need to check other clients
+                }
             }
         }
         
-        // Apply inversion if configured
-        if (config.doInvert[i]) {
-            newState = !newState;
+        // If state changed, synchronize all clients to the new state
+        if (stateChanged) {
+            Serial.printf("Output %d state changed to %d, synchronizing all clients\n", i, logicalState);
+            for (int j = 0; j < MAX_MODBUS_CLIENTS; j++) {
+                if (modbusClients[j].connected) {
+                    modbusClients[j].server.coilWrite(i, logicalState);
+                }
+            }
         }
         
-        digitalWrite(DIGITAL_OUTPUTS[i], newState);
-        ioStatus.dOut[i] = newState;
+        // Apply inversion only to the physical pin, not to the logical state
+        bool physicalState = logicalState;
+        if (config.doInvert[i]) {
+            physicalState = !logicalState;
+        }
+        
+        // Set the physical pin state
+        digitalWrite(DIGITAL_OUTPUTS[i], physicalState);
     }
     
     // Update analog inputs, using either raw values or millivolts
@@ -639,6 +688,10 @@ void handleSetConfig() {
     Serial.print("Received data length: ");
     Serial.println(data.length());
 
+    // Debug: Print the raw JSON data
+    Serial.println("Raw JSON data received:");
+    Serial.println(data);
+    
     // Prevent buffer overflow
     if (data.length() > 256) {
         Serial.println("Data too long");
@@ -666,7 +719,35 @@ void handleSetConfig() {
 
     // Process fields directly from JSON to save memory
     bool dhcpEnabled = doc["dhcp"] | config.dhcpEnabled;
+    
+    // Detailed debug for modbus_port field
+    Serial.println("Checking for modbus_port in JSON data...");
+    if (doc.containsKey("modbus_port")) {
+        Serial.println("modbus_port field found!");
+        Serial.print("Raw value: ");
+        serializeJson(doc["modbus_port"], Serial);
+        Serial.println();
+        
+        // Try to get as different types to debug type issues
+        String portStr = doc["modbus_port"].as<String>();
+        int portInt = doc["modbus_port"].as<int>();
+        Serial.print("As String: ");
+        Serial.println(portStr);
+        Serial.print("As int: ");
+        Serial.println(portInt);
+        
+        Serial.print("Final parsed modbus_port value (as uint16_t): ");
+        Serial.println(doc["modbus_port"].as<uint16_t>());
+    } else {
+        Serial.println("modbus_port field NOT found in JSON!");
+        Serial.print("Using existing value: ");
+        Serial.println(config.modbusPort);
+    }
+    
     uint16_t modbusPort = doc["modbus_port"] | config.modbusPort;
+    
+    Serial.print("Received modbus_port value from web: ");
+    Serial.println(modbusPort);
     
     // Validate port early
     if (modbusPort <= 0 || modbusPort > 65535) {
@@ -757,7 +838,7 @@ void handleSetOutput() {
     int output = webServer.arg("output").toInt();
     int state = webServer.arg("state").toInt();
 
-    Serial.printf("Received output %d, state %d\n", output, state);
+    Serial.printf("Received output %d, state %d from web interface\n", output, state);
 
     // Validate output number
     if (output < 0 || output >= sizeof(DIGITAL_OUTPUTS)/sizeof(DIGITAL_OUTPUTS[0])) {
@@ -766,14 +847,23 @@ void handleSetOutput() {
         return;
     }
 
-    // Set the output state
-    digitalWrite(DIGITAL_OUTPUTS[output], state ? HIGH : LOW);
+    // Store the *logical* state (not inverted)
     ioStatus.dOut[output] = state;
     
-    // Update coil state for all connected clients
+    // Apply inversion if configured for the physical pin state
+    bool physicalState = state;
+    if (config.doInvert[output]) {
+        physicalState = !state;
+    }
+    
+    // Set the physical pin state
+    digitalWrite(DIGITAL_OUTPUTS[output], physicalState);
+    
+    // Update coil state for ALL connected clients with the *logical* state
     for (int i = 0; i < MAX_MODBUS_CLIENTS; i++) {
         if (modbusClients[i].connected) {
             modbusClients[i].server.coilWrite(output, state);
+            Serial.printf("Updated client %d with output %d state %d\n", i, output, state);
         }
     }
 

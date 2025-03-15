@@ -73,7 +73,7 @@ IOStatus ioStatus;
 
 // Ethernet and Server instances
 Wiznet5500lwIP eth(PIN_ETH_CS, SPI, PIN_ETH_IRQ);
-WiFiServer modbusServer(502);
+WiFiServer modbusServer; 
 WebServer webServer(80);
 WiFiClient client;
 

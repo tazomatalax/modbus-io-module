@@ -1,3 +1,70 @@
+// Toast notification functions
+function showToast(message, type, countdown = false, duration = 3000) {
+    const toastContainer = document.getElementById('toast-container');
+    
+    // Create toast element
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+    if (countdown) {
+        toast.classList.add('countdown');
+    }
+    
+    // Create message content
+    const toastContent = document.createElement('span');
+    toastContent.innerHTML = message;
+    
+    // Create close button
+    const closeButton = document.createElement('button');
+    closeButton.className = 'toast-close';
+    closeButton.innerHTML = '&times;';
+    closeButton.addEventListener('click', () => {
+        toastContainer.removeChild(toast);
+    });
+    
+    // Assemble toast
+    toast.appendChild(toastContent);
+    toast.appendChild(closeButton);
+    
+    // Add to container
+    toastContainer.appendChild(toast);
+    
+    // Auto-remove after duration (if not countdown)
+    if (!countdown) {
+        setTimeout(() => {
+            if (toastContainer.contains(toast)) {
+                toastContainer.removeChild(toast);
+            }
+        }, duration);
+    }
+    
+    return toast;
+}
+
+function showCountdownToast(message, type, countdownDuration, onComplete) {
+    const toast = showToast(message, type, true);
+    
+    let countdown = countdownDuration;
+    const updateMessage = (seconds) => {
+        toast.firstChild.innerHTML = `${message} Page will reload in ${seconds} seconds`;
+    };
+    
+    updateMessage(countdown);
+    
+    const countdownInterval = setInterval(() => {
+        countdown--;
+        updateMessage(countdown);
+        
+        if (countdown <= 0) {
+            clearInterval(countdownInterval);
+            if (onComplete) {
+                onComplete();
+            }
+        }
+    }, 1000);
+    
+    return toast;
+}
+
 let configLoadAttempts = 0;
 const MAX_CONFIG_LOAD_ATTEMPTS = 5;
 
@@ -331,6 +398,9 @@ function saveIOConfig() {
     
     console.log("Saving IO configuration:", ioConfig);
     
+    // Show loading toast
+    const loadingToast = showToast('Saving IO configuration...', 'success');
+    
     // Send configuration to server
     fetch('/ioconfig', {
         method: 'POST',
@@ -341,56 +411,50 @@ function saveIOConfig() {
     })
     .then(response => response.json())
     .then(data => {
-        const status = document.getElementById('io-config-status');
-        status.style.display = 'block';
+        // Remove loading toast
+        document.getElementById('toast-container').removeChild(loadingToast);
         
         if (data.success) {
-            status.style.backgroundColor = 'var(--success-color)';
-            status.style.color = 'white';
             if (data.changed) {
-                status.textContent = 'IO Configuration saved successfully!';
+                showToast('IO Configuration saved successfully!', 'success');
             } else {
-                status.textContent = 'No changes detected in IO Configuration.';
+                showToast('No changes detected in IO Configuration.', 'success');
             }
-            
-            // Hide the status message after 3 seconds
-            setTimeout(() => {
-                status.style.display = 'none';
-            }, 3000);
         } else {
-            status.style.backgroundColor = 'var(--error-color)';
-            status.style.color = 'white';
-            status.textContent = 'Failed to save IO Configuration. Please try again.';
+            showToast('Failed to save IO Configuration. Please try again.', 'error', false, 5000);
         }
     })
     .catch(error => {
-        console.error('Error saving IO configuration:', error);
-        const status = document.getElementById('io-config-status');
-        status.style.display = 'block';
-        status.style.backgroundColor = 'var(--error-color)';
-        status.style.color = 'white';
-        status.textContent = 'Error saving IO Configuration: ' + error.message;
+        // Remove loading toast
+        if (document.getElementById('toast-container').contains(loadingToast)) {
+            document.getElementById('toast-container').removeChild(loadingToast);
+        }
+        showToast('Error saving IO configuration: ' + error.message, 'error', false, 5000);
     });
 }
 
-// Toggle IP fields when DHCP checkbox changes
-document.getElementById('dhcp').addEventListener('change', function(e) {
-    const disabled = e.target.checked;
-    ['ip', 'subnet', 'gateway'].forEach(id => {
-        document.getElementById(id).disabled = disabled;
-    });
-});
-
 function saveConfig() {
+    // Ensure modbus_port is parsed as a number
+    const modbus_port_raw = document.getElementById('modbus_port').value;
+    const modbus_port_value = parseInt(modbus_port_raw, 10);
+    
+    console.log("Modbus port value from form (raw):", modbus_port_raw);
+    console.log("Modbus port value from form (parsed):", modbus_port_value);
+    
     const config = {
         dhcp: document.getElementById('dhcp').checked,
         ip: document.getElementById('ip').value,
         subnet: document.getElementById('subnet').value,
         gateway: document.getElementById('gateway').value,
         hostname: document.getElementById('hostname').value,
-        modbus_port: document.getElementById('modbus_port').value
+        modbus_port: modbus_port_value
     };
-
+    
+    console.log("Config object being sent:", JSON.stringify(config));
+    
+    // Show loading toast
+    const loadingToast = showToast('Saving configuration...', 'success');
+    
     fetch('/config', {
         method: 'POST',
         headers: {
@@ -400,34 +464,30 @@ function saveConfig() {
     })
     .then(response => response.json())
     .then(data => {
-        const status = document.getElementById('status');
-        status.style.display = 'block';
+        // Remove loading toast
+        document.getElementById('toast-container').removeChild(loadingToast);
         
         if (data.success) {
-            status.style.backgroundColor = '#4CAF50';
-            status.style.color = 'white';
-            status.innerHTML = 'Configuration saved successfully! Rebooting now...';
+            // Update current IP display if it changed
             document.getElementById('current-ip').textContent = data.ip;
             
-            // Set a countdown for reload
-            let countdown = 5;
-            const countdownInterval = setInterval(() => {
-                countdown--;
-                status.innerHTML = `Configuration saved successfully! Rebooting now... Page will reload in ${countdown} seconds`;
-                if (countdown <= 0) {
-                    clearInterval(countdownInterval);
-                    window.location.reload();
-                }
-            }, 1000);
+            // Show countdown toast with reload
+            showCountdownToast(
+                'Configuration saved successfully! Rebooting now...', 
+                'success', 
+                5, 
+                () => window.location.reload()
+            );
         } else {
-            status.style.backgroundColor = '#f44336';
-            status.style.color = 'white';
-            status.innerHTML = 'Error: ' + data.error;
+            showToast('Error: ' + data.error, 'error', false, 5000);
         }
-        
-        setTimeout(() => {
-            status.style.display = 'none';
-        }, 3000);
+    })
+    .catch(error => {
+        // Remove loading toast
+        if (document.getElementById('toast-container').contains(loadingToast)) {
+            document.getElementById('toast-container').removeChild(loadingToast);
+        }
+        showToast('Failed to save configuration: ' + error.message, 'error', false, 5000);
     });
 }
 
@@ -457,3 +517,11 @@ function updateUI() {
     updateIOStatus();
 }
 setInterval(updateUI, 500);
+
+// Toggle IP fields when DHCP checkbox changes
+document.getElementById('dhcp').addEventListener('change', function(e) {
+    const disabled = e.target.checked;
+    ['ip', 'subnet', 'gateway'].forEach(id => {
+        document.getElementById(id).disabled = disabled;
+    });
+});
