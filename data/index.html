@@ -91,17 +91,21 @@
             <div id="status" class="status"></div>
         </div>
 
-        <div class="card">
+        <div class="card" id="io-status-card">
             <h1>IO Status</h1>
             <div class="io-section">
                 <div class="io-group">
-                    <h3>Digital Inputs</h3>
+                    <h3 class="with-button">Digital Inputs
+                        <button id="reset-latches-btn" class="action-button small-button">Reset Latches</button>
+                    </h3>
                     <div id="digital-inputs" class="io-grid"></div>
+                    <p class="info-text"><span class="info-icon">ℹ️</span> Latched inputs will remain ON even if the physical input returns to OFF state. Click on a latched input to reset it, or use the Reset Latches button to reset all. Latches can be reset via Modbus by writing '1' to coils 100-107 (FC 5).</p>
                 </div>
                 
                 <div class="io-group">
                     <h3>Digital Outputs</h3>
                     <div id="digital-outputs" class="io-grid"></div>
+                    <p class="info-text"><span class="info-icon">ℹ️</span> Inverted outputs are shown as set by the modbus master, ie. coil on is shown as output ON. An inverted output pin will be at 0V when ON and 3.3V when OFF.</p>
                 </div>
                 
                 <div class="io-group">
@@ -119,25 +123,22 @@
             </div>
         </div>
         
-        <div class="card">
-            <h1>IO Configuration</h1>
-            <div class="io-section">
-                <div class="io-group">
-                    <h3>Digital Input Configuration</h3>
-                    <div id="di-config"></div>
-                </div>
-                
-                <div class="io-group">
-                    <h3>Digital Output Configuration</h3>
-                    <div id="do-config"></div>
-                </div>
+        <div class="card config-card">
+            <div class="card-header">
+                <h2>IO Configuration</h2>
             </div>
-            <div class="button-logo-container">
-                <button onclick="saveIOConfig()">Save IO Configuration</button>
-                <div id="io-config-status" class="status"></div>
-                <a href="https://peakeinnovation.com" target="_blank" class="logo-link">
-                    <img src="logo.png" alt="Peake Electronic Innovation Logo" class="footer-logo">
-                </a>
+            <div class="card-body">
+                <p class="info-text"><span class="info-icon">ℹ️</span> Latched inputs remain ON until manually reset or read via Modbus. For Modbus clients, latches can be reset by writing '1' to coils 100-107.</p>
+                <div id="di-config"></div>
+                <div id="do-config"></div>
+                <div class="button-container">
+                    <button onclick="saveIOConfig()">Save IO Configuration</button>
+                    <div class="logo-container">
+                        <a href="https://peakeinnovation.com" target="_blank">
+                            <img src="logo.png" alt="Peake Electronic Innovation Logo" class="logo">
+                        </a>
+                    </div>
+                </div>
             </div>
         </div>
     </div>

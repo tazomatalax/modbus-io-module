@@ -309,9 +309,38 @@ function updateIOStatus() {
             const diDiv = document.getElementById('digital-inputs');
             diDiv.innerHTML = data.di.map((value, index) => {
                 const isInverted = ioConfigState.di_invert[index];
-                return `<div class="io-item ${value ? 'io-on' : 'io-off'}">
-                    <span><strong>DI${index + 1}</strong>${isInverted ? ' <span class="inverted-indicator" title="This input is inverted"></span>' : ''}</span>
-                    <span>${value ? 'ON' : 'OFF'}</span>
+                const isLatched = data.di_latched && data.di_latched[index];
+                const isLatchEnabled = ioConfigState.di_latch[index];
+                const rawValue = data.di_raw && data.di_raw[index];
+                
+                // Create status text that includes raw value and latched information when relevant
+                let statusText = value ? 'ON' : 'OFF';
+                let indicators = '';
+                
+                if (isInverted) {
+                    indicators += '<span class="inverted-indicator" title="This input is inverted"></span>';
+                }
+                
+                if (isLatchEnabled) {
+                    indicators += '<span class="latch-enabled-indicator" title="Latching enabled"></span>';
+                }
+                
+                if (isLatched) {
+                    indicators += '<span class="latched-indicator" title="Input is currently latched">L</span>';
+                    // If latched and raw value is different, show both states
+                    if (value !== rawValue) {
+                        statusText = `ON`;
+                    }
+                }
+                
+                // Add click handler for latched inputs to reset them individually
+                const clickHandler = isLatched ? 
+                    `onclick="resetSingleLatch(${index})"` : '';
+                const clickableClass = isLatched ? 'latched-clickable' : '';
+                
+                return `<div class="io-item ${value ? 'io-on' : 'io-off'} ${clickableClass}" ${clickHandler}>
+                    <span><strong>DI${index + 1}</strong>${indicators}</span>
+                    <span>${statusText}</span>
                 </div>`;
             }).join('');
 
@@ -375,10 +404,53 @@ function updateIOStatus() {
         });
 }
 
+// Function to reset a single latched input
+function resetSingleLatch(inputIndex) {
+    console.log(`Resetting latched input ${inputIndex}...`);
+    
+    // Show loading toast
+    const loadingToast = showToast(`Resetting input ${inputIndex + 1}...`, 'info');
+    
+    // Send request to server
+    fetch('/reset-latch', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ input: inputIndex })
+    })
+    .then(response => {
+        if (!response.ok) {
+            throw new Error('Network response was not ok');
+        }
+        return response.json();
+    })
+    .then(data => {
+        // Remove loading toast
+        document.getElementById('toast-container').removeChild(loadingToast);
+        
+        if (data.success) {
+            showToast(`Input ${inputIndex + 1} has been reset`, 'success');
+            // Update IO status immediately to show the changes
+            updateIOStatus();
+        } else {
+            showToast(`Failed to reset input ${inputIndex + 1}. Please try again.`, 'error', false, 5000);
+        }
+    })
+    .catch(error => {
+        // Remove loading toast if it exists
+        if (document.getElementById('toast-container').contains(loadingToast)) {
+            document.getElementById('toast-container').removeChild(loadingToast);
+        }
+        showToast('Error resetting latched input: ' + error.message, 'error', false, 5000);
+    });
+}
+
 // Global configuration state
 let ioConfigState = {
     di_pullup: Array(8).fill(false),
     di_invert: Array(8).fill(false),
+    di_latch: Array(8).fill(false),
     do_invert: Array(8).fill(false),
     do_initial_state: Array(8).fill(false)
 };
@@ -399,54 +471,90 @@ function loadIOConfig() {
             ioConfigState = {
                 di_pullup: [...data.di_pullup],
                 di_invert: [...data.di_invert],
+                di_latch: [...data.di_latch],
                 do_invert: [...data.do_invert],
                 do_initial_state: [...data.do_initial_state]
             };
             
             // Digital Inputs configuration
             const diConfigDiv = document.getElementById('di-config');
-            let diConfigHtml = '';
+            let diConfigHtml = '<table class="io-config-table">';
+            diConfigHtml += `
+                <thead>
+                    <tr>
+                        <th>Input</th>
+                        <th>Pullup</th>
+                        <th>Invert</th>
+                        <th>Latch</th>
+                    </tr>
+                </thead>
+                <tbody>
+            `;
             
             for (let i = 0; i < data.di_pullup.length; i++) {
                 diConfigHtml += `
-                    <div class="io-config-item">
-                        <div class="io-config-title">DI${i + 1}</div>
-                        <div class="io-config-options">
+                    <tr>
+                        <td>DI${i + 1}</td>
+                        <td>
                             <label class="switch-label">
                                 <input type="checkbox" id="di-pullup-${i}" ${data.di_pullup[i] ? 'checked' : ''}>
                                 <span class="switch-text">Pullup</span>
                             </label>
+                        </td>
+                        <td>
                             <label class="switch-label">
                                 <input type="checkbox" id="di-invert-${i}" ${data.di_invert[i] ? 'checked' : ''}>
                                 <span class="switch-text">Invert</span>
                             </label>
-                        </div>
-                    </div>
+                        </td>
+                        <td>
+                            <label class="switch-label" title="When enabled, the input will latch in the ON state until it is read via Modbus or manually reset">
+                                <input type="checkbox" id="di-latch-${i}" ${data.di_latch[i] ? 'checked' : ''}>
+                                <span class="switch-text">Latch</span>
+                            </label>
+                        </td>
+                    </tr>
                 `;
             }
+            diConfigHtml += '</tbody></table>';
             diConfigDiv.innerHTML = diConfigHtml;
             
             // Digital Outputs configuration
             const doConfigDiv = document.getElementById('do-config');
-            let doConfigHtml = '';
+            let doConfigHtml = '<table class="io-config-table">';
+            doConfigHtml += `
+                <thead>
+                    <tr>
+                        <th>Output</th>
+                        <th>Initial</th>
+                        <th>Invert</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+            `;
             
             for (let i = 0; i < data.do_invert.length; i++) {
                 doConfigHtml += `
-                    <div class="io-config-item">
-                        <div class="io-config-title">DO${i + 1}</div>
-                        <div class="io-config-options">
+                    <tr>
+                        <td>DO${i + 1}</td>
+                        <td>
                             <label class="switch-label">
                                 <input type="checkbox" id="do-initial-${i}" ${data.do_initial_state[i] ? 'checked' : ''}>
                                 <span class="switch-text">Initial ON</span>
                             </label>
+                        </td>
+                        <td>
                             <label class="switch-label">
                                 <input type="checkbox" id="do-invert-${i}" ${data.do_invert[i] ? 'checked' : ''}>
                                 <span class="switch-text">Invert</span>
                             </label>
-                        </div>
-                    </div>
+                        </td>
+                        <td></td>
+                    </tr>
                 `;
             }
+            doConfigHtml += '</tbody></table>';
             doConfigDiv.innerHTML = doConfigHtml;
             
             // Analog Input Configuration section removed as analog values are always in mV
@@ -479,6 +587,7 @@ function saveIOConfig() {
     const ioConfig = {
         di_pullup: [],
         di_invert: [],
+        di_latch: [],
         do_invert: [],
         do_initial_state: []
     };
@@ -487,6 +596,7 @@ function saveIOConfig() {
     for (let i = 0; i < 8; i++) {
         ioConfig.di_pullup.push(document.getElementById(`di-pullup-${i}`).checked);
         ioConfig.di_invert.push(document.getElementById(`di-invert-${i}`).checked);
+        ioConfig.di_latch.push(document.getElementById(`di-latch-${i}`).checked);
     }
     
     // Get digital output configuration
@@ -499,6 +609,7 @@ function saveIOConfig() {
     ioConfigState = {
         di_pullup: [...ioConfig.di_pullup],
         di_invert: [...ioConfig.di_invert],
+        di_latch: [...ioConfig.di_latch],
         do_invert: [...ioConfig.do_invert],
         do_initial_state: [...ioConfig.do_initial_state]
     };
@@ -506,7 +617,7 @@ function saveIOConfig() {
     console.log("Saving IO configuration:", ioConfig);
     
     // Show loading toast
-    const loadingToast = showToast('Saving IO configuration...', 'success');
+    const loadingToast = showToast('Saving IO configuration...', 'info');
     
     // Send configuration to server
     fetch('/ioconfig', {
@@ -568,7 +679,7 @@ function saveConfig() {
     console.log("Config object being sent:", JSON.stringify(config));
     
     // Show loading toast
-    const loadingToast = showToast('Saving configuration...', 'success');
+    const loadingToast = showToast('Saving configuration...', 'info');
     
     fetch('/config', {
         method: 'POST',
@@ -668,3 +779,91 @@ setTimeout(() => {
         loadIOConfig();
     }, 500);
 }, 500);
+
+// Add event listener for reset latches button
+document.getElementById('reset-latches-btn').addEventListener('click', resetLatches);
+
+// Function to reset all latched inputs
+// Note: Modbus clients can reset individual latches by writing to coils 100-107
+function resetLatches() {
+    console.log('Resetting all latched inputs...');
+    
+    // Show loading toast
+    const loadingToast = showToast('Resetting latched inputs...', 'info');
+    
+    // Send request to server
+    fetch('/reset-latches', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        }
+    })
+    .then(response => {
+        if (!response.ok) {
+            throw new Error('Network response was not ok');
+        }
+        return response.json();
+    })
+    .then(data => {
+        // Remove loading toast
+        document.getElementById('toast-container').removeChild(loadingToast);
+        
+        if (data.success) {
+            showToast('Latched inputs have been reset', 'success');
+            // Update IO status immediately to show the changes
+            updateIOStatus();
+        } else {
+            showToast('Failed to reset latched inputs. Please try again.', 'error', false, 5000);
+        }
+    })
+    .catch(error => {
+        // Remove loading toast if it exists
+        if (document.getElementById('toast-container').contains(loadingToast)) {
+            document.getElementById('toast-container').removeChild(loadingToast);
+        }
+        showToast('Error resetting latched inputs: ' + error.message, 'error', false, 5000);
+    });
+}
+
+// Function to reset a single latched input
+// Note: Modbus clients can reset individual latches by writing to coils 100-107
+function resetSingleLatch(inputIndex) {
+    console.log(`Resetting latched input ${inputIndex}...`);
+    
+    // Show loading toast
+    const loadingToast = showToast(`Resetting input ${inputIndex + 1}...`, 'info');
+    
+    // Send request to server
+    fetch('/reset-latch', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ input: inputIndex })
+    })
+    .then(response => {
+        if (!response.ok) {
+            throw new Error('Network response was not ok');
+        }
+        return response.json();
+    })
+    .then(data => {
+        // Remove loading toast
+        document.getElementById('toast-container').removeChild(loadingToast);
+        
+        if (data.success) {
+            showToast(`Input ${inputIndex + 1} has been reset`, 'success');
+            // Update IO status immediately to show the changes
+            updateIOStatus();
+        } else {
+            showToast(`Failed to reset input ${inputIndex + 1}. Please try again.`, 'error', false, 5000);
+        }
+    })
+    .catch(error => {
+        // Remove loading toast if it exists
+        if (document.getElementById('toast-container').contains(loadingToast)) {
+            document.getElementById('toast-container').removeChild(loadingToast);
+        }
+        showToast('Error resetting latched input: ' + error.message, 'error', false, 5000);
+    });
+}

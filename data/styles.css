@@ -6,8 +6,11 @@
     --warning-color: #ff9800;
     --background-color: #f5f5f5;
     --card-background: #ffffff;
-    --on-color: rgb(0, 170, 41);
-    --off-color: rgb(124, 124, 124);
+    --on-color: #3fc73f;
+    --off-color: #cccccc;
+    --icon-bg-color: #256d25;
+    --input-color: #ffe922;
+    --output-color: #bc51fa;
     --analog-color: rgb(0, 103, 181);
     --border-color: rgba(0, 0, 0, 0.1);
     --io-group-bg: #f9f9f9;
@@ -41,10 +44,10 @@ body {
     align-items: center;
     width: 18px;
     height: 18px;
-    margin-left: 26px;
+    margin-left: 2px;
     margin-bottom: 2px;
     border-radius: 50%;
-    background-color: #ff9800;
+    background-color: var(--icon-bg-color);
     overflow: hidden;
     cursor: help;
     vertical-align: middle;
@@ -66,12 +69,100 @@ body {
 }
 
 .io-on .inverted-indicator {
-    background-color: rgba(255, 152, 0, 0.9);
+    background-color: var(--icon-bg-color);
     box-shadow: 0 0 2px rgba(255, 255, 255, 0.5);
 }
 
 .io-off .inverted-indicator {
-    background-color: rgba(255, 152, 0, 0.8);
+    background-color: var(--icon-bg-color);
+}
+
+/* Latch enabled indicator */
+.latch-enabled-indicator {
+    display: inline-flex;
+    justify-content: center;
+    align-items: center;
+    width: 18px;
+    height: 18px;
+    margin-left: 5px;
+    margin-bottom: 2px;
+    border-radius: 50%;
+    background-color: var(--icon-bg-color);
+    overflow: hidden;
+    cursor: help;
+    vertical-align: middle;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+}
+
+.latch-enabled-indicator::before {
+    content: "🔒";
+    color: white;
+    font-size: 10px;
+    line-height: 18px;
+    text-align: center;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Latched state indicator */
+.latched-indicator {
+    display: inline-flex;
+    justify-content: center;
+    align-items: center;
+    width: 18px;
+    height: 18px;
+    margin-left: 5px;
+    margin-bottom: 2px;
+    border-radius: 50%;
+    background-color: var(--icon-bg-color);
+    overflow: hidden;
+    cursor: help;
+    vertical-align: middle;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    font-weight: bold;
+    color: white;
+    font-size: 12px;
+    box-shadow: 0 0 4px rgba(255, 255, 255, 0.5);
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0% {
+        box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.0);
+    }
+    70% {
+        box-shadow: 0 0 0 6px rgba(255, 255, 255, 0.7);
+    }
+    100% {
+        box-shadow: 0 0 0 0 rgba(255, 255, 255, 1);
+    }
+}
+
+.latched-clickable {
+    cursor: pointer;
+    position: relative;
+}
+
+.latched-clickable:hover {
+    box-shadow: 0 0 5px rgba(233, 30, 99, 0.7);
+}
+
+.latched-clickable:hover::after {
+    content: "Click to reset";
+    position: absolute;
+    bottom: -25px;
+    left: 50%;
+    transform: translateX(-50%);
+    background-color: rgba(0, 0, 0, 0.8);
+    color: white;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    white-space: nowrap;
+    z-index: 10;
 }
 
 h1 {
@@ -86,6 +177,20 @@ h2 {
     font-weight: 500;
     margin: 0 0 15px 0;
     font-size: 1.5em;
+}
+
+h3 {
+    color: #555;
+    font-weight: 500;
+    margin: 0 0 15px 0;
+    font-size: 1.2em;
+    display: flex;
+    justify-content: flex-start;
+    align-items: center;
+}
+
+h3.with-button {
+    justify-content: space-between;
 }
 
 .device-status {
@@ -185,7 +290,19 @@ input:checked + .slider:before {
 }
 
 .switch-label {
-    font-weight: 500;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-right: 0;
+    cursor: pointer;
+}
+
+.switch-text {
+    margin-left: 5px;
+}
+
+.io-config-table .switch-label .switch-text {
+    font-size: 0.9em;
 }
 
 /* IO styling */
@@ -199,6 +316,7 @@ input:checked + .slider:before {
     display: flex;
     flex-wrap: wrap;
     gap: 20px;
+    color: #333;
 }
 
 .io-group {
@@ -233,11 +351,11 @@ input:checked + .slider:before {
 }
 
 .io-group:nth-child(1) h3::before {
-    background-color: var(--off-color);
+    background-color: var(--input-color);
 }
 
 .io-group:nth-child(2) h3::before {
-    background-color: var(--on-color);
+    background-color: var(--output-color);
 }
 
 .io-group:nth-child(3) h3::before {
@@ -251,7 +369,7 @@ input:checked + .slider:before {
     padding: 10px 15px;
     border-radius: 6px;
     background-color: var(--off-color);
-    color: white;
+    color: #333;
     margin-bottom: 8px;
     box-shadow: 0 1px 2px rgba(0,0,0,0.1);
     transition: all 0.2s ease;
@@ -327,6 +445,40 @@ input:checked + .slider:before {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    flex-wrap: wrap;
+}
+
+.header-left {
+    display: flex;
+    align-items: center;
+}
+
+.button-container {
+    margin-top: 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+/* Logo in IO Config panel */
+.logo-container {
+    display: flex;
+    justify-content: flex-end;
+}
+
+.logo {
+    width: 216px;
+    height: 64px;
+    object-fit: contain;
+    background-color: transparent;
+    padding: 0;
+    border-radius: 0;
+    box-shadow: none;
+    transition: transform 0.2s ease;
+}
+
+.logo:hover {
+    transform: scale(1.05);
 }
 
 .device-header h1 {
@@ -379,6 +531,67 @@ input:checked + .slider:before {
 }
 
 /* IO Configuration */
+.io-config-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 20px;
+    border-radius: 4px;
+    overflow: hidden;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.io-config-table thead th {
+    background-color: #f5f5f5;
+    color: #333;
+    font-weight: 600;
+    text-align: center;
+    padding: 10px 12px;
+    border-bottom: 2px solid rgba(0, 0, 0, 0.1);
+}
+
+.io-config-table thead th:first-child {
+    text-align: left;
+}
+
+.io-config-table tr:nth-child(odd) {
+    background-color: rgba(0, 0, 0, 0.03);
+}
+
+.io-config-table tr:nth-child(even) {
+    background-color: rgba(255, 255, 255, 0.5);
+}
+
+.io-config-table tr:hover {
+    background-color: rgba(0, 0, 0, 0.05);
+}
+
+.io-config-table td {
+    padding: 10px 12px;
+    vertical-align: middle;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+    text-align: center;
+}
+
+.io-config-table td:first-child {
+    font-weight: 500;
+    width: 80px;
+    text-align: left;
+}
+
+.io-config-table th:nth-child(1),
+.io-config-table td:nth-child(1) {
+    width: 80px;
+}
+
+.io-config-table th:nth-child(2),
+.io-config-table td:nth-child(2),
+.io-config-table th:nth-child(3),
+.io-config-table td:nth-child(3),
+.io-config-table th:nth-child(4),
+.io-config-table td:nth-child(4) {
+    width: calc((100% - 80px) / 3);
+}
+
 .io-config-item {
     margin-bottom: 15px;
 }
@@ -394,16 +607,7 @@ input:checked + .slider:before {
     gap: 10px;
 }
 
-.switch-label {
-    display: inline-flex;
-    align-items: center;
-    margin-right: 15px;
-    cursor: pointer;
-}
-
-.switch-text {
-    margin-left: 5px;
-}
+/* Switch styles moved above */
 
 button {
     background-color: var(--primary-color);
@@ -640,4 +844,51 @@ button:hover {
     .chart-area {
         height: 200px;
     }
+}
+
+.action-button {
+    background-color: var(--primary-color);
+    color: white;
+    border: none;
+    border-radius: 4px;
+    padding: 8px 16px;
+    font-size: 1em;
+    cursor: pointer;
+    transition: background-color 0.2s;
+    margin-top: 10px;
+}
+
+.small-button {
+    font-size: 0.8em;
+    padding: 4px 8px;
+    margin-left: 10px;
+    margin-top: 0;
+    vertical-align: middle;
+}
+
+.action-button:hover {
+    background-color: var(--primary-hover);
+}
+
+#reset-latches-btn {
+    background-color: #e91e63;
+    margin-left: auto;
+}
+
+#reset-latches-btn:hover {
+    background-color: #c2185b;
+}
+
+.info-text {
+    font-size: 0.85em;
+    color: #555;
+    margin-bottom: 15px;
+    padding: 8px 12px;
+    background-color: #e3f2fd;
+    border-left: 4px solid #2196F3;
+    border-radius: 4px;
+}
+
+.info-icon {
+    margin-right: 5px;
 }

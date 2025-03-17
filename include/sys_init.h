@@ -19,7 +19,7 @@
 
 // Constants
 #define CONFIG_FILE "/config.json"
-#define CONFIG_VERSION 5  // Increment this when config structure changes
+#define CONFIG_VERSION 6  // Increment this when config structure changes
 #define HOSTNAME_MAX_LENGTH 32
 #define MAX_MODBUS_CLIENTS 4  // Maximum number of concurrent Modbus clients
 
@@ -42,6 +42,7 @@ struct Config {
     char hostname[HOSTNAME_MAX_LENGTH];
     bool diPullup[8];         // Enable internal pullup for digital inputs
     bool diInvert[8];         // Invert logic for digital inputs
+    bool diLatch[8];          // Enable latching for digital inputs (stay ON until read)
     bool doInvert[8];         // Invert logic for digital outputs
     bool doInitialState[8];   // Initial state for digital outputs (true = ON, false = OFF)
 } config;
@@ -57,12 +58,15 @@ const Config DEFAULT_CONFIG = {
     "modbus-io",                // Default hostname
     {false, false, false, false, false, false, false, false},  // diPullup (all disabled)
     {false, false, false, false, false, false, false, false},  // diInvert (no inversion)
+    {false, false, false, false, false, false, false, false},  // diLatch (no latching)
     {false, false, false, false, false, false, false, false},  // doInvert (no inversion)
     {false, false, false, false, false, false, false, false},  // doInitialState (all OFF)
 };
 
 struct IOStatus {
-    bool dIn[8];
+    bool dIn[8];          // Current state of digital inputs (including latching behavior if enabled)
+    bool dInRaw[8];       // Actual physical state of digital inputs (without latching)
+    bool dInLatched[8];   // Tracks if an input has been latched (true = latched)
     bool dOut[8];
     uint16_t aIn[3];
 };
@@ -95,6 +99,7 @@ void setupEthernet();
 void setupModbus();
 void setupWebServer();
 void updateIOpins();
+void updateIOForClient(int clientIndex);
 void handleRoot();
 void handleCSS();
 void handleJS();
@@ -103,7 +108,9 @@ void handleLogo();
 void handleGetConfig();
 void handleSetConfig();
 void handleSetOutput();
-void updateIOForClient(int clientIndex);
 void handleGetIOStatus();
 void handleGetIOConfig();
 void handleSetIOConfig();
+void resetLatches();
+void handleResetLatches();
+void handleResetSingleLatch();

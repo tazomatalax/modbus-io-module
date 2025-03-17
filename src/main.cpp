@@ -1,5 +1,28 @@
 #include "sys_init.h"
 
+/*
+ * Modbus IO Module
+ * 
+ * Features:
+ * - 8 Digital Inputs (with optional pullup, inversion, and latching)
+ * - 8 Digital Outputs (with optional inversion and initial state)
+ * - 3 Analog Inputs (12-bit resolution)
+ * - Modbus TCP Server
+ * - Web configuration interface
+ * 
+ * Modbus Register Map:
+ * - Discrete Inputs (FC2): 0-7 - Digital input states
+ * - Coils (FC1/FC5): 0-7 - Digital output states
+ * - Coils (FC5): 100-107 - Reset latches for digital inputs 0-7
+ *   (Write 1 to reset the latch for the corresponding input)
+ * - Input Registers (FC4): 0-2 - Analog input values
+ * 
+ * Web Interface:
+ * - Network Configuration (IP, Gateway, Subnet, DHCP)
+ * - IO Status and Control
+ * - IO Configuration (Input pullup, inversion, latching, etc.)
+ */
+
 void setup() {
     Serial.begin(115200);
     uint32_t timeStamp = millis();
@@ -91,8 +114,9 @@ void loop() {
         if (modbusClients[i].connected) {
             if (modbusClients[i].client.connected()) {
                 // Poll this client's Modbus server
-                modbusClients[i].server.poll();
-                
+                if (modbusClients[i].server.poll()) {
+                    Serial.println("Modbus server recieved new request");
+                }
                 // Update IO for this specific client
                 updateIOForClient(i);
             } else {
@@ -196,6 +220,15 @@ void loadConfig() {
                     memcpy(config.diInvert, DEFAULT_CONFIG.diInvert, 8);
                 }
                 
+                JsonArray diLatchArray = doc["diLatch"].as<JsonArray>();
+                if (diLatchArray) {
+                    for (int i = 0; i < 8; i++) {
+                        config.diLatch[i] = diLatchArray[i] | DEFAULT_CONFIG.diLatch[i];
+                    }
+                } else {
+                    memcpy(config.diLatch, DEFAULT_CONFIG.diLatch, 8);
+                }
+                
                 // Get digital output configurations
                 JsonArray doInvertArray = doc["doInvert"].as<JsonArray>();
                 if (doInvertArray) {
@@ -234,6 +267,8 @@ void loadConfig() {
 }
 
 void saveConfig() {
+    Serial.println("Saving configuration to LittleFS...");
+    
     // Create a JSON document to store the configuration
     StaticJsonDocument<2048> doc;
     
@@ -241,26 +276,15 @@ void saveConfig() {
     doc["version"] = config.version;
     doc["dhcpEnabled"] = config.dhcpEnabled;
     doc["modbusPort"] = config.modbusPort;
-    Serial.print("Saving Modbus port to config: ");
-    Serial.println(config.modbusPort);
     
-    // Debug: Also print in hexadecimal to check for type issues
-    Serial.print("Modbus port in hex: 0x");
-    Serial.println(config.modbusPort, HEX);
-    
-    // Store IP addresses
+    // Store IP addresses as arrays
     JsonArray ipArray = doc.createNestedArray("ip");
+    JsonArray gatewayArray = doc.createNestedArray("gateway");
+    JsonArray subnetArray = doc.createNestedArray("subnet");
+    
     for (int i = 0; i < 4; i++) {
         ipArray.add(config.ip[i]);
-    }
-    
-    JsonArray gatewayArray = doc.createNestedArray("gateway");
-    for (int i = 0; i < 4; i++) {
         gatewayArray.add(config.gateway[i]);
-    }
-    
-    JsonArray subnetArray = doc.createNestedArray("subnet");
-    for (int i = 0; i < 4; i++) {
         subnetArray.add(config.subnet[i]);
     }
     
@@ -269,23 +293,21 @@ void saveConfig() {
     
     // Store digital input configurations
     JsonArray diPullupArray = doc.createNestedArray("diPullup");
+    JsonArray diInvertArray = doc.createNestedArray("diInvert");
+    JsonArray diLatchArray = doc.createNestedArray("diLatch");
+    
     for (int i = 0; i < 8; i++) {
         diPullupArray.add(config.diPullup[i]);
-    }
-    
-    JsonArray diInvertArray = doc.createNestedArray("diInvert");
-    for (int i = 0; i < 8; i++) {
         diInvertArray.add(config.diInvert[i]);
+        diLatchArray.add(config.diLatch[i]);
     }
     
     // Store digital output configurations
     JsonArray doInvertArray = doc.createNestedArray("doInvert");
+    JsonArray doInitialStateArray = doc.createNestedArray("doInitialState");
+    
     for (int i = 0; i < 8; i++) {
         doInvertArray.add(config.doInvert[i]);
-    }
-    
-    JsonArray doInitialStateArray = doc.createNestedArray("doInitialState");
-    for (int i = 0; i < 8; i++) {
         doInitialStateArray.add(config.doInitialState[i]);
     }
     
@@ -298,12 +320,21 @@ void saveConfig() {
     
     // Serialize JSON to file
     if (serializeJson(doc, configFile) == 0) {
-        Serial.println("Failed to write to config file");
+        Serial.println("Failed to write config to file");
     } else {
-        Serial.println("Configuration saved to file");
+        Serial.println("Configuration saved successfully");
     }
     
+    // Close the file
     configFile.close();
+}
+
+// Reset all latched inputs
+void resetLatches() {
+    Serial.println("Resetting all latched inputs");
+    for (int i = 0; i < 8; i++) {
+        ioStatus.dInLatched[i] = false;
+    }
 }
 
 void setPinModes() {
@@ -421,7 +452,7 @@ void setupModbus() {
         // Configure Modbus registers for each client server
         modbusClients[i].server.configureHoldingRegisters(0x00, 16);  // 16 holding registers
         modbusClients[i].server.configureInputRegisters(0x00, 16);    // 16 input registers
-        modbusClients[i].server.configureCoils(0x00, 16);            // 16 coils
+        modbusClients[i].server.configureCoils(0x00, 128);           // 128 coils (0-127)
         modbusClients[i].server.configureDiscreteInputs(0x00, 16);   // 16 discrete inputs
     }
     
@@ -445,6 +476,8 @@ void setupWebServer() {
     webServer.on("/setoutput", HTTP_POST, handleSetOutput);
     webServer.on("/ioconfig", HTTP_GET, handleGetIOConfig);
     webServer.on("/ioconfig", HTTP_POST, handleSetIOConfig);
+    webServer.on("/reset-latches", HTTP_POST, handleResetLatches);
+    webServer.on("/reset-latch", HTTP_POST, handleResetSingleLatch);
     webServer.begin();
     
     Serial.println("Web server started");
@@ -453,16 +486,39 @@ void setupWebServer() {
 void updateIOpins() {
     // Update Modbus registers with current IO state
     
-    // Update digital inputs - account for invert configuration
+    // Update digital inputs - account for invert configuration and latching behavior
     for (int i = 0; i < 8; i++) {
-        uint16_t value = digitalRead(DIGITAL_INPUTS[i]);
+        uint16_t rawValue = digitalRead(DIGITAL_INPUTS[i]);
         
         // Apply inversion if configured
         if (config.diInvert[i]) {
-            value = !value;
+            rawValue = !rawValue;
         }
         
-        ioStatus.dIn[i] = value;
+        // Store the raw input state
+        ioStatus.dInRaw[i] = rawValue;
+        
+        // Check if latching is enabled for this input
+        if (config.diLatch[i]) {
+            // If input is active (HIGH) and not already latched, set the latch
+            if (rawValue && !ioStatus.dInLatched[i]) {
+                ioStatus.dInLatched[i] = true;
+                ioStatus.dIn[i] = true; // Set the input state to ON
+            }
+            // If input is latched, keep it ON regardless of the current physical state
+            else if (ioStatus.dInLatched[i]) {
+                ioStatus.dIn[i] = true;
+            }
+            // Otherwise, use the raw value
+            else {
+                ioStatus.dIn[i] = rawValue;
+            }
+        } 
+        // If latching is not enabled, just use the raw value
+        else {
+            ioStatus.dIn[i] = rawValue;
+            ioStatus.dInLatched[i] = false; // Ensure latch flag is cleared
+        }
     }
     
     // Update digital outputs - account for inversion
@@ -510,6 +566,35 @@ void updateIOpins() {
         uint32_t rawValue = analogRead(ANALOG_INPUTS[i]);
         uint16_t valueToWrite = (rawValue * 3300UL) / 4095UL;
         ioStatus.aIn[i] = valueToWrite;
+    }
+}
+
+void updateIOForClient(int clientIndex) {
+    // Update Modbus registers with current IO state, actual pin states measured in updateIOpins()
+    
+    // Update digital inputs
+    for (int i = 0; i < 8; i++) {
+        modbusClients[clientIndex].server.discreteInputWrite(i, ioStatus.dIn[i]);
+    }
+        
+    // Update analog inputs
+    for (int i = 0; i < 3; i++) {
+        modbusClients[clientIndex].server.inputRegisterWrite(i, ioStatus.aIn[i]);
+    }
+    
+    // Check coils 100-107 for latch reset commands
+    for (int i = 0; i < 8; i++) {
+        if (modbusClients[clientIndex].server.coilRead(100 + i)) {
+            // If coil is set to 1, reset the corresponding latch
+            if (config.diLatch[i] && ioStatus.dInLatched[i]) {
+                ioStatus.dInLatched[i] = false;
+                // Update the input state based on the raw input state
+                ioStatus.dIn[i] = ioStatus.dInRaw[i];
+                Serial.printf("Reset latch for digital input %d via Modbus coil %d\n", i, 100 + i);
+            }
+            // Reset the coil back to 0 after processing
+            modbusClients[clientIndex].server.coilWrite(100 + i, false);
+        }
     }
 }
 
@@ -692,8 +777,8 @@ void handleSetConfig() {
     // Process fields directly from JSON to save memory
     bool dhcpEnabled = doc["dhcp"] | config.dhcpEnabled;
     
-    // Detailed debug for modbus_port field
-    Serial.println("Checking for modbus_port in JSON data...");
+    // Detailed debug for modbusPort field
+    Serial.println("Checking for modbusPort in JSON data...");
     if (doc.containsKey("modbus_port")) {
         Serial.println("modbus_port field found!");
         Serial.print("Raw value: ");
@@ -842,20 +927,6 @@ void handleSetOutput() {
     webServer.send(200, "text/plain", "OK");
 }
 
-void updateIOForClient(int clientIndex) {
-    // Update Modbus registers with current IO state, actual pin states measured in updateIOpins()
-    
-    // Update digital inputs
-    for (int i = 0; i < 8; i++) {
-        modbusClients[clientIndex].server.discreteInputWrite(i, ioStatus.dIn[i]);
-    }
-        
-    // Update analog inputs
-    for (int i = 0; i < 3; i++) {
-        modbusClients[clientIndex].server.inputRegisterWrite(i, ioStatus.aIn[i]);
-    }
-}
-
 void handleGetIOStatus() {
     // Add a brief delay to ensure all internal states are updated
     // This helps with the first request after server initialization
@@ -898,6 +969,18 @@ void handleGetIOStatus() {
         di.add(ioStatus.dIn[i]);
     }
 
+    // Add raw digital input states (without latching effect)
+    JsonArray diRaw = doc.createNestedArray("di_raw");
+    for (int i = 0; i < 8; i++) {
+        diRaw.add(ioStatus.dInRaw[i]);
+    }
+
+    // Add latched state information
+    JsonArray diLatched = doc.createNestedArray("di_latched");
+    for (int i = 0; i < 8; i++) {
+        diLatched.add(ioStatus.dInLatched[i]);
+    }
+
     // Digital outputs - account for inversion
     JsonArray do_ = doc.createNestedArray("do");
     for (int i = 0; i < 8; i++) {
@@ -925,10 +1008,12 @@ void handleGetIOConfig() {
     // Add digital input configuration
     JsonArray diPullup = doc.createNestedArray("di_pullup");
     JsonArray diInvert = doc.createNestedArray("di_invert");
+    JsonArray diLatch = doc.createNestedArray("di_latch");
     
     for (int i = 0; i < sizeof(DIGITAL_INPUTS)/sizeof(DIGITAL_INPUTS[0]); i++) {
         diPullup.add(config.diPullup[i]);
         diInvert.add(config.diInvert[i]);
+        diLatch.add(config.diLatch[i]);
     }
     
     // Add digital output configuration
@@ -993,7 +1078,7 @@ void handleSetIOConfig() {
         }
     }
     
-    Serial.println("Updating digital output configuration");
+    Serial.println("Updating digital input invert configuration");
     // Update digital input invert configuration
     if (doc.containsKey("di_invert") && doc["di_invert"].is<JsonArray>()) {
         JsonArray diInvert = doc["di_invert"].as<JsonArray>();
@@ -1003,6 +1088,29 @@ void handleSetIOConfig() {
                 bool newValue = value.as<bool>();
                 if (config.diInvert[index] != newValue) {
                     config.diInvert[index] = newValue;
+                    changed = true;
+                }
+                index++;
+            }
+        }
+    }
+    
+    Serial.println("Updating digital input latch configuration");
+    // Update digital input latch configuration
+    if (doc.containsKey("di_latch") && doc["di_latch"].is<JsonArray>()) {
+        JsonArray diLatch = doc["di_latch"].as<JsonArray>();
+        int index = 0;
+        for (JsonVariant value : diLatch) {
+            if (index < sizeof(DIGITAL_INPUTS)/sizeof(DIGITAL_INPUTS[0])) {
+                bool newValue = value.as<bool>();
+                if (config.diLatch[index] != newValue) {
+                    config.diLatch[index] = newValue;
+                    
+                    // If disabling latching, clear any latched states
+                    if (!newValue && ioStatus.dInLatched[index]) {
+                        ioStatus.dInLatched[index] = false;
+                    }
+                    
                     changed = true;
                 }
                 index++;
@@ -1057,6 +1165,68 @@ void handleSetIOConfig() {
     StaticJsonDocument<64> responseDoc;
     responseDoc["success"] = true;
     responseDoc["changed"] = changed;
+    
+    String response;
+    serializeJson(responseDoc, response);
+    webServer.send(200, "application/json", response);
+}
+
+void handleResetLatches() {
+    Serial.println("Handling reset latches request");
+    
+    // Reset all latched inputs
+    resetLatches();
+    
+    // Create a JSON response
+    StaticJsonDocument<128> doc;
+    doc["success"] = true;
+    doc["message"] = "All latched inputs have been reset";
+    
+    String response;
+    serializeJson(doc, response);
+    webServer.send(200, "application/json", response);
+}
+
+void handleResetSingleLatch() {
+    // Check if the request has a body
+    if (!webServer.hasArg("plain")) {
+        webServer.send(400, "application/json", "{\"success\":false,\"message\":\"No request body\"}");
+        return;
+    }
+    
+    String requestBody = webServer.arg("plain");
+    StaticJsonDocument<128> doc;
+    DeserializationError error = deserializeJson(doc, requestBody);
+    
+    if (error) {
+        Serial.print(F("Reset latch JSON deserialization failed: "));
+        Serial.println(error.c_str());
+        webServer.send(400, "application/json", "{\"success\":false,\"message\":\"Invalid JSON\"}");
+        return;
+    }
+    
+    // Check if the input field exists and is valid
+    if (!doc.containsKey("input")) {
+        webServer.send(400, "application/json", "{\"success\":false,\"message\":\"Missing input field\"}");
+        return;
+    }
+    
+    int inputIndex = doc["input"];
+    
+    // Validate input index
+    if (inputIndex < 0 || inputIndex >= 8) {
+        webServer.send(400, "application/json", "{\"success\":false,\"message\":\"Invalid input index\"}");
+        return;
+    }
+    
+    // Reset the latch for the specified input
+    Serial.printf("Resetting latch for input %d\n", inputIndex);
+    ioStatus.dInLatched[inputIndex] = false;
+    
+    // Prepare response
+    StaticJsonDocument<128> responseDoc;
+    responseDoc["success"] = true;
+    responseDoc["message"] = "Latch has been reset for input " + String(inputIndex);
     
     String response;
     serializeJson(responseDoc, response);
