@@ -467,8 +467,8 @@ input:checked + .slider:before {
 }
 
 .logo {
-    width: 216px;
-    height: 64px;
+    width: 162px;
+    height: 48px;
     object-fit: contain;
     background-color: transparent;
     padding: 0;
@@ -478,7 +478,7 @@ input:checked + .slider:before {
 }
 
 .logo:hover {
-    transform: scale(1.05);
+    transform: scale(1.02);
 }
 
 .device-header h1 {
