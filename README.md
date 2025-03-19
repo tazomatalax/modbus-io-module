@@ -64,7 +64,6 @@ A flexible Ethernet-based Modbus TCP IO module built on the Wiznet W5500-EVB-Pic
   - Hostname
   - Modbus client connection status
 - Analog input trend visualization
-- Peake Electronic Innovation branding
 
 ## Hardware
 
@@ -140,7 +139,7 @@ A flexible Ethernet-based Modbus TCP IO module built on the Wiznet W5500-EVB-Pic
 
 ### Default Network Settings
 - DHCP: Enabled
-- Fallback Static IP: 192.168.1.200
+- Fallback Static IP: 192.168.1.10
 - Subnet: 255.255.255.0
 - Gateway: 192.168.1.1
 - Modbus Port: 502
@@ -149,12 +148,6 @@ A flexible Ethernet-based Modbus TCP IO module built on the Wiznet W5500-EVB-Pic
 - Configuration stored in LittleFS
 - Version control for config structure
 - Automatic migration of settings
-
-### USB Device Information
-- Manufacturer: Peake Electronic Innovation
-- Product: Modbus TCP IO Module
-- VID: 0x04D8
-- PID: 0xEB64
 
 ## Usage
 
