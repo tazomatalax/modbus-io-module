@@ -42,11 +42,11 @@ A flexible Ethernet-based Modbus TCP IO module built on the Wiznet W5500-EVB-Pic
   - 16 Holding Registers
 
 ### Web Interface
-![Web Interface](images/web-interface-1.png)
+![Web Interface - Network](images/web-interface-1.png)
 
-!(images/web-interface-2.png)
+![Web Interface - IO Status](images/web-interface-2.png)
 
-!(images/web-interface-3.png)
+![Web Interface - IO Configuration](images/web-interface-3.png)
 
 - Modern, responsive design
 - Live IO status updates
