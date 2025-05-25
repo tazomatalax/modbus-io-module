@@ -67,6 +67,9 @@ void setup() {
     setupModbus();
     setupWebServer();
     core0setupComplete = true;
+
+    // Start watchdog
+    rp2040.wdt_begin(WDT_TIMEOUT);
 }
 
 void loop() {
@@ -135,6 +138,9 @@ void loop() {
     }
     updateIOpins();
     webServer.handleClient();
+
+    // Watchdog timer reset
+    rp2040.wdt_reset();
 }
 
 void loadConfig() {

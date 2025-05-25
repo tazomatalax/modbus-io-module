@@ -8,6 +8,9 @@
 #include <ArduinoJson.h>
 #include <LittleFS.h>
 
+// Watchdog timer
+#define WDT_TIMEOUT 5000
+
 // Pin Definitions
 #define PIN_ETH_MISO 16
 #define PIN_ETH_CS 17
