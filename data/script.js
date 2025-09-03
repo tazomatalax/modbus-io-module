@@ -384,6 +384,21 @@ function updateIOStatus() {
             // Update analog chart with new values
             updateAnalogChart(data.ai);
             
+            // Update I2C sensors
+            const i2cContainer = document.getElementById('i2c-sensors-container');
+            if (data.i2c_sensors) {
+                i2cContainer.innerHTML = `
+                    <div class="io-item analog-value">
+                        <span><strong>Temperature</strong></span>
+                        <span>${data.i2c_sensors.temperature} °C</span>
+                    </div>
+                    <div class="io-item analog-value">
+                        <span><strong>Humidity</strong></span>
+                        <span>${data.i2c_sensors.humidity} %</span>
+                    </div>
+                `;
+            }
+            
             // Reset attempts counter on success
             ioStatusLoadAttempts = 0;
         })
