@@ -22,15 +22,307 @@ app.use(cors());
 app.use(bodyParser.json({ limit: '1mb' }));
 app.use(bodyParser.urlencoded({ extended: true }));
 
-// Inject a small script into index.html to surface server-side alerts without editing UI assets
-function injectAlertScript(html) {
-  const snippet = `\n<script>(function(){\n  function go(){\n    try{\n      fetch('/__contract').then(r=>r.ok?r.json():null).then(info=>{\n        if(info && info.missing_in_server && info.missing_in_server.length>0 && window.showToast){\n          window.showToast('Simulator missing sensors expected by UI: '+info.missing_in_server.join(', '), 'error', false, 6000);\n        }\n      }).catch(function(){});\n      fetch('/config').then(r=>r.ok?r.json():null).then(cfg=>{\n        if(cfg && cfg.modbus_server_error && window.showToast){\n          window.showToast('Modbus TCP error: '+cfg.modbus_server_error+' . Change port in Settings and Save.', 'error', false, 7000);\n        }\n      }).catch(function(){});\n    }catch(e){}\n  }\n  if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded', go);} else {go();}\n})();</script>\n`;
-  // Inject before </body>
-  if (/<\/body>/i.test(html)) {
-    return html.replace(/<\/body>/i, snippet + '</body>');
+// Inject simulator-specific content into index.html (alerts + sim controls)
+function injectSimulatorContent(html) {
+  // Sim Controls panel HTML
+  const simControlsPanel = `
+    <div class="card" id="sim-controls-card" style="border: 2px solid #007acc; background: linear-gradient(145deg, #f8f9fa, #e9ecef);">
+      <div class="card-header">
+        <h2 style="color: #007acc;">🔧 Simulator Controls</h2>
+        <p style="margin: 0; color: #666; font-size: 0.9em;">Control simulation modes and values (only visible in simulator)</p>
+      </div>
+      <div class="card-body">
+        <div class="sim-controls-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+          
+          <!-- Sensor Controls -->
+          <div class="sim-section">
+            <h3>I2C Sensors</h3>
+            <div class="sim-control-item">
+              <label class="switch-label">
+                <input type="checkbox" id="sim-sensors-auto" checked>
+                <span class="switch-text">Auto Mode</span>
+              </label>
+            </div>
+            <div id="sim-sensor-manual" style="display: none;">
+              <div class="form-group">
+                <label for="sim-temp">Temperature (°C)</label>
+                <input type="number" id="sim-temp" step="0.1" value="22.5" min="-40" max="100">
+              </div>
+              <div class="form-group">
+                <label for="sim-humidity">Humidity (%)</label>
+                <input type="number" id="sim-humidity" step="0.1" value="45.0" min="0" max="100">
+              </div>
+              <button onclick="updateSensorValues()" class="action-button">Update Sensors</button>
+            </div>
+          </div>
+          
+          <!-- Digital Input Controls -->
+          <div class="sim-section">
+            <h3>Digital Inputs</h3>
+            <div class="sim-control-item">
+              <label class="switch-label">
+                <input type="checkbox" id="sim-di-auto" checked>
+                <span class="switch-text">Auto Mode</span>
+              </label>
+            </div>
+            <div id="sim-di-manual" style="display: none;">
+              <div class="di-sim-grid" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 10px 0;">
+                <!-- DI checkboxes will be generated here -->
+              </div>
+              <button onclick="updateDigitalInputs()" class="action-button">Update DI</button>
+            </div>
+          </div>
+          
+          <!-- Analog Input Controls -->
+          <div class="sim-section">
+            <h3>Analog Inputs</h3>
+            <div class="sim-control-item">
+              <label class="switch-label">
+                <input type="checkbox" id="sim-ai-auto" checked>
+                <span class="switch-text">Auto Mode</span>
+              </label>
+            </div>
+            <div id="sim-ai-manual" style="display: none;">
+              <div class="form-group">
+                <label for="sim-ai1">AI1 (mV)</label>
+                <input type="number" id="sim-ai1" step="1" value="1650" min="0" max="3300">
+              </div>
+              <div class="form-group">
+                <label for="sim-ai2">AI2 (mV)</label>
+                <input type="number" id="sim-ai2" step="1" value="1650" min="0" max="3300">
+              </div>
+              <div class="form-group">
+                <label for="sim-ai3">AI3 (mV)</label>
+                <input type="number" id="sim-ai3" step="1" value="1650" min="0" max="3300">
+              </div>
+              <button onclick="updateAnalogInputs()" class="action-button">Update AI</button>
+            </div>
+          </div>
+          
+          <!-- Status Info -->
+          <div class="sim-section">
+            <h3>Simulation Status</h3>
+            <div id="sim-status" style="font-family: monospace; font-size: 0.85em; color: #666;">
+              Sensors: Auto<br>
+              DI: Auto<br>
+              AI: Auto
+            </div>
+          </div>
+          
+        </div>
+      </div>
+    </div>`;
+
+  // JavaScript for sim controls
+  const simControlsScript = `
+<script>
+// Simulator Controls JavaScript
+(function() {
+  function initSimControls() {
+    // Generate DI checkboxes
+    const diGrid = document.querySelector('#sim-di-manual .di-sim-grid');
+    if (diGrid) {
+      for (let i = 0; i < 8; i++) {
+        const div = document.createElement('div');
+        div.innerHTML = '<label class="switch-label"><input type="checkbox" id="sim-di' + (i+1) + '"><span class="switch-text">DI' + (i+1) + '</span></label>';
+        diGrid.appendChild(div);
+      }
+    }
+    
+    // Load current simulation state
+    fetch('/simulate/status').then(r => r.ok ? r.json() : null).then(status => {
+      if (status) {
+        // Set mode toggles
+        document.getElementById('sim-sensors-auto').checked = (status.sensorsMode === 'auto');
+        document.getElementById('sim-di-auto').checked = (status.diMode === 'auto');
+        document.getElementById('sim-ai-auto').checked = (status.aiMode === 'auto');
+        
+        // Set manual control values
+        if (status.sensors) {
+          document.getElementById('sim-temp').value = status.sensors.temperature.toFixed(1);
+          document.getElementById('sim-humidity').value = status.sensors.humidity.toFixed(1);
+        }
+        
+        if (status.ai) {
+          document.getElementById('sim-ai1').value = status.ai[0] || 0;
+          document.getElementById('sim-ai2').value = status.ai[1] || 0;
+          document.getElementById('sim-ai3').value = status.ai[2] || 0;
+        }
+        
+        if (status.di) {
+          for (let i = 0; i < 8; i++) {
+            const checkbox = document.getElementById('sim-di' + (i+1));
+            if (checkbox) checkbox.checked = status.di[i] || false;
+          }
+        }
+        
+        // Update UI visibility
+        updateManualControlsVisibility();
+        updateSimStatus();
+      }
+    }).catch(() => {});
+    
+    // Auto/Manual mode toggles
+    document.getElementById('sim-sensors-auto').addEventListener('change', function() {
+      updateManualControlsVisibility();
+      updateSimStatus();
+    });
+    
+    document.getElementById('sim-di-auto').addEventListener('change', function() {
+      updateManualControlsVisibility();
+      updateSimStatus();
+    });
+    
+    document.getElementById('sim-ai-auto').addEventListener('change', function() {
+      updateManualControlsVisibility();
+      updateSimStatus();
+    });
   }
+  
+  function updateManualControlsVisibility() {
+    document.getElementById('sim-sensor-manual').style.display = 
+      document.getElementById('sim-sensors-auto').checked ? 'none' : 'block';
+    document.getElementById('sim-di-manual').style.display = 
+      document.getElementById('sim-di-auto').checked ? 'none' : 'block';
+    document.getElementById('sim-ai-manual').style.display = 
+      document.getElementById('sim-ai-auto').checked ? 'none' : 'block';
+  }
+  
+  function updateSimStatus() {
+    const sensorsMode = document.getElementById('sim-sensors-auto').checked ? 'Auto' : 'Manual';
+    const diMode = document.getElementById('sim-di-auto').checked ? 'Auto' : 'Manual';
+    const aiMode = document.getElementById('sim-ai-auto').checked ? 'Auto' : 'Manual';
+    
+    document.getElementById('sim-status').innerHTML = 
+      'Sensors: ' + sensorsMode + '<br>' +
+      'DI: ' + diMode + '<br>' +
+      'AI: ' + aiMode;
+  }
+  
+  // Global functions for button handlers
+  window.updateSensorValues = function() {
+    const temp = parseFloat(document.getElementById('sim-temp').value);
+    const humidity = parseFloat(document.getElementById('sim-humidity').value);
+    
+    fetch('/simulate/sensors', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        mode: 'manual',
+        temperature: temp,
+        humidity: humidity
+      })
+    }).then(response => response.json())
+      .then(data => {
+        if (data.success && window.showToast) {
+          window.showToast('Sensors updated: ' + temp + '°C, ' + humidity + '%', 'success');
+        }
+      }).catch(err => {
+        if (window.showToast) window.showToast('Error updating sensors', 'error');
+      });
+  };
+  
+  window.updateDigitalInputs = function() {
+    const diValues = [];
+    for (let i = 0; i < 8; i++) {
+      const checkbox = document.getElementById('sim-di' + (i+1));
+      diValues.push(checkbox ? checkbox.checked : false);
+    }
+    
+    fetch('/simulate/di', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        mode: 'manual',
+        values: diValues
+      })
+    }).then(response => response.json())
+      .then(data => {
+        if (data.success && window.showToast) {
+          window.showToast('Digital inputs updated', 'success');
+        }
+      }).catch(err => {
+        if (window.showToast) window.showToast('Error updating DI', 'error');
+      });
+  };
+  
+  window.updateAnalogInputs = function() {
+    const ai1 = parseInt(document.getElementById('sim-ai1').value);
+    const ai2 = parseInt(document.getElementById('sim-ai2').value);
+    const ai3 = parseInt(document.getElementById('sim-ai3').value);
+    
+    fetch('/simulate/ai', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        mode: 'manual',
+        values: [ai1, ai2, ai3]
+      })
+    }).then(response => response.json())
+      .then(data => {
+        if (data.success && window.showToast) {
+          window.showToast('Analog inputs updated: ' + ai1 + ', ' + ai2 + ', ' + ai3 + ' mV', 'success');
+        }
+      }).catch(err => {
+        if (window.showToast) window.showToast('Error updating AI', 'error');
+      });
+  };
+  
+  // Initialize when DOM is ready
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initSimControls);
+  } else {
+    initSimControls();
+  }
+  
+  // Also set auto modes back to auto when they're re-enabled
+  setInterval(function() {
+    if (document.getElementById('sim-sensors-auto').checked) {
+      fetch('/simulate/sensors', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'auto' }) }).catch(() => {});
+    }
+    if (document.getElementById('sim-di-auto').checked) {
+      fetch('/simulate/di', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'auto' }) }).catch(() => {});
+    }
+    if (document.getElementById('sim-ai-auto').checked) {
+      fetch('/simulate/ai', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'auto' }) }).catch(() => {});
+    }
+  }, 5000);
+})();
+
+// Contract check and error alerts
+(function(){
+  function go(){
+    try{
+      fetch('/__contract').then(r=>r.ok?r.json():null).then(info=>{
+        if(info && info.missing_in_server && info.missing_in_server.length>0 && window.showToast){
+          window.showToast('Simulator missing sensors expected by UI: '+info.missing_in_server.join(', '), 'error', false, 6000);
+        }
+      }).catch(function(){});
+      fetch('/config').then(r=>r.ok?r.json():null).then(cfg=>{
+        if(cfg && cfg.modbus_server_error && window.showToast){
+          window.showToast('Modbus TCP error: '+cfg.modbus_server_error+' . Change port in Settings and Save.', 'error', false, 7000);
+        }
+      }).catch(function(){});
+    }catch(e){}
+  }
+  if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded', go);} else {go();}
+})();
+</script>`;
+
+  // Inject sim controls panel after the IO Configuration card
+  let htmlWithPanel = html;
+  const ioConfigCardEnd = /<\/div>\s*<\/div>\s*<div class="github-link-container">/i;
+  if (ioConfigCardEnd.test(html)) {
+    htmlWithPanel = html.replace(ioConfigCardEnd, simControlsPanel + '\n    </div>\n    \n    <div class="github-link-container">');
+  }
+  
+  // Inject script before </body>
+  if (/<\/body>/i.test(htmlWithPanel)) {
+    return htmlWithPanel.replace(/<\/body>/i, simControlsScript + '\n</body>');
+  }
+  
   // Fallback: append at end
-  return html + snippet;
+  return htmlWithPanel + simControlsScript;
 }
 
 app.get(['/', '/index.html'], (req, res, next) => {
@@ -38,7 +330,7 @@ app.get(['/', '/index.html'], (req, res, next) => {
   fs.readFile(indexPath, 'utf8', (err, html) => {
     if (err || !html) return next();
     try {
-      const out = injectAlertScript(html);
+      const out = injectSimulatorContent(html);
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
       res.send(out);
     } catch (e) {
@@ -84,7 +376,8 @@ const state = {
   modbusServerError: null,
   sim: {
     sensorsMode: 'auto', // 'auto' | 'manual'
-    diMode: 'auto'       // 'auto' | 'manual'
+    diMode: 'auto',      // 'auto' | 'manual'
+    aiMode: 'auto'       // 'auto' | 'manual'
   },
   contract: {
     uiSensorKeys: [],
@@ -134,16 +427,21 @@ function scanUISensorKeys() {
 
 // Simulate sensor and analog values over time
 function updateSensors() {
-  if (state.sim.sensorsMode === 'manual') return; // keep manually set values
   const t = Date.now();
-  // Analog inputs in mV (simulate 0-3300 range)
-  state.io.aIn[0] = Math.round(1650 + 800 * Math.sin(t / 5000));
-  state.io.aIn[1] = Math.round(1200 + 600 * Math.cos(t / 7000));
-  state.io.aIn[2] = Math.round(800 + 500 * Math.sin(t / 9000));
+  
   // I2C-like sensors
-  state.io.temperature = 23.45 + Math.sin(t / 10000) * 2.0;
-  state.io.humidity = 55.2 + Math.cos(t / 8000) * 5.0;
-  state.io.pressure = 1013.25 + Math.sin(t / 15000) * 10.0;
+  if (state.sim.sensorsMode === 'auto') {
+    state.io.temperature = 23.45 + Math.sin(t / 10000) * 2.0;
+    state.io.humidity = 55.2 + Math.cos(t / 8000) * 5.0;
+    state.io.pressure = 1013.25 + Math.sin(t / 15000) * 10.0;
+  }
+  
+  // Analog inputs in mV (simulate 0-3300 range)
+  if (state.sim.aiMode === 'auto') {
+    state.io.aIn[0] = Math.round(1650 + 800 * Math.sin(t / 5000));
+    state.io.aIn[1] = Math.round(1200 + 600 * Math.cos(t / 7000));
+    state.io.aIn[2] = Math.round(800 + 500 * Math.sin(t / 9000));
+  }
 }
 
 // Digital inputs simulation: random toggles with latching behavior
@@ -422,18 +720,42 @@ app.post('/simulate/di', (req, res) => {
 
 // Get/Set analog inputs (mV)
 app.get('/simulate/ai', (req, res) => {
-  res.json({ ai: state.io.aIn });
+  res.json({ ai: state.io.aIn, mode: state.sim.aiMode });
 });
 
 app.post('/simulate/ai', (req, res) => {
   const b = req.body || {};
-  if (Array.isArray(b.ai)) {
-    for (let i = 0; i < Math.min(3, b.ai.length); i++) {
-      const v = Math.max(0, Math.min(3300, parseInt(b.ai[i], 10) || 0));
-      state.io.aIn[i] = v;
+  
+  // Set mode if provided
+  if (b.mode === 'auto' || b.mode === 'manual') state.sim.aiMode = b.mode;
+  
+  // Set values if in manual mode and values are provided
+  if (state.sim.aiMode === 'manual') {
+    const values = b.values || b.ai; // Accept both 'values' (from UI) and 'ai' (legacy)
+    if (Array.isArray(values)) {
+      for (let i = 0; i < Math.min(3, values.length); i++) {
+        const v = Math.max(0, Math.min(3300, parseInt(values[i], 10) || 0));
+        state.io.aIn[i] = v;
+      }
     }
   }
-  res.json({ success: true, ai: state.io.aIn });
+  
+  res.json({ success: true, ai: state.io.aIn, mode: state.sim.aiMode });
+});
+
+// Get simulation state (for UI initialization)
+app.get('/simulate/status', (req, res) => {
+  res.json({
+    sensorsMode: state.sim.sensorsMode,
+    diMode: state.sim.diMode,
+    aiMode: state.sim.aiMode,
+    sensors: {
+      temperature: state.io.temperature,
+      humidity: state.io.humidity
+    },
+    ai: state.io.aIn,
+    di: state.io.dInRaw
+  });
 });
 
 // ------------------ Modbus TCP server (functional subset) ------------------
