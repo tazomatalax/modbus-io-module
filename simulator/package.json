@@ -1,0 +1,21 @@
+{
+  "name": "modbus-io-module-simulator",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Host-side simulator for the Modbus IO Module (RP2040) web UI, REST API, and optional Modbus TCP server.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon --watch server.js --watch ../data --ext js,html,css --signal SIGINT server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.4"
+  },
+  "engines": {
+    "node": ">=16"
+  }
+}
