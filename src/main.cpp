@@ -1061,17 +1061,10 @@ void handleGetIOStatus() {
         ai.add(ioStatus.aIn[i]);
     }
 
-    // I2C Sensor Data Template - Uncomment when adding I2C sensors
-    // Add sensor readings to JSON response:
-    // doc["temperature"] = ioStatus.temperature;    // Temperature in Celsius
-    // doc["humidity"] = ioStatus.humidity;          // Humidity in %
-    // doc["pressure"] = ioStatus.pressure;          // Pressure in hPa
-    // 
-    // Or create a nested sensor object:
-    // JsonObject sensor = doc.createNestedObject("sensor");
-    // sensor["temperature"] = ioStatus.temperature;
-    // sensor["humidity"] = ioStatus.humidity;
-    // sensor["pressure"] = ioStatus.pressure;
+    // I2C Sensor Data - Add sensor readings as nested object
+    JsonObject i2c_sensors = doc.createNestedObject("i2c_sensors");
+    i2c_sensors["temperature"] = String(ioStatus.temperature, 2);
+    i2c_sensors["humidity"] = String(ioStatus.humidity, 2);
 
     serializeJson(doc, jsonBuffer);
     webServer.send(200, "application/json", jsonBuffer);
