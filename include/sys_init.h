@@ -20,6 +20,10 @@
 #define PIN_ETH_IRQ 21
 #define PIN_EXT_LED 22
 
+// Add I2C Pin Definitions
+#define I2C_SDA_PIN 24
+#define I2C_SCL_PIN 25
+
 // Constants
 #define CONFIG_FILE "/config.json"
 #define CONFIG_VERSION 6  // Increment this when config structure changes

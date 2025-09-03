@@ -1,4 +1,5 @@
 #include "sys_init.h"
+#include <Wire.h>
 
 /*
  * Modbus IO Module
@@ -66,6 +67,13 @@ void setup() {
     setupEthernet();
     setupModbus();
     setupWebServer();
+    
+    // Initialize I2C bus
+    Wire.setSDA(I2C_SDA_PIN);
+    Wire.setSCL(I2C_SCL_PIN);
+    Wire.begin();
+    Serial.println("I2C Bus Initialized.");
+    
     core0setupComplete = true;
 
     // Start watchdog
