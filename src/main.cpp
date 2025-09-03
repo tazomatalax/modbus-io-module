@@ -26,6 +26,8 @@
  * - Coils (FC5): 100-107 - Reset latches for digital inputs 0-7
  *   (Write 1 to reset the latch for the corresponding input)
  * - Input Registers (FC4): 0-2 - Analog input values
+ * - Input Registers (FC4): 3 - Temperature (scaled x100, e.g., 2550 = 25.50°C)
+ * - Input Registers (FC4): 4 - Humidity (scaled x100, e.g., 6050 = 60.50%)
  * 
  * Web Interface:
  * - Network Configuration (IP, Gateway, Subnet, DHCP)
@@ -483,7 +485,7 @@ void setupModbus() {
         
         // Configure Modbus registers for each client server
         modbusClients[i].server.configureHoldingRegisters(0x00, 16);  // 16 holding registers
-        modbusClients[i].server.configureInputRegisters(0x00, 16);    // 16 input registers
+        modbusClients[i].server.configureInputRegisters(0x00, 32);    // 32 input registers
         modbusClients[i].server.configureCoils(0x00, 128);           // 128 coils (0-127)
         modbusClients[i].server.configureDiscreteInputs(0x00, 16);   // 16 discrete inputs
     }
@@ -600,8 +602,18 @@ void updateIOpins() {
         ioStatus.aIn[i] = valueToWrite;
     }
     
-    // I2C Sensor Reading Template - Uncomment when adding I2C sensors
-    // Example for BME280 sensor readings:
+    // I2C Sensor Reading - Placeholder values for testing and integration
+    // Replace with actual sensor readings when integrating I2C sensors
+    static uint32_t sensorReadTime = 0;
+    if (millis() - sensorReadTime > 1000) { // Update every 1 second
+        // Placeholder sensor values - simulate realistic sensor readings
+        ioStatus.temperature = 23.45 + sin(millis() / 10000.0) * 2.0; // 21.45-25.45°C range
+        ioStatus.humidity = 55.20 + cos(millis() / 8000.0) * 5.0;     // 50.20-60.20% range
+        ioStatus.pressure = 1013.25 + sin(millis() / 15000.0) * 10.0; // 1003.25-1023.25 hPa range
+        sensorReadTime = millis();
+    }
+    
+    // Example for BME280 sensor integration (uncomment when adding real sensor):
     // ioStatus.temperature = bme.readTemperature();    // Temperature in Celsius
     // ioStatus.humidity = bme.readHumidity();          // Humidity in %
     // ioStatus.pressure = bme.readPressure() / 100.0F; // Pressure in hPa
@@ -625,20 +637,12 @@ void updateIOForClient(int clientIndex) {
         modbusClients[clientIndex].server.inputRegisterWrite(i, ioStatus.aIn[i]);
     }
     
-    // I2C Sensor Data Modbus Mapping Template - Uncomment when adding I2C sensors
-    // Map sensor data to Modbus input registers (registers 3-5 for sensor data):
-    // Register 3: Temperature (scaled to integer, e.g., temp * 100 for 0.01°C resolution)
-    // modbusClients[clientIndex].server.inputRegisterWrite(3, (uint16_t)(ioStatus.temperature * 100));
-    // Register 4: Humidity (scaled to integer, e.g., humidity * 100 for 0.01% resolution)  
-    // modbusClients[clientIndex].server.inputRegisterWrite(4, (uint16_t)(ioStatus.humidity * 100));
-    // Register 5: Pressure (pressure in hPa as integer)
-    // modbusClients[clientIndex].server.inputRegisterWrite(5, (uint16_t)ioStatus.pressure);
-    //
-    // Note: Update the Modbus register map documentation when adding sensors:
-    // - Input Registers (FC4): 0-2 - Analog input values (existing)
-    // - Input Registers (FC4): 3 - Temperature (temp * 100, in 0.01°C units)
-    // - Input Registers (FC4): 4 - Humidity (humidity * 100, in 0.01% units)  
-    // - Input Registers (FC4): 5 - Pressure (in hPa)
+    // I2C Sensor Data Modbus Mapping - Convert float values to 16-bit integers
+    uint16_t temp_x_100 = (uint16_t)(ioStatus.temperature * 100);
+    uint16_t hum_x_100 = (uint16_t)(ioStatus.humidity * 100);
+
+    modbusClients[clientIndex].server.inputRegisterWrite(3, temp_x_100); // Temperature
+    modbusClients[clientIndex].server.inputRegisterWrite(4, hum_x_100); // Humidity
     
     // Check coils 100-107 for latch reset commands
     for (int i = 0; i < 8; i++) {

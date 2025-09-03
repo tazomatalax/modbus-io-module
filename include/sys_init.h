@@ -77,11 +77,10 @@ struct IOStatus {
     bool dOut[8];
     uint16_t aIn[3];
     
-    // I2C Sensor Data - Template for future sensor integration
-    // Uncomment and modify the following fields when adding I2C sensors:
-    // float temperature;    // Temperature reading from I2C sensor (e.g., BME280)
-    // float humidity;       // Humidity reading from I2C sensor (e.g., BME280) 
-    // float pressure;       // Pressure reading from I2C sensor (e.g., BME280)
+    // I2C Sensor Data - Active sensor fields
+    float temperature;    // Temperature reading from I2C sensor (e.g., BME280)
+    float humidity;       // Humidity reading from I2C sensor (e.g., BME280) 
+    float pressure;       // Pressure reading from I2C sensor (e.g., BME280)
     // Add additional sensor fields as needed for your specific I2C sensors
 };
 
