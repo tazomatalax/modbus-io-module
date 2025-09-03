@@ -1,6 +1,15 @@
 #include "sys_init.h"
 #include <Wire.h>
 
+// I2C Sensor Library Template - Uncomment when adding I2C sensors
+// Example using BME280 sensor:
+// #include <Adafruit_Sensor.h>
+// #include <Adafruit_BME280.h>
+
+// I2C Sensor Instance Template - Uncomment and modify for your sensor
+// Example for BME280:
+// Adafruit_BME280 bme; // Create sensor object
+
 /*
  * Modbus IO Module
  * 
@@ -73,6 +82,15 @@ void setup() {
     Wire.setSCL(I2C_SCL_PIN);
     Wire.begin();
     Serial.println("I2C Bus Initialized.");
+    
+    // I2C Sensor Initialization Template - Uncomment when adding I2C sensors
+    // Example for BME280 sensor:
+    // if (!bme.begin(0x76)) { // Common I2C address for BME280
+    //     Serial.println("Could not find a valid BME280 sensor, check wiring!");
+    //     // Handle sensor initialization failure as needed
+    // } else {
+    //     Serial.println("BME280 sensor initialized successfully");
+    // }
     
     core0setupComplete = true;
 
@@ -581,6 +599,17 @@ void updateIOpins() {
         uint16_t valueToWrite = (rawValue * 3300UL) / 4095UL;
         ioStatus.aIn[i] = valueToWrite;
     }
+    
+    // I2C Sensor Reading Template - Uncomment when adding I2C sensors
+    // Example for BME280 sensor readings:
+    // ioStatus.temperature = bme.readTemperature();    // Temperature in Celsius
+    // ioStatus.humidity = bme.readHumidity();          // Humidity in %
+    // ioStatus.pressure = bme.readPressure() / 100.0F; // Pressure in hPa
+    // 
+    // Add error checking as needed:
+    // if (isnan(ioStatus.temperature) || isnan(ioStatus.humidity)) {
+    //     Serial.println("Failed to read from BME280 sensor!");
+    // }
 }
 
 void updateIOForClient(int clientIndex) {
@@ -595,6 +624,21 @@ void updateIOForClient(int clientIndex) {
     for (int i = 0; i < 3; i++) {
         modbusClients[clientIndex].server.inputRegisterWrite(i, ioStatus.aIn[i]);
     }
+    
+    // I2C Sensor Data Modbus Mapping Template - Uncomment when adding I2C sensors
+    // Map sensor data to Modbus input registers (registers 3-5 for sensor data):
+    // Register 3: Temperature (scaled to integer, e.g., temp * 100 for 0.01°C resolution)
+    // modbusClients[clientIndex].server.inputRegisterWrite(3, (uint16_t)(ioStatus.temperature * 100));
+    // Register 4: Humidity (scaled to integer, e.g., humidity * 100 for 0.01% resolution)  
+    // modbusClients[clientIndex].server.inputRegisterWrite(4, (uint16_t)(ioStatus.humidity * 100));
+    // Register 5: Pressure (pressure in hPa as integer)
+    // modbusClients[clientIndex].server.inputRegisterWrite(5, (uint16_t)ioStatus.pressure);
+    //
+    // Note: Update the Modbus register map documentation when adding sensors:
+    // - Input Registers (FC4): 0-2 - Analog input values (existing)
+    // - Input Registers (FC4): 3 - Temperature (temp * 100, in 0.01°C units)
+    // - Input Registers (FC4): 4 - Humidity (humidity * 100, in 0.01% units)  
+    // - Input Registers (FC4): 5 - Pressure (in hPa)
     
     // Check coils 100-107 for latch reset commands
     for (int i = 0; i < 8; i++) {
@@ -741,6 +785,12 @@ void handleGetConfig() {
     for (int i = 0; i < sizeof(ANALOG_INPUTS)/sizeof(ANALOG_INPUTS[0]); i++) {
         ai.add(ioStatus.aIn[i]);
     }
+
+    // I2C Sensor Data Template - Uncomment when adding I2C sensors
+    // Add sensor readings to config response:
+    // doc["temperature"] = ioStatus.temperature;    // Temperature in Celsius
+    // doc["humidity"] = ioStatus.humidity;          // Humidity in %
+    // doc["pressure"] = ioStatus.pressure;          // Pressure in hPa
 
     serializeJson(doc, jsonBuffer);
     webServer.send(200, "application/json", jsonBuffer);
@@ -1006,6 +1056,18 @@ void handleGetIOStatus() {
     for (int i = 0; i < sizeof(ANALOG_INPUTS)/sizeof(ANALOG_INPUTS[0]); i++) {
         ai.add(ioStatus.aIn[i]);
     }
+
+    // I2C Sensor Data Template - Uncomment when adding I2C sensors
+    // Add sensor readings to JSON response:
+    // doc["temperature"] = ioStatus.temperature;    // Temperature in Celsius
+    // doc["humidity"] = ioStatus.humidity;          // Humidity in %
+    // doc["pressure"] = ioStatus.pressure;          // Pressure in hPa
+    // 
+    // Or create a nested sensor object:
+    // JsonObject sensor = doc.createNestedObject("sensor");
+    // sensor["temperature"] = ioStatus.temperature;
+    // sensor["humidity"] = ioStatus.humidity;
+    // sensor["pressure"] = ioStatus.pressure;
 
     serializeJson(doc, jsonBuffer);
     webServer.send(200, "application/json", jsonBuffer);

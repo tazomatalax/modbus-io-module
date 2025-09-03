@@ -3,4 +3,6 @@
 .vscode/launch.json
 .vscode/settings.json
 .vscode/tasks.json
+.vscode/extensions.json
 .claude
+.git
