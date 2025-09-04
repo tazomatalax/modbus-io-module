@@ -78,6 +78,11 @@ struct SensorConfig {
     char type[16]; // "BME280", "EZO_PH", etc.
     uint8_t i2cAddress;
     uint16_t modbusRegister;
+    
+    // EZO sensor state tracking
+    bool cmdPending;
+    unsigned long lastCmdSent;
+    char response[32];
 };
 
 struct IOStatus {
@@ -146,3 +151,6 @@ void loadSensorConfig();
 void saveSensorConfig();
 void handleGetSensorConfig();
 void handleSetSensorConfig();
+void handleEzoSensors();
+void initializeEzoSensors();
+void handleSensorCommand();

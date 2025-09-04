@@ -1,8 +1,13 @@
 #include "sys_init.h"
 #include <Wire.h>
+#include <Ezo_i2c.h>
 
 SensorConfig configuredSensors[MAX_SENSORS];
 int numConfiguredSensors = 0;
+
+// EZO Sensor instances - created dynamically based on configuration
+static Ezo_board* ezoSensors[MAX_SENSORS] = {nullptr};
+static bool ezoSensorsInitialized = false;
 
 // I2C Sensor Library Template - Uncomment when adding I2C sensors
 // Example using BME280 sensor:
@@ -173,10 +178,69 @@ void loop() {
         }
     }
     updateIOpins();
+    handleEzoSensors();
     webServer.handleClient();
 
     // Watchdog timer reset
     rp2040.wdt_reset();
+}
+
+void initializeEzoSensors() {
+    if (ezoSensorsInitialized) return;
+    
+    for (int i = 0; i < numConfiguredSensors; i++) {
+        if (configuredSensors[i].enabled && strncmp(configuredSensors[i].type, "EZO_", 4) == 0) {
+            ezoSensors[i] = new Ezo_board(configuredSensors[i].i2cAddress, configuredSensors[i].name);
+            configuredSensors[i].cmdPending = false;
+            configuredSensors[i].lastCmdSent = 0;
+            memset(configuredSensors[i].response, 0, sizeof(configuredSensors[i].response));
+            Serial.printf("Initialized EZO sensor %s at I2C address 0x%02X\n", 
+                configuredSensors[i].name, configuredSensors[i].i2cAddress);
+        }
+    }
+    ezoSensorsInitialized = true;
+}
+
+void handleEzoSensors() {
+    static bool initialized = false;
+    
+    if (!initialized) {
+        initializeEzoSensors();
+        initialized = true;
+    }
+    
+    for (int i = 0; i < numConfiguredSensors; i++) {
+        if (!configuredSensors[i].enabled || strncmp(configuredSensors[i].type, "EZO_", 4) != 0) {
+            continue;
+        }
+        
+        if (ezoSensors[i] == nullptr) {
+            continue;
+        }
+        
+        unsigned long currentTime = millis();
+        
+        if (configuredSensors[i].cmdPending && (currentTime - configuredSensors[i].lastCmdSent > 1000)) {
+            ezoSensors[i]->receive_read_cmd();
+            
+            if (ezoSensors[i]->get_error() == Ezo_board::SUCCESS) {
+                float reading = ezoSensors[i]->get_last_received_reading();
+                snprintf(configuredSensors[i].response, sizeof(configuredSensors[i].response), "%.2f", reading);
+                Serial.printf("EZO sensor %s reading: %s\n", configuredSensors[i].name, configuredSensors[i].response);
+            } else {
+                snprintf(configuredSensors[i].response, sizeof(configuredSensors[i].response), "ERROR");
+                Serial.printf("EZO sensor %s error: %d\n", configuredSensors[i].name, ezoSensors[i]->get_error());
+            }
+            
+            configuredSensors[i].cmdPending = false;
+        } 
+        else if (!configuredSensors[i].cmdPending && (currentTime - configuredSensors[i].lastCmdSent > 5000)) {
+            ezoSensors[i]->send_read_cmd();
+            configuredSensors[i].lastCmdSent = currentTime;
+            configuredSensors[i].cmdPending = true;
+            Serial.printf("Sent read command to EZO sensor %s\n", configuredSensors[i].name);
+        }
+    }
 }
 
 void loadConfig() {
@@ -633,6 +697,7 @@ void setupWebServer() {
     webServer.on("/reset-latch", HTTP_POST, handleResetSingleLatch);
     webServer.on("/sensors/config", HTTP_GET, handleGetSensorConfig);
     webServer.on("/sensors/config", HTTP_POST, handleSetSensorConfig);
+    webServer.on("/api/sensor/command", HTTP_POST, handleSensorCommand);
     webServer.begin();
     
     Serial.println("Web server started");
@@ -749,10 +814,28 @@ void updateIOpins() {
                     ioStatus.pressure = 1013.25 + sin(millis() / 15000.0) * 10.0; // 1003.25-1023.25 hPa range
                     Serial.printf("BME280 simulated readings: T=%.2f°C, H=%.2f%%, P=%.2fhPa\n", 
                         ioStatus.temperature, ioStatus.humidity, ioStatus.pressure);
-                } else if (strcmp(configuredSensors[i].type, "EZO_PH") == 0) {
-                    // Simulate pH sensor readings
-                    float pH = 7.0 + sin(millis() / 20000.0) * 1.0; // pH 6.0-8.0 range
-                    Serial.printf("EZO_PH simulated reading: pH=%.2f\n", pH);
+                } else if (strncmp(configuredSensors[i].type, "EZO_", 4) == 0) {
+                    // Parse EZO sensor response from the response field
+                    if (strlen(configuredSensors[i].response) > 0 && strcmp(configuredSensors[i].response, "ERROR") != 0) {
+                        float value = atof(configuredSensors[i].response);
+                        
+                        // Map EZO sensor types to appropriate ioStatus fields
+                        if (strcmp(configuredSensors[i].type, "EZO_PH") == 0) {
+                            // For pH sensors, we can store in temperature field temporarily or add a pH field later
+                            Serial.printf("EZO_PH reading: pH=%.2f\n", value);
+                        } else if (strcmp(configuredSensors[i].type, "EZO_DO") == 0) {
+                            Serial.printf("EZO_DO reading: DO=%.2f mg/L\n", value);
+                        } else if (strcmp(configuredSensors[i].type, "EZO_EC") == 0) {
+                            Serial.printf("EZO_EC reading: EC=%.2f μS/cm\n", value);
+                        } else if (strcmp(configuredSensors[i].type, "EZO_RTD") == 0) {
+                            ioStatus.temperature = value;
+                            Serial.printf("EZO_RTD reading: Temperature=%.2f°C\n", value);
+                        } else {
+                            Serial.printf("EZO sensor %s reading: %.2f\n", configuredSensors[i].type, value);
+                        }
+                    } else if (strcmp(configuredSensors[i].response, "ERROR") == 0) {
+                        Serial.printf("EZO sensor %s has error response\n", configuredSensors[i].type);
+                    }
                 } else if (strcmp(configuredSensors[i].type, "VL53L1X") == 0) {
                     // Simulate distance sensor readings
                     float distance = 100.0 + sin(millis() / 5000.0) * 50.0; // 50-150mm range
@@ -1223,6 +1306,21 @@ void handleGetIOStatus() {
     i2c_sensors["temperature"] = String(ioStatus.temperature, 2);
     i2c_sensors["humidity"] = String(ioStatus.humidity, 2);
 
+    // EZO Sensor Responses - Add response strings for real-time feedback
+    JsonArray ezo_sensors = doc.createNestedArray("ezo_sensors");
+    for (int i = 0; i < numConfiguredSensors; i++) {
+        if (configuredSensors[i].enabled && strncmp(configuredSensors[i].type, "EZO_", 4) == 0) {
+            JsonObject ezo_sensor = ezo_sensors.createNestedObject();
+            ezo_sensor["index"] = i;
+            ezo_sensor["name"] = configuredSensors[i].name;
+            ezo_sensor["type"] = configuredSensors[i].type;
+            ezo_sensor["i2cAddress"] = configuredSensors[i].i2cAddress;
+            ezo_sensor["response"] = configuredSensors[i].response;
+            ezo_sensor["cmdPending"] = configuredSensors[i].cmdPending;
+            ezo_sensor["lastCmdSent"] = configuredSensors[i].lastCmdSent;
+        }
+    }
+
     serializeJson(doc, jsonBuffer);
     webServer.send(200, "application/json", jsonBuffer);
 }
@@ -1595,4 +1693,72 @@ void handleSetSensorConfig() {
     // Reboot the device to apply changes
     delay(100); // Give time for response to be sent
     rp2040.reboot();
+}
+
+void handleSensorCommand() {
+    Serial.println("Handling sensor command request");
+    
+    if (!webServer.hasArg("plain")) {
+        webServer.send(400, "application/json", "{\"success\":false,\"message\":\"No request body\"}");
+        return;
+    }
+    
+    String requestBody = webServer.arg("plain");
+    StaticJsonDocument<256> doc;
+    DeserializationError error = deserializeJson(doc, requestBody);
+    
+    if (error) {
+        Serial.print("JSON deserialization failed: ");
+        Serial.println(error.c_str());
+        webServer.send(400, "application/json", "{\"success\":false,\"message\":\"Invalid JSON\"}");
+        return;
+    }
+    
+    // Validate required fields
+    if (!doc.containsKey("sensorIndex") || !doc.containsKey("command")) {
+        webServer.send(400, "application/json", "{\"success\":false,\"message\":\"Missing sensorIndex or command field\"}");
+        return;
+    }
+    
+    int sensorIndex = doc["sensorIndex"];
+    const char* command = doc["command"];
+    
+    // Validate sensor index
+    if (sensorIndex < 0 || sensorIndex >= numConfiguredSensors) {
+        webServer.send(400, "application/json", "{\"success\":false,\"message\":\"Invalid sensor index\"}");
+        return;
+    }
+    
+    // Check if sensor is enabled and is an EZO sensor
+    if (!configuredSensors[sensorIndex].enabled || strncmp(configuredSensors[sensorIndex].type, "EZO_", 4) != 0) {
+        webServer.send(400, "application/json", "{\"success\":false,\"message\":\"Sensor is not enabled or not an EZO sensor\"}");
+        return;
+    }
+    
+    // Check if EZO sensor is initialized
+    if (ezoSensors[sensorIndex] == nullptr) {
+        webServer.send(400, "application/json", "{\"success\":false,\"message\":\"EZO sensor not initialized\"}");
+        return;
+    }
+    
+    // Send custom command to the EZO sensor
+    Serial.printf("Sending command '%s' to EZO sensor %s (index %d)\n", command, configuredSensors[sensorIndex].name, sensorIndex);
+    
+    ezoSensors[sensorIndex]->send_cmd(command);
+    configuredSensors[sensorIndex].lastCmdSent = millis();
+    configuredSensors[sensorIndex].cmdPending = true;
+    
+    // Clear previous response
+    memset(configuredSensors[sensorIndex].response, 0, sizeof(configuredSensors[sensorIndex].response));
+    
+    // Send success response
+    StaticJsonDocument<128> responseDoc;
+    responseDoc["success"] = true;
+    responseDoc["message"] = "Command sent successfully";
+    responseDoc["sensorName"] = configuredSensors[sensorIndex].name;
+    responseDoc["command"] = command;
+    
+    String response;
+    serializeJson(responseDoc, response);
+    webServer.send(200, "application/json", response);
 }
