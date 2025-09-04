@@ -631,6 +631,8 @@ void setupWebServer() {
     webServer.on("/ioconfig", HTTP_POST, handleSetIOConfig);
     webServer.on("/reset-latches", HTTP_POST, handleResetLatches);
     webServer.on("/reset-latch", HTTP_POST, handleResetSingleLatch);
+    webServer.on("/sensors/config", HTTP_GET, handleGetSensorConfig);
+    webServer.on("/sensors/config", HTTP_POST, handleSetSensorConfig);
     webServer.begin();
     
     Serial.println("Web server started");
@@ -1459,4 +1461,138 @@ void handleResetSingleLatch() {
     String response;
     serializeJson(responseDoc, response);
     webServer.send(200, "application/json", response);
+}
+
+void handleGetSensorConfig() {
+    Serial.println("Handling get sensor config request");
+    
+    // Create JSON document for response
+    StaticJsonDocument<1024> doc;
+    JsonArray sensorsArray = doc.createNestedArray("sensors");
+    
+    // Add each configured sensor to the array
+    for (int i = 0; i < numConfiguredSensors; i++) {
+        JsonObject sensor = sensorsArray.createNestedObject();
+        sensor["enabled"] = configuredSensors[i].enabled;
+        sensor["name"] = configuredSensors[i].name;
+        sensor["type"] = configuredSensors[i].type;
+        sensor["i2cAddress"] = configuredSensors[i].i2cAddress;
+        sensor["modbusRegister"] = configuredSensors[i].modbusRegister;
+    }
+    
+    // Add metadata
+    doc["count"] = numConfiguredSensors;
+    doc["maxSensors"] = MAX_SENSORS;
+    
+    String response;
+    serializeJson(doc, response);
+    webServer.send(200, "application/json", response);
+}
+
+void handleSetSensorConfig() {
+    Serial.println("Handling set sensor config request");
+    
+    if (!webServer.hasArg("plain")) {
+        webServer.send(400, "application/json", "{\"success\":false,\"message\":\"No request body\"}");
+        return;
+    }
+    
+    String requestBody = webServer.arg("plain");
+    StaticJsonDocument<1024> doc;
+    DeserializationError error = deserializeJson(doc, requestBody);
+    
+    if (error) {
+        Serial.print("JSON deserialization failed: ");
+        Serial.println(error.c_str());
+        webServer.send(400, "application/json", "{\"success\":false,\"message\":\"Invalid JSON\"}");
+        return;
+    }
+    
+    // Validate that sensors array exists
+    if (!doc.containsKey("sensors") || !doc["sensors"].is<JsonArray>()) {
+        webServer.send(400, "application/json", "{\"success\":false,\"message\":\"Missing or invalid sensors array\"}");
+        return;
+    }
+    
+    JsonArray sensorsArray = doc["sensors"].as<JsonArray>();
+    
+    // Validate array size
+    if (sensorsArray.size() > MAX_SENSORS) {
+        webServer.send(400, "application/json", "{\"success\":false,\"message\":\"Too many sensors configured\"}");
+        return;
+    }
+    
+    // Clear existing configuration
+    numConfiguredSensors = 0;
+    memset(configuredSensors, 0, sizeof(configuredSensors));
+    
+    // Parse and validate each sensor configuration
+    int index = 0;
+    for (JsonObject sensor : sensorsArray) {
+        // Validate required fields
+        if (!sensor.containsKey("name") || !sensor.containsKey("type")) {
+            webServer.send(400, "application/json", "{\"success\":false,\"message\":\"Missing required sensor fields\"}");
+            return;
+        }
+        
+        // Extract and validate sensor configuration
+        configuredSensors[index].enabled = sensor["enabled"] | false;
+        
+        const char* name = sensor["name"] | "";
+        if (strlen(name) >= sizeof(configuredSensors[index].name)) {
+            webServer.send(400, "application/json", "{\"success\":false,\"message\":\"Sensor name too long\"}");
+            return;
+        }
+        strncpy(configuredSensors[index].name, name, sizeof(configuredSensors[index].name) - 1);
+        configuredSensors[index].name[sizeof(configuredSensors[index].name) - 1] = '\0';
+        
+        const char* type = sensor["type"] | "";
+        if (strlen(type) >= sizeof(configuredSensors[index].type)) {
+            webServer.send(400, "application/json", "{\"success\":false,\"message\":\"Sensor type too long\"}");
+            return;
+        }
+        strncpy(configuredSensors[index].type, type, sizeof(configuredSensors[index].type) - 1);
+        configuredSensors[index].type[sizeof(configuredSensors[index].type) - 1] = '\0';
+        
+        configuredSensors[index].i2cAddress = sensor["i2cAddress"] | 0;
+        configuredSensors[index].modbusRegister = sensor["modbusRegister"] | 0;
+        
+        // Validate I2C address range
+        if (configuredSensors[index].i2cAddress > 127) {
+            webServer.send(400, "application/json", "{\"success\":false,\"message\":\"Invalid I2C address\"}");
+            return;
+        }
+        
+        Serial.printf("Configured sensor %d: %s (%s) at I2C 0x%02X, Modbus register %d, enabled: %s\n",
+            index,
+            configuredSensors[index].name,
+            configuredSensors[index].type,
+            configuredSensors[index].i2cAddress,
+            configuredSensors[index].modbusRegister,
+            configuredSensors[index].enabled ? "true" : "false"
+        );
+        
+        index++;
+    }
+    
+    numConfiguredSensors = index;
+    
+    // Save the configuration
+    saveSensorConfig();
+    
+    // Send success response
+    StaticJsonDocument<128> responseDoc;
+    responseDoc["success"] = true;
+    responseDoc["message"] = "Sensor configuration updated successfully";
+    responseDoc["count"] = numConfiguredSensors;
+    
+    String response;
+    serializeJson(responseDoc, response);
+    webServer.send(200, "application/json", response);
+    
+    Serial.printf("Sensor configuration updated with %d sensors. Rebooting...\n", numConfiguredSensors);
+    
+    // Reboot the device to apply changes
+    delay(100); // Give time for response to be sent
+    rp2040.reboot();
 }
