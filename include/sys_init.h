@@ -26,9 +26,11 @@
 
 // Constants
 #define CONFIG_FILE "/config.json"
+#define SENSORS_FILE "/sensors.json"
 #define CONFIG_VERSION 6  // Increment this when config structure changes
 #define HOSTNAME_MAX_LENGTH 32
 #define MAX_MODBUS_CLIENTS 4  // Maximum number of concurrent Modbus clients
+#define MAX_SENSORS 10
 
 // Global flags
 bool core0setupComplete = false;
@@ -70,6 +72,14 @@ const Config DEFAULT_CONFIG = {
     {false, false, false, false, false, false, false, false},  // doInitialState (all OFF)
 };
 
+struct SensorConfig {
+    bool enabled;
+    char name[32];
+    char type[16]; // "BME280", "EZO_PH", etc.
+    uint8_t i2cAddress;
+    uint16_t modbusRegister;
+};
+
 struct IOStatus {
     bool dIn[8];          // Current state of digital inputs (including latching behavior if enabled)
     bool dInRaw[8];       // Actual physical state of digital inputs (without latching)
@@ -85,6 +95,9 @@ struct IOStatus {
 };
 
 IOStatus ioStatus;
+
+extern SensorConfig configuredSensors[MAX_SENSORS];
+extern int numConfiguredSensors;
 
 // Ethernet and Server instances
 Wiznet5500lwIP eth(PIN_ETH_CS, SPI, PIN_ETH_IRQ);
@@ -127,3 +140,5 @@ void handleSetIOConfig();
 void resetLatches();
 void handleResetLatches();
 void handleResetSingleLatch();
+void loadSensorConfig();
+void saveSensorConfig();

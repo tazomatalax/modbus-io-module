@@ -1,6 +1,9 @@
 #include "sys_init.h"
 #include <Wire.h>
 
+SensorConfig configuredSensors[MAX_SENSORS];
+int numConfiguredSensors = 0;
+
 // I2C Sensor Library Template - Uncomment when adding I2C sensors
 // Example using BME280 sensor:
 // #include <Adafruit_Sensor.h>
@@ -67,6 +70,11 @@ void setup() {
     delay(500);
     // Load configuration
     loadConfig();
+    
+    Serial.println("Loading sensor configuration...");
+    delay(500);
+    // Load sensor configuration
+    loadSensorConfig();
 
     Serial.println("Setting pin modes...");
     delay(500);
@@ -363,6 +371,117 @@ void saveConfig() {
     configFile.close();
 }
 
+void loadSensorConfig() {
+    Serial.println("Loading sensor configuration...");
+    
+    // Initialize sensors array
+    numConfiguredSensors = 0;
+    memset(configuredSensors, 0, sizeof(configuredSensors));
+    
+    // Check if sensors.json exists
+    if (!LittleFS.exists(SENSORS_FILE)) {
+        Serial.println("Sensors config file does not exist, using empty configuration");
+        return;
+    }
+    
+    // Open sensors.json for reading
+    File sensorsFile = LittleFS.open(SENSORS_FILE, "r");
+    if (!sensorsFile) {
+        Serial.println("Failed to open sensors config file for reading");
+        return;
+    }
+    
+    // Create JSON document to parse the file
+    StaticJsonDocument<1024> doc;
+    DeserializationError error = deserializeJson(doc, sensorsFile);
+    sensorsFile.close();
+    
+    if (error) {
+        Serial.print("Failed to parse sensors config file: ");
+        Serial.println(error.c_str());
+        return;
+    }
+    
+    // Parse sensors array
+    if (doc.containsKey("sensors") && doc["sensors"].is<JsonArray>()) {
+        JsonArray sensorsArray = doc["sensors"].as<JsonArray>();
+        int index = 0;
+        
+        for (JsonObject sensor : sensorsArray) {
+            if (index >= MAX_SENSORS) {
+                Serial.println("Warning: Maximum number of sensors exceeded, ignoring remaining sensors");
+                break;
+            }
+            
+            // Parse sensor configuration
+            configuredSensors[index].enabled = sensor["enabled"] | false;
+            
+            const char* name = sensor["name"] | "";
+            strncpy(configuredSensors[index].name, name, sizeof(configuredSensors[index].name) - 1);
+            configuredSensors[index].name[sizeof(configuredSensors[index].name) - 1] = '\0';
+            
+            const char* type = sensor["type"] | "";
+            strncpy(configuredSensors[index].type, type, sizeof(configuredSensors[index].type) - 1);
+            configuredSensors[index].type[sizeof(configuredSensors[index].type) - 1] = '\0';
+            
+            configuredSensors[index].i2cAddress = sensor["i2cAddress"] | 0;
+            configuredSensors[index].modbusRegister = sensor["modbusRegister"] | 0;
+            
+            // Debug output
+            Serial.printf("Loaded sensor %d: %s (%s) at I2C 0x%02X, Modbus register %d, enabled: %s\n",
+                index,
+                configuredSensors[index].name,
+                configuredSensors[index].type,
+                configuredSensors[index].i2cAddress,
+                configuredSensors[index].modbusRegister,
+                configuredSensors[index].enabled ? "true" : "false"
+            );
+            
+            index++;
+        }
+        
+        numConfiguredSensors = index;
+        Serial.printf("Loaded %d sensor configurations\n", numConfiguredSensors);
+    } else {
+        Serial.println("No sensors array found in configuration file");
+    }
+}
+
+void saveSensorConfig() {
+    Serial.println("Saving sensor configuration...");
+    
+    // Create JSON document
+    StaticJsonDocument<1024> doc;
+    JsonArray sensorsArray = doc.createNestedArray("sensors");
+    
+    // Add each configured sensor to the array
+    for (int i = 0; i < numConfiguredSensors; i++) {
+        JsonObject sensor = sensorsArray.createNestedObject();
+        sensor["enabled"] = configuredSensors[i].enabled;
+        sensor["name"] = configuredSensors[i].name;
+        sensor["type"] = configuredSensors[i].type;
+        sensor["i2cAddress"] = configuredSensors[i].i2cAddress;
+        sensor["modbusRegister"] = configuredSensors[i].modbusRegister;
+    }
+    
+    // Open file for writing
+    File sensorsFile = LittleFS.open(SENSORS_FILE, "w");
+    if (!sensorsFile) {
+        Serial.println("Failed to open sensors config file for writing");
+        return;
+    }
+    
+    // Serialize JSON to file
+    if (serializeJson(doc, sensorsFile) == 0) {
+        Serial.println("Failed to write sensors config to file");
+    } else {
+        Serial.println("Sensor configuration saved successfully");
+    }
+    
+    // Close the file
+    sensorsFile.close();
+}
+
 // Reset all latched inputs
 void resetLatches() {
     Serial.println("Resetting all latched inputs");
@@ -602,26 +721,62 @@ void updateIOpins() {
         ioStatus.aIn[i] = valueToWrite;
     }
     
-    // I2C Sensor Reading - Placeholder values for testing and integration
-    // Replace with actual sensor readings when integrating I2C sensors
+    // I2C Sensor Reading - Dynamic sensor configuration
     static uint32_t sensorReadTime = 0;
     if (millis() - sensorReadTime > 1000) { // Update every 1 second
-        // Placeholder sensor values - simulate realistic sensor readings
-        ioStatus.temperature = 23.45 + sin(millis() / 10000.0) * 2.0; // 21.45-25.45°C range
-        ioStatus.humidity = 55.20 + cos(millis() / 8000.0) * 5.0;     // 50.20-60.20% range
-        ioStatus.pressure = 1013.25 + sin(millis() / 15000.0) * 10.0; // 1003.25-1023.25 hPa range
+        // Initialize sensor values to safe defaults
+        ioStatus.temperature = 0.0;
+        ioStatus.humidity = 0.0;
+        ioStatus.pressure = 0.0;
+        
+        // Read from configured sensors
+        for (int i = 0; i < numConfiguredSensors; i++) {
+            if (configuredSensors[i].enabled) {
+                Serial.printf("Reading sensor %s (%s) at I2C address 0x%02X\n", 
+                    configuredSensors[i].name,
+                    configuredSensors[i].type,
+                    configuredSensors[i].i2cAddress
+                );
+                
+                // Placeholder sensor reading logic - to be replaced with actual sensor libraries
+                // For now, generate simulated values based on sensor type
+                if (strcmp(configuredSensors[i].type, "BME280") == 0) {
+                    // Simulate BME280 readings
+                    ioStatus.temperature = 23.45 + sin(millis() / 10000.0) * 2.0; // 21.45-25.45°C range
+                    ioStatus.humidity = 55.20 + cos(millis() / 8000.0) * 5.0;     // 50.20-60.20% range
+                    ioStatus.pressure = 1013.25 + sin(millis() / 15000.0) * 10.0; // 1003.25-1023.25 hPa range
+                    Serial.printf("BME280 simulated readings: T=%.2f°C, H=%.2f%%, P=%.2fhPa\n", 
+                        ioStatus.temperature, ioStatus.humidity, ioStatus.pressure);
+                } else if (strcmp(configuredSensors[i].type, "EZO_PH") == 0) {
+                    // Simulate pH sensor readings
+                    float pH = 7.0 + sin(millis() / 20000.0) * 1.0; // pH 6.0-8.0 range
+                    Serial.printf("EZO_PH simulated reading: pH=%.2f\n", pH);
+                } else if (strcmp(configuredSensors[i].type, "VL53L1X") == 0) {
+                    // Simulate distance sensor readings
+                    float distance = 100.0 + sin(millis() / 5000.0) * 50.0; // 50-150mm range
+                    Serial.printf("VL53L1X simulated reading: Distance=%.0fmm\n", distance);
+                }
+                
+                // TODO: Implement actual sensor reading based on sensor type
+                // Example for BME280:
+                // if (strcmp(configuredSensors[i].type, "BME280") == 0) {
+                //     ioStatus.temperature = bme.readTemperature();
+                //     ioStatus.humidity = bme.readHumidity();
+                //     ioStatus.pressure = bme.readPressure() / 100.0F;
+                // }
+            }
+        }
+        
+        // If no sensors are configured, use legacy placeholder values
+        if (numConfiguredSensors == 0) {
+            ioStatus.temperature = 23.45 + sin(millis() / 10000.0) * 2.0;
+            ioStatus.humidity = 55.20 + cos(millis() / 8000.0) * 5.0;
+            ioStatus.pressure = 1013.25 + sin(millis() / 15000.0) * 10.0;
+            Serial.println("Using legacy placeholder sensor values (no sensors configured)");
+        }
+        
         sensorReadTime = millis();
     }
-    
-    // Example for BME280 sensor integration (uncomment when adding real sensor):
-    // ioStatus.temperature = bme.readTemperature();    // Temperature in Celsius
-    // ioStatus.humidity = bme.readHumidity();          // Humidity in %
-    // ioStatus.pressure = bme.readPressure() / 100.0F; // Pressure in hPa
-    // 
-    // Add error checking as needed:
-    // if (isnan(ioStatus.temperature) || isnan(ioStatus.humidity)) {
-    //     Serial.println("Failed to read from BME280 sensor!");
-    // }
 }
 
 void updateIOForClient(int clientIndex) {

@@ -1,0 +1,25 @@
+{
+  "sensors": [
+    {
+      "enabled": true,
+      "name": "BME280_Main",
+      "type": "BME280",
+      "i2cAddress": 118,
+      "modbusRegister": 3
+    },
+    {
+      "enabled": true,
+      "name": "pH_Sensor",
+      "type": "EZO_PH",
+      "i2cAddress": 99,
+      "modbusRegister": 5
+    },
+    {
+      "enabled": false,
+      "name": "Distance_Sensor",
+      "type": "VL53L1X",
+      "i2cAddress": 41,
+      "modbusRegister": 6
+    }
+  ]
+}
