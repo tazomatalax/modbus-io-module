@@ -793,6 +793,11 @@ setTimeout(() => {
     setTimeout(() => {
         loadIOConfig();
     }, 500);
+    
+    // Load sensor configuration after another short delay
+    setTimeout(() => {
+        loadSensorConfig();
+    }, 1000);
 }, 500);
 
 // Add event listener for reset latches button
@@ -880,5 +885,243 @@ function resetSingleLatch(inputIndex) {
             document.getElementById('toast-container').removeChild(loadingToast);
         }
         showToast('Error resetting latched input: ' + error.message, 'error', false, 5000);
+    });
+}
+
+// Sensor Management Functions
+let sensorConfigData = [];
+let editingSensorIndex = -1;
+
+// Load sensor configuration from the server
+function loadSensorConfig() {
+    console.log("Loading sensor configuration...");
+    fetch('/sensors/config')
+        .then(response => {
+            if (!response.ok) {
+                throw new Error('Network response was not ok');
+            }
+            return response.json();
+        })
+        .then(data => {
+            console.log("Sensor configuration loaded:", data);
+            sensorConfigData = data.sensors || [];
+            renderSensorTable();
+        })
+        .catch(error => {
+            console.error('Error loading sensor configuration:', error);
+            showToast('Failed to load sensor configuration: ' + error.message, 'error', false, 5000);
+        });
+}
+
+// Render the sensor table
+function renderSensorTable() {
+    const tableBody = document.getElementById('sensor-table-body');
+    
+    if (sensorConfigData.length === 0) {
+        tableBody.innerHTML = '<tr class="no-sensors"><td colspan="6">No sensors configured</td></tr>';
+        return;
+    }
+    
+    tableBody.innerHTML = sensorConfigData.map((sensor, index) => {
+        const i2cAddress = sensor.i2cAddress ? `0x${sensor.i2cAddress.toString(16).toUpperCase().padStart(2, '0')}` : 'N/A';
+        const enabledClass = sensor.enabled ? 'sensor-enabled' : 'sensor-disabled';
+        const enabledText = sensor.enabled ? 'Yes' : 'No';
+        
+        return `
+            <tr>
+                <td>${sensor.name}</td>
+                <td>${sensor.type}</td>
+                <td>${i2cAddress}</td>
+                <td>${sensor.modbusRegister || 'N/A'}</td>
+                <td class="${enabledClass}">${enabledText}</td>
+                <td>
+                    <div class="sensor-actions">
+                        <button class="edit-btn" onclick="editSensor(${index})" title="Edit sensor">Edit</button>
+                        <button class="delete-btn" onclick="deleteSensor(${index})" title="Delete sensor">Delete</button>
+                    </div>
+                </td>
+            </tr>
+        `;
+    }).join('');
+}
+
+// Show the add sensor modal
+function showAddSensorModal() {
+    editingSensorIndex = -1;
+    document.getElementById('sensor-modal-title').textContent = 'Add Sensor';
+    document.getElementById('sensor-form').reset();
+    document.getElementById('sensor-enabled').checked = true;
+    document.getElementById('sensor-modal-overlay').classList.add('show');
+}
+
+// Show the edit sensor modal
+function editSensor(index) {
+    if (index < 0 || index >= sensorConfigData.length) {
+        showToast('Invalid sensor index', 'error');
+        return;
+    }
+    
+    const sensor = sensorConfigData[index];
+    editingSensorIndex = index;
+    
+    document.getElementById('sensor-modal-title').textContent = 'Edit Sensor';
+    document.getElementById('sensor-name').value = sensor.name;
+    document.getElementById('sensor-type').value = sensor.type;
+    document.getElementById('sensor-i2c-address').value = sensor.i2cAddress ? `0x${sensor.i2cAddress.toString(16).toUpperCase().padStart(2, '0')}` : '';
+    document.getElementById('sensor-modbus-register').value = sensor.modbusRegister || '';
+    document.getElementById('sensor-enabled').checked = sensor.enabled;
+    
+    document.getElementById('sensor-modal-overlay').classList.add('show');
+}
+
+// Hide the sensor modal
+function hideSensorModal() {
+    document.getElementById('sensor-modal-overlay').classList.remove('show');
+    editingSensorIndex = -1;
+}
+
+// Parse I2C address from input (supports 0x48, 48, etc.)
+function parseI2CAddress(addressStr) {
+    if (!addressStr) return 0;
+    
+    const cleanStr = addressStr.trim();
+    if (cleanStr.toLowerCase().startsWith('0x')) {
+        return parseInt(cleanStr, 16);
+    } else {
+        return parseInt(cleanStr, 16);
+    }
+}
+
+// Save sensor (add or update)
+function saveSensor() {
+    const form = document.getElementById('sensor-form');
+    if (!form.checkValidity()) {
+        form.reportValidity();
+        return;
+    }
+    
+    const name = document.getElementById('sensor-name').value.trim();
+    const type = document.getElementById('sensor-type').value;
+    const i2cAddressStr = document.getElementById('sensor-i2c-address').value.trim();
+    const modbusRegister = parseInt(document.getElementById('sensor-modbus-register').value);
+    const enabled = document.getElementById('sensor-enabled').checked;
+    
+    // Validate inputs
+    if (!name || !type || !i2cAddressStr || isNaN(modbusRegister)) {
+        showToast('Please fill in all required fields', 'error');
+        return;
+    }
+    
+    const i2cAddress = parseI2CAddress(i2cAddressStr);
+    if (i2cAddress < 1 || i2cAddress > 127) {
+        showToast('I2C address must be between 0x01 and 0x7F (1-127)', 'error');
+        return;
+    }
+    
+    // Check for duplicate I2C addresses (excluding the sensor being edited)
+    const duplicateI2C = sensorConfigData.some((sensor, index) => 
+        index !== editingSensorIndex && sensor.i2cAddress === i2cAddress
+    );
+    if (duplicateI2C) {
+        showToast('I2C address already in use by another sensor', 'error');
+        return;
+    }
+    
+    // Check for duplicate Modbus registers (excluding the sensor being edited)
+    const duplicateModbus = sensorConfigData.some((sensor, index) => 
+        index !== editingSensorIndex && sensor.modbusRegister === modbusRegister
+    );
+    if (duplicateModbus) {
+        showToast('Modbus register already in use by another sensor', 'error');
+        return;
+    }
+    
+    const sensor = {
+        enabled: enabled,
+        name: name,
+        type: type,
+        i2cAddress: i2cAddress,
+        modbusRegister: modbusRegister
+    };
+    
+    if (editingSensorIndex === -1) {
+        // Adding new sensor
+        if (sensorConfigData.length >= 10) { // MAX_SENSORS from backend
+            showToast('Maximum number of sensors (10) reached', 'error');
+            return;
+        }
+        sensorConfigData.push(sensor);
+        showToast('Sensor added successfully', 'success');
+    } else {
+        // Updating existing sensor
+        sensorConfigData[editingSensorIndex] = sensor;
+        showToast('Sensor updated successfully', 'success');
+    }
+    
+    renderSensorTable();
+    hideSensorModal();
+}
+
+// Delete sensor
+function deleteSensor(index) {
+    if (index < 0 || index >= sensorConfigData.length) {
+        showToast('Invalid sensor index', 'error');
+        return;
+    }
+    
+    const sensor = sensorConfigData[index];
+    if (confirm(`Are you sure you want to delete sensor "${sensor.name}"?`)) {
+        sensorConfigData.splice(index, 1);
+        renderSensorTable();
+        showToast('Sensor deleted successfully', 'success');
+    }
+}
+
+// Save sensor configuration to the device
+function saveSensorConfig() {
+    console.log("Saving sensor configuration:", sensorConfigData);
+    
+    // Show loading toast
+    const loadingToast = showToast('Saving sensor configuration...', 'info');
+    
+    const configData = {
+        sensors: sensorConfigData
+    };
+    
+    fetch('/sensors/config', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(configData)
+    })
+    .then(response => {
+        if (!response.ok) {
+            throw new Error('Network response was not ok');
+        }
+        return response.json();
+    })
+    .then(data => {
+        // Remove loading toast
+        document.getElementById('toast-container').removeChild(loadingToast);
+        
+        if (data.success) {
+            // Show countdown toast with reboot message
+            showCountdownToast(
+                'Sensor configuration saved successfully! Device is rebooting...', 
+                'success', 
+                5, 
+                () => window.location.reload()
+            );
+        } else {
+            showToast('Failed to save sensor configuration: ' + (data.message || 'Unknown error'), 'error', false, 5000);
+        }
+    })
+    .catch(error => {
+        // Remove loading toast if it exists
+        if (document.getElementById('toast-container').contains(loadingToast)) {
+            document.getElementById('toast-container').removeChild(loadingToast);
+        }
+        showToast('Error saving sensor configuration: ' + error.message, 'error', false, 5000);
     });
 }

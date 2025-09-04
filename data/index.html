@@ -146,6 +146,38 @@
                 </div>
             </div>
         </div>
+        
+        <div class="card config-card">
+            <div class="card-header">
+                <h2>Sensor Configuration</h2>
+            </div>
+            <div class="card-body">
+                <p class="info-text"><span class="info-icon">ℹ️</span> Configure I2C sensors that will appear as Modbus registers. Changes require a device reboot to take effect.</p>
+                <div class="sensor-config-controls">
+                    <button onclick="showAddSensorModal()">Add Sensor</button>
+                    <button onclick="saveSensorConfig()">Save & Reboot</button>
+                </div>
+                <div class="sensor-table-container">
+                    <table class="sensor-table" id="sensor-table">
+                        <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>Type</th>
+                                <th>I2C Address</th>
+                                <th>Modbus Register</th>
+                                <th>Enabled</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="sensor-table-body">
+                            <tr class="no-sensors">
+                                <td colspan="6">No sensors configured</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
     </div>
     
     <div class="github-link-container">
@@ -162,6 +194,57 @@
     
     <!-- Toast container for notifications -->
     <div id="toast-container"></div>
+    
+    <!-- Sensor configuration modal -->
+    <div class="modal-overlay" id="sensor-modal-overlay" onclick="hideSensorModal()">
+        <div class="modal" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <h3 id="sensor-modal-title">Add Sensor</h3>
+                <button class="modal-close" onclick="hideSensorModal()">&times;</button>
+            </div>
+            <form class="modal-body" id="sensor-form">
+                <div class="form-group">
+                    <label for="sensor-name">Name</label>
+                    <input type="text" id="sensor-name" maxlength="31" placeholder="e.g., Temperature Sensor" required>
+                </div>
+                <div class="form-group">
+                    <label for="sensor-type">Type</label>
+                    <select id="sensor-type" required>
+                        <option value="">Select sensor type</option>
+                        <option value="BME280">BME280 (Temperature, Humidity, Pressure)</option>
+                        <option value="BMP280">BMP280 (Temperature, Pressure)</option>
+                        <option value="SHT30">SHT30 (Temperature, Humidity)</option>
+                        <option value="DS18B20">DS18B20 (Temperature)</option>
+                        <option value="ADS1115">ADS1115 (4-Channel ADC)</option>
+                        <option value="EZO_PH">EZO-pH (pH Sensor)</option>
+                        <option value="EZO_EC">EZO-EC (Conductivity)</option>
+                        <option value="EZO_DO">EZO-DO (Dissolved Oxygen)</option>
+                        <option value="Custom">Custom</option>
+                    </select>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="sensor-i2c-address">I2C Address (Hex)</label>
+                        <input type="text" id="sensor-i2c-address" pattern="^(0x)?[0-9A-Fa-f]{1,2}$" placeholder="0x48" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="sensor-modbus-register">Modbus Register</label>
+                        <input type="number" id="sensor-modbus-register" min="0" max="65535" placeholder="1000" required>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="sensor-enabled" checked>
+                        <span class="checkbox-text">Enable sensor</span>
+                    </label>
+                </div>
+            </form>
+            <div class="modal-footer">
+                <button type="button" onclick="hideSensorModal()">Cancel</button>
+                <button type="button" onclick="saveSensor()">Save</button>
+            </div>
+        </div>
+    </div>
     
     <script src="script.js"></script>
 </body>
