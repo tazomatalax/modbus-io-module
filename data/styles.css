@@ -894,6 +894,155 @@ button:hover {
 }
 
 /* Sensor Configuration Styles */
+/* Modbus Register Usage Map */
+.register-usage-summary {
+    background: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+    padding: 15px;
+    margin-bottom: 20px;
+}
+
+.register-usage-summary h3 {
+    margin-top: 0;
+    margin-bottom: 15px;
+    color: #495057;
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.register-sections {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+}
+
+.register-section {
+    background: white;
+    border: 1px solid #e3e6ea;
+    border-radius: 6px;
+    padding: 12px;
+}
+
+.register-section h4 {
+    margin-top: 0;
+    margin-bottom: 10px;
+    color: #212529;
+    font-size: 14px;
+    font-weight: 600;
+    border-bottom: 1px solid #e9ecef;
+    padding-bottom: 6px;
+}
+
+.register-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.register-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-width: 60px;
+    padding: 6px 4px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    text-align: center;
+    transition: all 0.2s ease;
+}
+
+.register-item:hover {
+    transform: scale(1.05);
+}
+
+.register-number {
+    font-size: 11px;
+    font-weight: 700;
+    margin-bottom: 2px;
+}
+
+.register-label {
+    font-size: 9px;
+    font-weight: 500;
+    line-height: 1.1;
+}
+
+/* Register type colors */
+.register-item.used {
+    background: var(--primary-color);
+    color: white;
+}
+
+.register-item.system {
+    background: var(--success-color);
+    color: white;
+}
+
+.register-item.sensor {
+    background: var(--warning-color);
+    color: white;
+}
+
+.register-item.sensor-disabled {
+    background: #ffc107;
+    color: #212529;
+    opacity: 0.6;
+    border: 2px dashed #adb5bd;
+}
+
+.register-item.available {
+    background: #e9ecef;
+    color: #6c757d;
+    border: 1px dashed #ced4da;
+}
+
+.register-legend {
+    display: flex;
+    gap: 15px;
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid #e9ecef;
+    font-size: 11px;
+}
+
+.legend-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.legend-color {
+    width: 12px;
+    height: 12px;
+    border-radius: 2px;
+}
+
+.form-help {
+    display: block;
+    font-size: 11px;
+    color: #6c757d;
+    margin-top: 4px;
+    font-style: italic;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+    .register-sections {
+        grid-template-columns: 1fr;
+    }
+    
+    .register-grid {
+        justify-content: center;
+    }
+    
+    .register-item {
+        min-width: 50px;
+        font-size: 9px;
+    }
+}
+
 .sensor-config-controls {
     display: flex;
     gap: 10px;

@@ -906,11 +906,109 @@ function loadSensorConfig() {
             console.log("Sensor configuration loaded:", data);
             sensorConfigData = data.sensors || [];
             renderSensorTable();
+            renderModbusRegisterMap();
         })
         .catch(error => {
             console.error('Error loading sensor configuration:', error);
             showToast('Failed to load sensor configuration: ' + error.message, 'error', false, 5000);
         });
+}
+
+// Render the complete Modbus register usage map
+function renderModbusRegisterMap() {
+    // Get configured sensors to determine the range needed
+    const allSensors = sensorConfigData || [];
+    const activeSensors = allSensors.filter(sensor => sensor.enabled);
+    
+    // Find the highest register number used by sensors
+    let maxSensorRegister = 31; // Default firmware range
+    allSensors.forEach(sensor => {
+        if (sensor.modbusRegister !== undefined && sensor.modbusRegister > maxSensorRegister) {
+            maxSensorRegister = sensor.modbusRegister;
+        }
+    });
+    
+    // Extend range to accommodate all sensors, with some padding
+    const inputRegisterRange = Math.max(32, maxSensorRegister + 10);
+    
+    // Define system register allocations based on the firmware
+    const systemMap = {
+        discreteInputs: [
+            { range: [0, 7], type: 'system', label: 'DI' }
+        ],
+        coils: [
+            { range: [0, 7], type: 'system', label: 'DO' },
+            { range: [100, 107], type: 'used', label: 'Latch Reset' }
+        ],
+        inputRegisters: [
+            { range: [0, 2], type: 'system', label: 'AI' },
+            { range: [3, 3], type: 'system', label: 'Temp' },
+            { range: [4, 4], type: 'system', label: 'Humidity' }
+        ],
+        holdingRegisters: []
+    };
+    
+    // Render each register type
+    renderRegisterSection('discrete-inputs-map', 16, systemMap.discreteInputs, [], 'Discrete Input');
+    renderRegisterSection('coils-map', 128, systemMap.coils, [], 'Coil');
+    renderRegisterSection('input-registers-map', inputRegisterRange, systemMap.inputRegisters, allSensors, 'Input Reg');
+    renderRegisterSection('holding-registers-map', 16, systemMap.holdingRegisters, [], 'Holding Reg');
+}
+
+// Helper function to render a register section
+function renderRegisterSection(elementId, maxRegisters, systemMappings, sensors, labelPrefix) {
+    const container = document.getElementById(elementId);
+    const registers = [];
+    
+    // Initialize all registers as available
+    for (let i = 0; i < maxRegisters; i++) {
+        registers[i] = {
+            number: i,
+            type: 'available',
+            label: 'Available',
+            title: `${labelPrefix} ${i}: Available for use`
+        };
+    }
+    
+    // Apply system mappings
+    systemMappings.forEach(mapping => {
+        const [start, end] = mapping.range;
+        for (let i = start; i <= end; i++) {
+            if (i < maxRegisters) {
+                registers[i] = {
+                    number: i,
+                    type: mapping.type,
+                    label: `${mapping.label}${mapping.range[0] === mapping.range[1] ? '' : (i - start + 1)}`,
+                    title: `${labelPrefix} ${i}: ${mapping.label} ${mapping.range[0] === mapping.range[1] ? '' : (i - start + 1)}`
+                };
+            }
+        }
+    });
+    
+    // Apply sensor mappings (only for input registers in this system)
+    if (elementId === 'input-registers-map') {
+        sensors.forEach(sensor => {
+            const reg = sensor.modbusRegister;
+            if (reg !== undefined && reg < maxRegisters) {
+                const sensorType = sensor.enabled ? 'sensor' : 'sensor-disabled';
+                const enabledStatus = sensor.enabled ? 'Enabled' : 'Disabled';
+                registers[reg] = {
+                    number: reg,
+                    type: sensorType,
+                    label: sensor.name.length > 8 ? sensor.name.substring(0, 6) + '...' : sensor.name,
+                    title: `${labelPrefix} ${reg}: ${sensor.name} (${sensor.type}) - ${enabledStatus}`
+                };
+            }
+        });
+    }
+    
+    // Render the registers
+    container.innerHTML = registers.map(reg => `
+        <div class="register-item ${reg.type}" title="${reg.title}">
+            <div class="register-number">${reg.number}</div>
+            <div class="register-label">${reg.label}</div>
+        </div>
+    `).join('');
 }
 
 // Render the sensor table
@@ -943,6 +1041,9 @@ function renderSensorTable() {
             </tr>
         `;
     }).join('');
+    
+    // Also update the register usage map
+    renderModbusRegisterMap();
 }
 
 // Show the add sensor modal
@@ -1015,6 +1116,17 @@ function saveSensor() {
     const i2cAddress = parseI2CAddress(i2cAddressStr);
     if (i2cAddress < 1 || i2cAddress > 127) {
         showToast('I2C address must be between 0x01 and 0x7F (1-127)', 'error');
+        return;
+    }
+    
+    // Validate Modbus register range - system reserves 0-4 for built-in I/O
+    if (modbusRegister < 5) {
+        showToast('Modbus register must be 5 or higher (0-4 are reserved for system I/O)', 'error');
+        return;
+    }
+    
+    if (modbusRegister > 65535) {
+        showToast('Modbus register must be 65535 or lower', 'error');
         return;
     }
     

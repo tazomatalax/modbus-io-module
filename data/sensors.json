@@ -1,25 +1,28 @@
 {
+  "_comment": "SIMULATOR SENSOR CONFIGURATION - This file simulates the LittleFS /sensors.json that will exist on your Raspberry Pi Pico. The simulator reads/writes this file exactly like the real device reads/writes LittleFS. Changes made via the web interface will be saved here and persist across simulator restarts.",
+  "_architecture": "Simulator uses this file <-> Real device uses LittleFS /sensors.json",
+  "_registers_note": "Registers 0-4 are reserved for system I/O (AI1-3, Temp, Humidity). Use register 5+ for sensors.",
   "sensors": [
     {
       "enabled": true,
       "name": "BME280_Main",
       "type": "BME280",
       "i2cAddress": 118,
-      "modbusRegister": 3
+      "modbusRegister": 10
     },
     {
       "enabled": true,
       "name": "pH_Sensor",
       "type": "EZO_PH",
       "i2cAddress": 99,
-      "modbusRegister": 5
+      "modbusRegister": 15
     },
     {
       "enabled": false,
       "name": "Distance_Sensor",
       "type": "VL53L1X",
       "i2cAddress": 41,
-      "modbusRegister": 6
+      "modbusRegister": 20
     }
   ]
 }

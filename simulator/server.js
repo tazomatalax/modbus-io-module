@@ -1,7 +1,7 @@
 /*
   Modbus IO Module Simulator
   - Serves the existing web UI from ../data
-  - Implements REST endpoints: /config (GET/POST), /iostatus (GET), /ioconfig (GET/POST), /setoutput (POST), /reset-latches (POST), /reset-latch (POST)
+  - Implements REST endpoints: /config (GET/POST), /iostatus (GET), /ioconfig (GET/POST), /setoutput (POST), /reset-latches (POST), /reset-latch (POST), /sensors/config (GET/POST)
   - Simulates DI/DO/AI, latching, inversion, and simple sensor values
   - Optionally exposes a Modbus TCP server on the configured port
 */
@@ -664,6 +664,101 @@ app.post('/reset-latch', (req, res) => {
   if (Number.isNaN(idx) || idx < 0 || idx >= 8) return res.status(400).json({ success: false, message: 'Invalid input index' });
   state.io.dInLatched[idx] = false;
   res.json({ success: true, message: `Latch has been reset for input ${idx}` });
+});
+
+// ------------------ Sensor Configuration endpoints ------------------
+// Sensor configuration file path (simulates LittleFS /sensors.json on real device)
+const SENSORS_FILE_PATH = path.join(webRoot, 'sensors.json');
+
+// Load sensor configuration from file (simulates LittleFS loading on real device)
+function loadSensorConfig() {
+  console.log('[sim] Loading sensor configuration from file (simulating LittleFS):', SENSORS_FILE_PATH);
+  
+  try {
+    if (fs.existsSync(SENSORS_FILE_PATH)) {
+      const fileContent = fs.readFileSync(SENSORS_FILE_PATH, 'utf8');
+      const config = JSON.parse(fileContent);
+      console.log('[sim] Loaded', config.sensors?.length || 0, 'sensors from file');
+      return config;
+    } else {
+      console.log('[sim] Sensors file does not exist, creating with empty configuration');
+      const emptyConfig = { sensors: [] };
+      saveSensorConfig(emptyConfig);
+      return emptyConfig;
+    }
+  } catch (error) {
+    console.error('[sim] Error loading sensor config:', error);
+    console.log('[sim] Using empty configuration as fallback');
+    return { sensors: [] };
+  }
+}
+
+// Save sensor configuration to file (simulates LittleFS writing on real device)
+function saveSensorConfig(config) {
+  console.log('[sim] Saving sensor configuration to file (simulating LittleFS):', SENSORS_FILE_PATH);
+  console.log('[sim] Saving', config.sensors?.length || 0, 'sensors');
+  
+  try {
+    // Preserve documentation comments when saving
+    const configWithComments = {
+      "_comment": "SIMULATOR SENSOR CONFIGURATION - This file simulates the LittleFS /sensors.json that will exist on your Raspberry Pi Pico. The simulator reads/writes this file exactly like the real device reads/writes LittleFS. Changes made via the web interface will be saved here and persist across simulator restarts.",
+      "_architecture": "Simulator uses this file <-> Real device uses LittleFS /sensors.json",
+      "_registers_note": "Registers 0-4 are reserved for system I/O (AI1-3, Temp, Humidity). Use register 5+ for sensors.",
+      "sensors": config.sensors || []
+    };
+    
+    fs.writeFileSync(SENSORS_FILE_PATH, JSON.stringify(configWithComments, null, 2));
+    console.log('[sim] Sensor configuration saved successfully');
+    return true;
+  } catch (error) {
+    console.error('[sim] Error saving sensor config:', error);
+    return false;
+  }
+}
+
+// Initialize sensor configuration on server startup (simulates device boot)
+console.log('[sim] ========================================');
+console.log('[sim] INITIALIZING SENSOR CONFIGURATION');
+console.log('[sim] (Simulating device LittleFS behavior)');
+console.log('[sim] ========================================');
+let currentSensorConfig = loadSensorConfig();
+console.log('[sim] Sensor configuration initialization complete');
+
+app.get('/sensors/config', (req, res) => {
+  console.log('[sim] Getting sensor configuration');
+  res.json(currentSensorConfig);
+});
+
+app.post('/sensors/config', (req, res) => {
+  console.log('[sim] Setting sensor configuration:', req.body);
+  
+  if (!req.body) {
+    return res.status(400).json({ success: false, message: 'No request body' });
+  }
+  
+  // Update and save configuration (simulates LittleFS write on real device)
+  if (req.body.sensors && Array.isArray(req.body.sensors)) {
+    currentSensorConfig.sensors = req.body.sensors;
+    console.log('[sim] Updated sensor configuration with', req.body.sensors.length, 'sensors');
+    
+    // Save to file (simulates device writing to LittleFS)
+    if (saveSensorConfig(currentSensorConfig)) {
+      res.json({ 
+        success: true, 
+        message: 'Sensor configuration saved successfully. Device will reboot.' 
+      });
+    } else {
+      res.status(500).json({ 
+        success: false, 
+        message: 'Failed to save sensor configuration to file' 
+      });
+    }
+  } else {
+    res.status(400).json({ 
+      success: false, 
+      message: 'Invalid sensors array in request body' 
+    });
+  }
 });
 
 // ------------------ Contract / health endpoints ------------------
