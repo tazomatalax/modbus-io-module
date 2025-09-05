@@ -782,6 +782,73 @@ function formatDuration(seconds) {
     }
 }
 
+// Global simulation control functions
+let globalSimulationEnabled = false;
+
+function loadSimulationState() {
+    console.log("Loading global simulation state...");
+    fetch('/simulate/global')
+        .then(response => {
+            if (!response.ok) {
+                throw new Error('Network response was not ok');
+            }
+            return response.json();
+        })
+        .then(data => {
+            globalSimulationEnabled = data.enabled || false;
+            document.getElementById('global-simulation-toggle').checked = globalSimulationEnabled;
+            document.getElementById('simulation-status-text').textContent = globalSimulationEnabled ? 'ON' : 'OFF';
+            console.log("Global simulation state:", globalSimulationEnabled ? 'ON' : 'OFF');
+        })
+        .catch(error => {
+            console.error('Error loading simulation state:', error);
+            // Default to OFF on error
+            globalSimulationEnabled = false;
+            document.getElementById('global-simulation-toggle').checked = false;
+            document.getElementById('simulation-status-text').textContent = 'OFF';
+        });
+}
+
+function toggleGlobalSimulation() {
+    const enabled = document.getElementById('global-simulation-toggle').checked;
+    
+    console.log("Toggling global simulation to:", enabled ? 'ON' : 'OFF');
+    
+    fetch('/simulate/global', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ enabled: enabled })
+    })
+    .then(response => {
+        if (!response.ok) {
+            throw new Error('Network response was not ok');
+        }
+        return response.json();
+    })
+    .then(data => {
+        if (data.success) {
+            globalSimulationEnabled = enabled;
+            document.getElementById('simulation-status-text').textContent = enabled ? 'ON' : 'OFF';
+            showToast(`Sensor simulation ${enabled ? 'enabled' : 'disabled'}`, 'success');
+            // Refresh IO status to show/hide simulated sensor data
+            updateIOStatus();
+        } else {
+            // Revert toggle state on failure
+            document.getElementById('global-simulation-toggle').checked = !enabled;
+            showToast('Failed to update simulation state', 'error');
+        }
+    })
+    .catch(error => {
+        console.error('Error toggling simulation:', error);
+        // Revert toggle state on error
+        document.getElementById('global-simulation-toggle').checked = !enabled;
+        document.getElementById('simulation-status-text').textContent = globalSimulationEnabled ? 'ON' : 'OFF';
+        showToast('Error updating simulation state: ' + error.message, 'error');
+    });
+}
+
 // Wait a short time before loading initial configuration to ensure server is ready
 setTimeout(() => {
     console.log("Starting initial data load sequence...");
@@ -798,10 +865,23 @@ setTimeout(() => {
     setTimeout(() => {
         loadSensorConfig();
     }, 1000);
+    
+    // Load simulation state after a short delay
+    setTimeout(() => {
+        loadSimulationState();
+    }, 1500);
 }, 500);
 
 // Add event listener for reset latches button
 document.getElementById('reset-latches-btn').addEventListener('click', resetLatches);
+
+// Add event listener for global simulation toggle
+document.addEventListener('DOMContentLoaded', function() {
+    const toggleElement = document.getElementById('global-simulation-toggle');
+    if (toggleElement) {
+        toggleElement.addEventListener('change', toggleGlobalSimulation);
+    }
+});
 
 // Function to reset all latched inputs
 // Note: Modbus clients can reset individual latches by writing to coils 100-107

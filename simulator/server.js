@@ -375,6 +375,7 @@ const state = {
   modbusServerRunning: false,
   modbusServerError: null,
   sim: {
+    globalSimulationEnabled: false, // Global simulation toggle (OFF by default)
     sensorsMode: 'auto', // 'auto' | 'manual'
     diMode: 'auto',      // 'auto' | 'manual'
     aiMode: 'auto'       // 'auto' | 'manual'
@@ -567,12 +568,39 @@ app.get('/iostatus', (req, res) => {
     di_raw: io.dInRaw.slice(),
     di_latched: io.dInLatched.slice(),
     do: io.dOut.slice(),
-    ai: io.aIn.slice(),
-    i2c_sensors: {
-      temperature: io.temperature.toFixed(2),
-      humidity: io.humidity.toFixed(2)
-    }
+    ai: io.aIn.slice()
   };
+
+  // Only include sensor data if global simulation is enabled AND sensors are configured
+  if (state.sim.globalSimulationEnabled && currentSensorConfig && currentSensorConfig.sensors) {
+    const enabledSensors = currentSensorConfig.sensors.filter(sensor => sensor.enabled);
+    
+    if (enabledSensors.length > 0) {
+      // Only show sensor data for configured and enabled sensors
+      const i2c_sensors = {};
+      
+      // Check if we have temperature and humidity sensors configured
+      const tempSensor = enabledSensors.find(s => 
+        s.type && (s.type.includes('BME280') || s.type.includes('BMP280') || s.type.includes('SHT30') || s.type.includes('Temperature'))
+      );
+      const humiditySensor = enabledSensors.find(s => 
+        s.type && (s.type.includes('BME280') || s.type.includes('SHT30') || s.type.includes('Humidity'))
+      );
+      
+      if (tempSensor) {
+        i2c_sensors.temperature = io.temperature.toFixed(2);
+      }
+      if (humiditySensor) {
+        i2c_sensors.humidity = io.humidity.toFixed(2);
+      }
+      
+      // Only add i2c_sensors to response if we have at least one sensor value
+      if (Object.keys(i2c_sensors).length > 0) {
+        resp.i2c_sensors = i2c_sensors;
+      }
+    }
+  }
+
   if (state.connectedClients > 0) {
     resp.modbus_clients = state.modbusClients.map((c, idx) => ({
       ip: c.ip,
@@ -836,6 +864,30 @@ app.post('/simulate/ai', (req, res) => {
   }
   
   res.json({ success: true, ai: state.io.aIn, mode: state.sim.aiMode });
+});
+
+// Global simulation control endpoint
+app.get('/simulate/global', (req, res) => {
+  res.json({
+    enabled: state.sim.globalSimulationEnabled
+  });
+});
+
+app.post('/simulate/global', (req, res) => {
+  const b = req.body || {};
+  if (typeof b.enabled === 'boolean') {
+    state.sim.globalSimulationEnabled = b.enabled;
+    console.log(`[sim] Global simulation ${b.enabled ? 'enabled' : 'disabled'}`);
+    res.json({ 
+      success: true, 
+      enabled: state.sim.globalSimulationEnabled 
+    });
+  } else {
+    res.status(400).json({ 
+      success: false, 
+      message: 'Invalid enabled parameter' 
+    });
+  }
 });
 
 // Get simulation state (for UI initialization)
