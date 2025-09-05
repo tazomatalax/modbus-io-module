@@ -1235,9 +1235,16 @@ function showAddSensorModal() {
     document.getElementById('sensor-form').reset();
     document.getElementById('sensor-enabled').checked = true;
     
+    // Setup sensor calibration method listeners
+    setupSensorCalibrationMethodListeners();
+    
     // Reset calibration to defaults
+    document.getElementById('sensor-method-linear').checked = true;
     document.getElementById('sensor-calibration-offset').value = 0;
     document.getElementById('sensor-calibration-scale').value = 1;
+    document.getElementById('sensor-calibration-polynomial').value = '';
+    document.getElementById('sensor-calibration-expression').value = '';
+    showSensorCalibrationMethod('linear');
     
     document.getElementById('sensor-modal-overlay').classList.add('show');
 }
@@ -1259,16 +1266,72 @@ function editSensor(index) {
     document.getElementById('sensor-modbus-register').value = sensor.modbusRegister || '';
     document.getElementById('sensor-enabled').checked = sensor.enabled;
     
-    // Load calibration data if it exists
+    // Setup sensor calibration method listeners
+    setupSensorCalibrationMethodListeners();
+    
+    // Load calibration data and determine method
     if (sensor.calibration) {
-        document.getElementById('sensor-calibration-offset').value = sensor.calibration.offset || 0;
-        document.getElementById('sensor-calibration-scale').value = sensor.calibration.scale || 1;
+        if (sensor.calibration.expression && sensor.calibration.expression.trim() !== '') {
+            // Expression calibration
+            document.getElementById('sensor-method-expression').checked = true;
+            document.getElementById('sensor-calibration-expression').value = sensor.calibration.expression;
+            showSensorCalibrationMethod('expression');
+        } else if (sensor.calibration.polynomialStr && sensor.calibration.polynomialStr.trim() !== '') {
+            // Polynomial calibration
+            document.getElementById('sensor-method-polynomial').checked = true;
+            document.getElementById('sensor-calibration-polynomial').value = sensor.calibration.polynomialStr;
+            showSensorCalibrationMethod('polynomial');
+        } else {
+            // Linear calibration
+            document.getElementById('sensor-method-linear').checked = true;
+            document.getElementById('sensor-calibration-offset').value = sensor.calibration.offset || 0;
+            document.getElementById('sensor-calibration-scale').value = sensor.calibration.scale || 1;
+            showSensorCalibrationMethod('linear');
+        }
     } else {
+        // Default to linear calibration
+        document.getElementById('sensor-method-linear').checked = true;
         document.getElementById('sensor-calibration-offset').value = 0;
         document.getElementById('sensor-calibration-scale').value = 1;
+        document.getElementById('sensor-calibration-polynomial').value = '';
+        document.getElementById('sensor-calibration-expression').value = '';
+        showSensorCalibrationMethod('linear');
     }
     
     document.getElementById('sensor-modal-overlay').classList.add('show');
+}
+
+// Setup sensor calibration method radio button listeners
+function setupSensorCalibrationMethodListeners() {
+    const methodRadios = document.querySelectorAll('input[name="sensor-calibration-method"]');
+    methodRadios.forEach(radio => {
+        radio.addEventListener('change', function() {
+            if (this.checked) {
+                showSensorCalibrationMethod(this.value);
+            }
+        });
+    });
+}
+
+// Show the appropriate sensor calibration method section
+function showSensorCalibrationMethod(method) {
+    // Hide all sensor calibration sections
+    document.getElementById('sensor-linear-calibration').style.display = 'none';
+    document.getElementById('sensor-polynomial-calibration').style.display = 'none';
+    document.getElementById('sensor-expression-calibration').style.display = 'none';
+    
+    // Show the selected method
+    switch (method) {
+        case 'linear':
+            document.getElementById('sensor-linear-calibration').style.display = 'block';
+            break;
+        case 'polynomial':
+            document.getElementById('sensor-polynomial-calibration').style.display = 'block';
+            break;
+        case 'expression':
+            document.getElementById('sensor-expression-calibration').style.display = 'block';
+            break;
+    }
 }
 
 // Hide the sensor modal
@@ -1344,9 +1407,73 @@ function saveSensor() {
         return;
     }
     
-    // Get calibration data
-    const calibrationOffset = parseFloat(document.getElementById('sensor-calibration-offset').value) || 0;
-    const calibrationScale = parseFloat(document.getElementById('sensor-calibration-scale').value) || 1;
+    // Get calibration data based on selected method
+    const selectedCalibrationMethod = document.querySelector('input[name="sensor-calibration-method"]:checked').value;
+    let calibration = {};
+    
+    try {
+        switch (selectedCalibrationMethod) {
+            case 'linear':
+                const offset = parseFloat(document.getElementById('sensor-calibration-offset').value) || 0;
+                const scale = parseFloat(document.getElementById('sensor-calibration-scale').value) || 1;
+                
+                if (scale === 0) {
+                    showToast('Scale factor cannot be zero', 'error');
+                    return;
+                }
+                
+                calibration = {
+                    offset: offset,
+                    scale: scale,
+                    expression: '',
+                    polynomialStr: ''
+                };
+                break;
+                
+            case 'polynomial':
+                const polynomial = document.getElementById('sensor-calibration-polynomial').value.trim();
+                const polyValidation = validatePolynomial(polynomial);
+                
+                if (!polyValidation.valid) {
+                    showToast(polyValidation.error, 'error');
+                    return;
+                }
+                
+                calibration = {
+                    polynomialStr: polynomial,
+                    offset: 0,
+                    scale: 1,
+                    expression: ''
+                };
+                break;
+                
+            case 'expression':
+                const expression = document.getElementById('sensor-calibration-expression').value.trim();
+                const exprValidation = validateExpression(expression);
+                
+                if (!exprValidation.valid) {
+                    showToast(exprValidation.error, 'error');
+                    return;
+                }
+                
+                calibration = {
+                    expression: expression,
+                    offset: 0,
+                    scale: 1,
+                    polynomialStr: ''
+                };
+                break;
+                
+            default:
+                showToast('Invalid calibration method selected', 'error');
+                return;
+        }
+        
+    } catch (error) {
+        console.error('Error processing calibration:', error);
+        showToast('Error processing calibration: ' + error.message, 'error');
+        return;
+    }
     
     const sensor = {
         enabled: enabled,
@@ -1354,10 +1481,7 @@ function saveSensor() {
         type: type,
         i2cAddress: i2cAddress,
         modbusRegister: modbusRegister,
-        calibration: {
-            offset: calibrationOffset,
-            scale: calibrationScale
-        }
+        calibration: calibration
     };
     
     if (editingSensorIndex === -1) {
@@ -1392,16 +1516,152 @@ function calibrateSensor(index) {
     document.getElementById('calibration-sensor-name').textContent = sensor.name;
     document.getElementById('calibration-sensor-type').textContent = sensor.type;
     
-    // Load current calibration values
+    // Setup calibration method listeners
+    setupCalibrationMethodListeners();
+    
+    // Load current calibration values and determine method
     if (sensor.calibration) {
-        document.getElementById('calibration-offset').value = sensor.calibration.offset || 0;
-        document.getElementById('calibration-scale').value = sensor.calibration.scale || 1;
+        if (sensor.calibration.expression && sensor.calibration.expression.trim() !== '') {
+            // Expression calibration
+            document.getElementById('method-expression').checked = true;
+            document.getElementById('calibration-expression').value = sensor.calibration.expression;
+            showCalibrationMethod('expression');
+        } else if (sensor.calibration.polynomialStr && sensor.calibration.polynomialStr.trim() !== '') {
+            // Polynomial calibration
+            document.getElementById('method-polynomial').checked = true;
+            document.getElementById('calibration-polynomial').value = sensor.calibration.polynomialStr;
+            showCalibrationMethod('polynomial');
+        } else {
+            // Linear calibration
+            document.getElementById('method-linear').checked = true;
+            document.getElementById('calibration-offset').value = sensor.calibration.offset || 0;
+            document.getElementById('calibration-scale').value = sensor.calibration.scale || 1;
+            showCalibrationMethod('linear');
+        }
     } else {
+        // Default to linear calibration
+        document.getElementById('method-linear').checked = true;
         document.getElementById('calibration-offset').value = 0;
         document.getElementById('calibration-scale').value = 1;
+        document.getElementById('calibration-polynomial').value = '';
+        document.getElementById('calibration-expression').value = '';
+        showCalibrationMethod('linear');
     }
     
     document.getElementById('calibration-modal-overlay').classList.add('show');
+}
+
+// Setup calibration method radio button listeners
+function setupCalibrationMethodListeners() {
+    const methodRadios = document.querySelectorAll('input[name="calibration-method"]');
+    methodRadios.forEach(radio => {
+        radio.addEventListener('change', function() {
+            if (this.checked) {
+                showCalibrationMethod(this.value);
+            }
+        });
+    });
+}
+
+// Show the appropriate calibration method section
+function showCalibrationMethod(method) {
+    // Hide all calibration sections
+    document.getElementById('linear-calibration').style.display = 'none';
+    document.getElementById('polynomial-calibration').style.display = 'none';
+    document.getElementById('expression-calibration').style.display = 'none';
+    
+    // Show the selected method
+    switch (method) {
+        case 'linear':
+            document.getElementById('linear-calibration').style.display = 'block';
+            break;
+        case 'polynomial':
+            document.getElementById('polynomial-calibration').style.display = 'block';
+            break;
+        case 'expression':
+            document.getElementById('expression-calibration').style.display = 'block';
+            break;
+    }
+}
+
+// Preset tab management
+function showPresetTab(tabName) {
+    // Update tab buttons
+    document.querySelectorAll('.preset-tab').forEach(tab => {
+        tab.classList.remove('active');
+    });
+    event.target.classList.add('active');
+    
+    // Show corresponding preset content
+    document.querySelectorAll('.preset-content').forEach(content => {
+        content.style.display = 'none';
+    });
+    document.getElementById(tabName + '-presets').style.display = 'block';
+}
+
+// Preset functions
+function setLinearPreset(offset, scale) {
+    document.getElementById('method-linear').checked = true;
+    document.getElementById('calibration-offset').value = offset;
+    document.getElementById('calibration-scale').value = scale;
+    showCalibrationMethod('linear');
+}
+
+function setPolynomialPreset(polynomial) {
+    document.getElementById('method-polynomial').checked = true;
+    document.getElementById('calibration-polynomial').value = polynomial;
+    showCalibrationMethod('polynomial');
+}
+
+function setExpressionPreset(expression) {
+    document.getElementById('method-expression').checked = true;
+    document.getElementById('calibration-expression').value = expression;
+    showCalibrationMethod('expression');
+}
+
+// Client-side validation for expressions and polynomials
+function validateExpression(expression) {
+    if (!expression || expression.trim() === '') {
+        return { valid: false, error: 'Expression cannot be empty' };
+    }
+    
+    // Check for allowed characters only
+    const allowedChars = /^[0-9+\-*/.()x\s]+$/;
+    if (!allowedChars.test(expression)) {
+        return { valid: false, error: 'Expression contains invalid characters. Only +, -, *, /, (), x, and numbers are allowed.' };
+    }
+    
+    // Check for balanced parentheses
+    let openCount = 0;
+    let closeCount = 0;
+    for (let char of expression) {
+        if (char === '(') openCount++;
+        if (char === ')') closeCount++;
+    }
+    if (openCount !== closeCount) {
+        return { valid: false, error: 'Unbalanced parentheses in expression' };
+    }
+    
+    // Check for dangerous patterns
+    if (expression.includes('..') || expression.includes('//')) {
+        return { valid: false, error: 'Invalid pattern in expression' };
+    }
+    
+    return { valid: true };
+}
+
+function validatePolynomial(polynomial) {
+    if (!polynomial || polynomial.trim() === '') {
+        return { valid: false, error: 'Polynomial cannot be empty' };
+    }
+    
+    // Basic validation for polynomial format
+    const polynomialPattern = /^[+\-]?\s*\d*\.?\d*\s*\*?\s*x?(\^\d+)?\s*([+\-]\s*\d*\.?\d*\s*\*?\s*x?(\^\d+)?\s*)*$/;
+    if (!polynomialPattern.test(polynomial.replace(/\s/g, ''))) {
+        return { valid: false, error: 'Invalid polynomial format. Use format like: 2x^2 + 3x + 1' };
+    }
+    
+    return { valid: true };
 }
 
 // Hide calibration modal
@@ -1417,33 +1677,95 @@ function saveCalibration() {
         return;
     }
     
-    const offset = parseFloat(document.getElementById('calibration-offset').value) || 0;
-    const scale = parseFloat(document.getElementById('calibration-scale').value) || 1;
+    // Get selected calibration method
+    const selectedMethod = document.querySelector('input[name="calibration-method"]:checked').value;
     
-    if (scale === 0) {
-        showToast('Scale factor cannot be zero', 'error');
-        return;
+    // Initialize calibration object
+    const calibration = {};
+    
+    try {
+        switch (selectedMethod) {
+            case 'linear':
+                const offset = parseFloat(document.getElementById('calibration-offset').value) || 0;
+                const scale = parseFloat(document.getElementById('calibration-scale').value) || 1;
+                
+                if (scale === 0) {
+                    showToast('Scale factor cannot be zero', 'error');
+                    return;
+                }
+                
+                calibration.offset = offset;
+                calibration.scale = scale;
+                // Clear other calibration methods
+                calibration.expression = '';
+                calibration.polynomialStr = '';
+                break;
+                
+            case 'polynomial':
+                const polynomial = document.getElementById('calibration-polynomial').value.trim();
+                const polyValidation = validatePolynomial(polynomial);
+                
+                if (!polyValidation.valid) {
+                    showToast(polyValidation.error, 'error');
+                    return;
+                }
+                
+                calibration.polynomialStr = polynomial;
+                // Clear other calibration methods
+                calibration.offset = 0;
+                calibration.scale = 1;
+                calibration.expression = '';
+                break;
+                
+            case 'expression':
+                const expression = document.getElementById('calibration-expression').value.trim();
+                const exprValidation = validateExpression(expression);
+                
+                if (!exprValidation.valid) {
+                    showToast(exprValidation.error, 'error');
+                    return;
+                }
+                
+                calibration.expression = expression;
+                // Clear other calibration methods
+                calibration.offset = 0;
+                calibration.scale = 1;
+                calibration.polynomialStr = '';
+                break;
+                
+            default:
+                showToast('Invalid calibration method selected', 'error');
+                return;
+        }
+        
+        // Update sensor calibration
+        sensorConfigData[editingSensorIndex].calibration = calibration;
+        
+        // Update UI
+        renderSensorTable();
+        hideCalibrationModal();
+        
+        showToast(`Calibration updated successfully (${selectedMethod})`, 'success');
+        
+    } catch (error) {
+        console.error('Error saving calibration:', error);
+        showToast('Error saving calibration: ' + error.message, 'error');
     }
-    
-    // Update sensor calibration
-    if (!sensorConfigData[editingSensorIndex].calibration) {
-        sensorConfigData[editingSensorIndex].calibration = {};
-    }
-    
-    sensorConfigData[editingSensorIndex].calibration.offset = offset;
-    sensorConfigData[editingSensorIndex].calibration.scale = scale;
-    
-    // Update UI
-    renderSensorTable();
-    hideCalibrationModal();
-    
-    showToast('Calibration updated successfully', 'success');
 }
 
 // Reset calibration to defaults
 function resetCalibration() {
+    // Reset linear calibration
     document.getElementById('calibration-offset').value = 0;
     document.getElementById('calibration-scale').value = 1;
+    
+    // Clear polynomial and expression
+    document.getElementById('calibration-polynomial').value = '';
+    document.getElementById('calibration-expression').value = '';
+    
+    // Set to linear method
+    document.getElementById('method-linear').checked = true;
+    showCalibrationMethod('linear');
 }
 
 // Delete sensor

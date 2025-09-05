@@ -396,6 +396,137 @@ function ipToString(arr) {
   return `${arr[0]}.${arr[1]}.${arr[2]}.${arr[3]}`;
 }
 
+// Safe mathematical expression evaluator
+function evaluateMathExpression(expression, x) {
+  try {
+    // Sanitize the expression - only allow safe mathematical operations
+    const sanitizedExpression = expression
+      .replace(/[^0-9+\-*/.()x\s]/g, '') // Remove unsafe characters
+      .replace(/x/g, `(${x})`) // Replace x with the actual value
+      .replace(/\s+/g, ''); // Remove whitespace
+    
+    // Check for dangerous patterns
+    if (sanitizedExpression.includes('..') || sanitizedExpression.includes('//')) {
+      throw new Error('Invalid expression pattern');
+    }
+    
+    // Count parentheses to ensure they're balanced
+    const openCount = (sanitizedExpression.match(/\(/g) || []).length;
+    const closeCount = (sanitizedExpression.match(/\)/g) || []).length;
+    if (openCount !== closeCount) {
+      throw new Error('Unbalanced parentheses');
+    }
+    
+    // Evaluate using Function constructor (safer than eval)
+    const result = new Function('return ' + sanitizedExpression)();
+    
+    // Check if result is a valid number
+    if (isNaN(result) || !isFinite(result)) {
+      throw new Error('Expression result is not a valid number');
+    }
+    
+    return result;
+  } catch (error) {
+    console.error('Error evaluating expression:', expression, 'with x =', x, ':', error.message);
+    return null;
+  }
+}
+
+// Parse polynomial coefficients from string (e.g., "2x^2 + 3x + 1" -> [1, 3, 2])
+function parsePolynomial(polynomialStr) {
+  try {
+    const terms = [];
+    
+    // Match polynomial terms like "2x^3", "-1.5x^2", "4x", "7", etc.
+    const termRegex = /([+-]?\s*\d*\.?\d*)\s*\*?\s*x?\s*(\^\s*\d+)?/g;
+    let match;
+    
+    while ((match = termRegex.exec(polynomialStr)) !== null) {
+      const coeffStr = match[1].replace(/\s/g, '') || '1';
+      const powerStr = match[2] ? match[2].replace(/[\^\s]/g, '') : (match[0].includes('x') ? '1' : '0');
+      
+      const coefficient = parseFloat(coeffStr === '+' || coeffStr === '' ? '1' : coeffStr === '-' ? '-1' : coeffStr);
+      const power = parseInt(powerStr) || 0;
+      
+      if (!isNaN(coefficient) && coefficient !== 0) {
+        terms.push({ coefficient, power });
+      }
+    }
+    
+    if (terms.length === 0) {
+      throw new Error('No valid polynomial terms found');
+    }
+    
+    return terms;
+  } catch (error) {
+    console.error('Error parsing polynomial:', polynomialStr, ':', error.message);
+    return null;
+  }
+}
+
+// Evaluate polynomial given coefficients and x value
+function evaluatePolynomial(terms, x) {
+  try {
+    let result = 0;
+    for (const term of terms) {
+      result += term.coefficient * Math.pow(x, term.power);
+    }
+    
+    if (!isFinite(result)) {
+      throw new Error('Polynomial evaluation resulted in non-finite value');
+    }
+    
+    return result;
+  } catch (error) {
+    console.error('Error evaluating polynomial:', terms, 'with x =', x, ':', error.message);
+    return null;
+  }
+}
+
+// Apply calibration to sensor reading
+function applySensorCalibration(rawValue, calibration) {
+  if (!calibration) {
+    return rawValue;
+  }
+  
+  try {
+    // Handle mathematical expression
+    if (calibration.expression && calibration.expression.trim() !== '') {
+      const result = evaluateMathExpression(calibration.expression, rawValue);
+      return result !== null ? parseFloat(result.toFixed(6)) : rawValue;
+    }
+    
+    // Handle polynomial coefficients
+    if (calibration.polynomial && Array.isArray(calibration.polynomial)) {
+      const result = evaluatePolynomial(calibration.polynomial, rawValue);
+      return result !== null ? parseFloat(result.toFixed(6)) : rawValue;
+    }
+    
+    // Handle polynomial string
+    if (calibration.polynomialStr && calibration.polynomialStr.trim() !== '') {
+      const terms = parsePolynomial(calibration.polynomialStr);
+      if (terms) {
+        const result = evaluatePolynomial(terms, rawValue);
+        return result !== null ? parseFloat(result.toFixed(6)) : rawValue;
+      }
+    }
+    
+    // Fall back to simple linear calibration (existing behavior)
+    let result = rawValue;
+    if (calibration.scale !== undefined && calibration.scale !== 0) {
+      result *= calibration.scale;
+    }
+    if (calibration.offset !== undefined) {
+      result += calibration.offset;
+    }
+    
+    return parseFloat(result.toFixed(6));
+  } catch (error) {
+    console.error('Error applying calibration:', error.message);
+    return rawValue; // Return raw value if calibration fails
+  }
+}
+
 // Helper function to get sensor data (simulated or real)
 function getSensorData(sensor) {
   // In simulator mode: provide simulated data if simulation is enabled for this sensor type
@@ -412,16 +543,8 @@ function getSensorData(sensor) {
       sensorTypeLower.includes('lm35') ||
       sensorTypeLower.includes('ds18b20')) {
     
-    // Apply calibration if present
-    let temp = state.io.temperature;
-    if (sensor.calibration && sensor.calibration.offset !== undefined) {
-      temp += sensor.calibration.offset;
-    }
-    if (sensor.calibration && sensor.calibration.scale !== undefined && sensor.calibration.scale !== 0) {
-      temp *= sensor.calibration.scale;
-    }
-    
-    return parseFloat(temp.toFixed(2));
+    const rawTemp = state.io.temperature;
+    return applySensorCalibration(rawTemp, sensor.calibration);
   }
   
   // Humidity sensors
@@ -430,15 +553,8 @@ function getSensorData(sensor) {
       sensorTypeLower.includes('sht') ||
       sensorTypeLower.includes('hih')) {
     
-    let humidity = state.io.humidity;
-    if (sensor.calibration && sensor.calibration.offset !== undefined) {
-      humidity += sensor.calibration.offset;
-    }
-    if (sensor.calibration && sensor.calibration.scale !== undefined && sensor.calibration.scale !== 0) {
-      humidity *= sensor.calibration.scale;
-    }
-    
-    return parseFloat(humidity.toFixed(2));
+    const rawHumidity = state.io.humidity;
+    return applySensorCalibration(rawHumidity, sensor.calibration);
   }
   
   // Pressure sensors
@@ -446,15 +562,8 @@ function getSensorData(sensor) {
       sensorTypeLower.includes('bmp') || 
       sensorTypeLower.includes('bme')) {
     
-    let pressure = state.io.pressure;
-    if (sensor.calibration && sensor.calibration.offset !== undefined) {
-      pressure += sensor.calibration.offset;
-    }
-    if (sensor.calibration && sensor.calibration.scale !== undefined && sensor.calibration.scale !== 0) {
-      pressure *= sensor.calibration.scale;
-    }
-    
-    return parseFloat(pressure.toFixed(2));
+    const rawPressure = state.io.pressure;
+    return applySensorCalibration(rawPressure, sensor.calibration);
   }
   
   // Generic sensor - return a simulated value based on the sensor's modbus register
@@ -462,14 +571,9 @@ function getSensorData(sensor) {
   if (sensor.modbusRegister !== undefined) {
     const baseValue = 20 + (sensor.modbusRegister % 10) * 2;
     const variation = Math.sin(Date.now() / (5000 + sensor.modbusRegister * 100)) * 5;
-    let value = baseValue + variation;
+    const rawValue = baseValue + variation;
     
-    if (sensor.calibration) {
-      if (sensor.calibration.offset !== undefined) value += sensor.calibration.offset;
-      if (sensor.calibration.scale !== undefined && sensor.calibration.scale !== 0) value *= sensor.calibration.scale;
-    }
-    
-    return parseFloat(value.toFixed(2));
+    return applySensorCalibration(rawValue, sensor.calibration);
   }
   
   return null;

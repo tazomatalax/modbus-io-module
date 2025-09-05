@@ -320,19 +320,52 @@
                 
                 <div class="form-section">
                     <h4>Calibration Settings</h4>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="sensor-calibration-offset">Offset</label>
-                            <input type="number" id="sensor-calibration-offset" step="0.01" value="0" placeholder="0.0">
-                            <small class="form-help">Added to raw sensor reading</small>
+                    <div class="sensor-calibration-method-selector">
+                        <label class="method-option">
+                            <input type="radio" name="sensor-calibration-method" value="linear" id="sensor-method-linear" checked>
+                            <span>Linear</span>
+                        </label>
+                        <label class="method-option">
+                            <input type="radio" name="sensor-calibration-method" value="polynomial" id="sensor-method-polynomial">
+                            <span>Polynomial</span>
+                        </label>
+                        <label class="method-option">
+                            <input type="radio" name="sensor-calibration-method" value="expression" id="sensor-method-expression">
+                            <span>Expression</span>
+                        </label>
+                    </div>
+                    
+                    <div id="sensor-linear-calibration">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="sensor-calibration-offset">Offset</label>
+                                <input type="number" id="sensor-calibration-offset" step="0.01" value="0" placeholder="0.0">
+                                <small class="form-help">Added to raw sensor reading</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="sensor-calibration-scale">Scale Factor</label>
+                                <input type="number" id="sensor-calibration-scale" step="0.001" value="1" placeholder="1.0" min="0.001">
+                                <small class="form-help">Raw reading multiplied by this factor</small>
+                            </div>
                         </div>
+                        <small class="form-help">Final value = (Raw × Scale) + Offset</small>
+                    </div>
+                    
+                    <div id="sensor-polynomial-calibration" style="display: none;">
                         <div class="form-group">
-                            <label for="sensor-calibration-scale">Scale Factor</label>
-                            <input type="number" id="sensor-calibration-scale" step="0.001" value="1" placeholder="1.0" min="0.001">
-                            <small class="form-help">Raw reading multiplied by this factor</small>
+                            <label for="sensor-calibration-polynomial">Polynomial</label>
+                            <input type="text" id="sensor-calibration-polynomial" placeholder="2x^2 + 3x + 1" value="">
+                            <small class="form-help">Polynomial expression (x = raw reading)</small>
                         </div>
                     </div>
-                    <small class="form-help">Final value = (Raw × Scale) + Offset</small>
+                    
+                    <div id="sensor-expression-calibration" style="display: none;">
+                        <div class="form-group">
+                            <label for="sensor-calibration-expression">Expression</label>
+                            <input type="text" id="sensor-calibration-expression" placeholder="x * 1.8 + 32" value="">
+                            <small class="form-help">Mathematical expression (x = raw reading)</small>
+                        </div>
+                    </div>
                 </div>
             </form>
             <div class="modal-footer">
@@ -358,7 +391,25 @@
                 </div>
                 
                 <div class="form-section">
-                    <h4>Calibration Parameters</h4>
+                    <h4>Calibration Method</h4>
+                    <div class="calibration-method-selector">
+                        <label class="method-option">
+                            <input type="radio" name="calibration-method" value="linear" id="method-linear" checked>
+                            <span>Linear (Offset + Scale)</span>
+                        </label>
+                        <label class="method-option">
+                            <input type="radio" name="calibration-method" value="polynomial" id="method-polynomial">
+                            <span>Polynomial</span>
+                        </label>
+                        <label class="method-option">
+                            <input type="radio" name="calibration-method" value="expression" id="method-expression">
+                            <span>Mathematical Expression</span>
+                        </label>
+                    </div>
+                </div>
+                
+                <div class="form-section" id="linear-calibration">
+                    <h4>Linear Calibration</h4>
                     <div class="form-row">
                         <div class="form-group">
                             <label for="calibration-offset">Offset</label>
@@ -376,12 +427,73 @@
                     </div>
                 </div>
                 
-                <div class="calibration-examples">
-                    <h4>Common Calibrations</h4>
-                    <div class="calibration-presets">
-                        <button type="button" onclick="resetCalibration()" class="preset-btn">Reset to Default</button>
-                        <button type="button" onclick="document.getElementById('calibration-offset').value = 2.0; document.getElementById('calibration-scale').value = 1.0;" class="preset-btn">+2°C Offset</button>
-                        <button type="button" onclick="document.getElementById('calibration-offset').value = 0; document.getElementById('calibration-scale').value = 0.95;" class="preset-btn">5% Scale Down</button>
+                <div class="form-section" id="polynomial-calibration" style="display: none;">
+                    <h4>Polynomial Calibration</h4>
+                    <div class="form-group">
+                        <label for="calibration-polynomial">Polynomial Expression</label>
+                        <input type="text" id="calibration-polynomial" placeholder="2x^2 + 3x + 1" value="">
+                        <small class="form-help">Enter polynomial like: 2x^2 + 3x + 1 (where x = raw reading)</small>
+                    </div>
+                    <div class="polynomial-examples">
+                        <strong>Examples:</strong>
+                        <ul>
+                            <li><code>x^2 + 2x + 1</code> - Quadratic calibration</li>
+                            <li><code>0.001x^3 - 0.1x^2 + x</code> - Cubic calibration</li>
+                            <li><code>-0.5x^2 + 10x</code> - Parabolic correction</li>
+                        </ul>
+                    </div>
+                </div>
+                
+                <div class="form-section" id="expression-calibration" style="display: none;">
+                    <h4>Mathematical Expression</h4>
+                    <div class="form-group">
+                        <label for="calibration-expression">Expression</label>
+                        <input type="text" id="calibration-expression" placeholder="x * 1.8 + 32" value="">
+                        <small class="form-help">Enter mathematical expression (where x = raw reading)</small>
+                    </div>
+                    <div class="expression-examples">
+                        <strong>Examples:</strong>
+                        <ul>
+                            <li><code>x * 1.8 + 32</code> - Celsius to Fahrenheit</li>
+                            <li><code>(x - 32) / 1.8</code> - Fahrenheit to Celsius</li>
+                            <li><code>x * x / 100</code> - Square relationship</li>
+                            <li><code>x + (x * x * 0.001)</code> - Non-linear correction</li>
+                        </ul>
+                    </div>
+                    <div class="expression-safety">
+                        <small class="form-help safety-note">
+                            <strong>Allowed operations:</strong> +, -, *, /, (), x (raw value), and numbers
+                        </small>
+                    </div>
+                </div>
+                
+                <div class="calibration-presets-section">
+                    <h4>Quick Presets</h4>
+                    <div class="preset-tabs">
+                        <button type="button" class="preset-tab active" onclick="showPresetTab('linear')">Linear</button>
+                        <button type="button" class="preset-tab" onclick="showPresetTab('polynomial')">Polynomial</button>
+                        <button type="button" class="preset-tab" onclick="showPresetTab('expression')">Expression</button>
+                    </div>
+                    
+                    <div class="preset-content" id="linear-presets">
+                        <button type="button" onclick="setLinearPreset(0, 1)" class="preset-btn">Reset to Default</button>
+                        <button type="button" onclick="setLinearPreset(2.0, 1.0)" class="preset-btn">+2°C Offset</button>
+                        <button type="button" onclick="setLinearPreset(0, 0.95)" class="preset-btn">5% Scale Down</button>
+                        <button type="button" onclick="setLinearPreset(-32, 5/9)" class="preset-btn">°F to °C</button>
+                    </div>
+                    
+                    <div class="preset-content" id="polynomial-presets" style="display: none;">
+                        <button type="button" onclick="setPolynomialPreset('x')" class="preset-btn">Linear (x)</button>
+                        <button type="button" onclick="setPolynomialPreset('0.001x^2 + x')" class="preset-btn">Quadratic Correction</button>
+                        <button type="button" onclick="setPolynomialPreset('x^3 * 0.0001 + x')" class="preset-btn">Cubic Correction</button>
+                        <button type="button" onclick="setPolynomialPreset('-0.01x^2 + 1.5x + 2')" class="preset-btn">pH Sensor Curve</button>
+                    </div>
+                    
+                    <div class="preset-content" id="expression-presets" style="display: none;">
+                        <button type="button" onclick="setExpressionPreset('x * 1.8 + 32')" class="preset-btn">°C to °F</button>
+                        <button type="button" onclick="setExpressionPreset('(x - 32) / 1.8')" class="preset-btn">°F to °C</button>
+                        <button type="button" onclick="setExpressionPreset('x * x / 1000')" class="preset-btn">Square Law</button>
+                        <button type="button" onclick="setExpressionPreset('x + (x * x * 0.001)')" class="preset-btn">Non-linear Fix</button>
                     </div>
                 </div>
             </div>
