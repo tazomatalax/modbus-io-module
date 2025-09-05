@@ -396,6 +396,117 @@ function ipToString(arr) {
   return `${arr[0]}.${arr[1]}.${arr[2]}.${arr[3]}`;
 }
 
+// Helper function to get sensor data (simulated or real)
+function getSensorData(sensor) {
+  // In simulator mode: provide simulated data if simulation is enabled for this sensor type
+  // On hardware: this would read from actual I2C devices
+  
+  const sensorTypeLower = sensor.type.toLowerCase();
+  
+  // Temperature sensors
+  if (sensorTypeLower.includes('temperature') || 
+      sensorTypeLower.includes('bmp') || 
+      sensorTypeLower.includes('bme') || 
+      sensorTypeLower.includes('sht') ||
+      sensorTypeLower.includes('tmp') ||
+      sensorTypeLower.includes('lm35') ||
+      sensorTypeLower.includes('ds18b20')) {
+    
+    // Apply calibration if present
+    let temp = state.io.temperature;
+    if (sensor.calibration && sensor.calibration.offset !== undefined) {
+      temp += sensor.calibration.offset;
+    }
+    if (sensor.calibration && sensor.calibration.scale !== undefined && sensor.calibration.scale !== 0) {
+      temp *= sensor.calibration.scale;
+    }
+    
+    return parseFloat(temp.toFixed(2));
+  }
+  
+  // Humidity sensors
+  if (sensorTypeLower.includes('humidity') || 
+      sensorTypeLower.includes('bme') || 
+      sensorTypeLower.includes('sht') ||
+      sensorTypeLower.includes('hih')) {
+    
+    let humidity = state.io.humidity;
+    if (sensor.calibration && sensor.calibration.offset !== undefined) {
+      humidity += sensor.calibration.offset;
+    }
+    if (sensor.calibration && sensor.calibration.scale !== undefined && sensor.calibration.scale !== 0) {
+      humidity *= sensor.calibration.scale;
+    }
+    
+    return parseFloat(humidity.toFixed(2));
+  }
+  
+  // Pressure sensors
+  if (sensorTypeLower.includes('pressure') || 
+      sensorTypeLower.includes('bmp') || 
+      sensorTypeLower.includes('bme')) {
+    
+    let pressure = state.io.pressure;
+    if (sensor.calibration && sensor.calibration.offset !== undefined) {
+      pressure += sensor.calibration.offset;
+    }
+    if (sensor.calibration && sensor.calibration.scale !== undefined && sensor.calibration.scale !== 0) {
+      pressure *= sensor.calibration.scale;
+    }
+    
+    return parseFloat(pressure.toFixed(2));
+  }
+  
+  // Generic sensor - return a simulated value based on the sensor's modbus register
+  // This allows for custom sensor types
+  if (sensor.modbusRegister !== undefined) {
+    const baseValue = 20 + (sensor.modbusRegister % 10) * 2;
+    const variation = Math.sin(Date.now() / (5000 + sensor.modbusRegister * 100)) * 5;
+    let value = baseValue + variation;
+    
+    if (sensor.calibration) {
+      if (sensor.calibration.offset !== undefined) value += sensor.calibration.offset;
+      if (sensor.calibration.scale !== undefined && sensor.calibration.scale !== 0) value *= sensor.calibration.scale;
+    }
+    
+    return parseFloat(value.toFixed(2));
+  }
+  
+  return null;
+}
+
+// Helper function to determine the data key for a sensor
+function getSensorDataKey(sensor) {
+  const sensorTypeLower = sensor.type.toLowerCase();
+  
+  // Use standard keys for common sensor types for UI compatibility
+  if (sensorTypeLower.includes('temperature') || 
+      sensorTypeLower.includes('bmp') || 
+      sensorTypeLower.includes('bme') || 
+      sensorTypeLower.includes('sht') ||
+      sensorTypeLower.includes('tmp') ||
+      sensorTypeLower.includes('lm35') ||
+      sensorTypeLower.includes('ds18b20')) {
+    return 'temperature';
+  }
+  
+  if (sensorTypeLower.includes('humidity') || 
+      sensorTypeLower.includes('bme') || 
+      sensorTypeLower.includes('sht') ||
+      sensorTypeLower.includes('hih')) {
+    return 'humidity';
+  }
+  
+  if (sensorTypeLower.includes('pressure') || 
+      sensorTypeLower.includes('bmp') || 
+      sensorTypeLower.includes('bme')) {
+    return 'pressure';
+  }
+  
+  // For custom sensors, use a sanitized version of the name
+  return sensor.name.toLowerCase().replace(/[^a-z0-9]/g, '_');
+}
+
 // Scan the UI script to discover which i2c_sensors keys it expects
 function scanUISensorKeys() {
   try {
@@ -518,7 +629,11 @@ app.get('/config', (req, res) => {
     modbus_client_count: state.connectedClients,
     available_sensors: state.contract.serverSensorKeys,
     modbus_server_running: state.modbusServerRunning,
-    modbus_server_error: state.modbusServerError
+    modbus_server_error: state.modbusServerError,
+    // Hardware/Simulator detection
+    is_simulator: true, // This would be false on actual hardware
+    firmware_version: "Simulator v1.0", // On hardware: actual firmware version
+    device_type: "Modbus IO Module Simulator"
   };
   if (state.connectedClients > 0) {
     resp.modbus_clients = state.modbusClients.map((c, idx) => ({
@@ -571,28 +686,24 @@ app.get('/iostatus', (req, res) => {
     ai: io.aIn.slice()
   };
 
-  // Only include sensor data if global simulation is enabled AND sensors are configured
-  if (state.sim.globalSimulationEnabled && currentSensorConfig && currentSensorConfig.sensors) {
+  // Include sensor data based on configured sensors (real hardware would read from actual I2C devices)
+  // In simulator: provide simulated data for configured sensors
+  // On hardware: this would be replaced with actual I2C sensor readings
+  if (currentSensorConfig && currentSensorConfig.sensors) {
     const enabledSensors = currentSensorConfig.sensors.filter(sensor => sensor.enabled);
     
     if (enabledSensors.length > 0) {
-      // Only show sensor data for configured and enabled sensors
       const i2c_sensors = {};
       
-      // Check if we have temperature and humidity sensors configured
-      const tempSensor = enabledSensors.find(s => 
-        s.type && (s.type.includes('BME280') || s.type.includes('BMP280') || s.type.includes('SHT30') || s.type.includes('Temperature'))
-      );
-      const humiditySensor = enabledSensors.find(s => 
-        s.type && (s.type.includes('BME280') || s.type.includes('SHT30') || s.type.includes('Humidity'))
-      );
-      
-      if (tempSensor) {
-        i2c_sensors.temperature = io.temperature.toFixed(2);
-      }
-      if (humiditySensor) {
-        i2c_sensors.humidity = io.humidity.toFixed(2);
-      }
+      // Process each enabled sensor
+      enabledSensors.forEach(sensor => {
+        const sensorData = getSensorData(sensor);
+        if (sensorData !== null) {
+          // Use the sensor's configured name as the key, or fall back to a standard name
+          const dataKey = getSensorDataKey(sensor);
+          i2c_sensors[dataKey] = sensorData;
+        }
+      });
       
       // Only add i2c_sensors to response if we have at least one sensor value
       if (Object.keys(i2c_sensors).length > 0) {

@@ -14,9 +14,15 @@
         <div class="device-info-card">
             <div class="device-header">
                 <h1>Modbus TCP IO Module</h1>
-                <div class="status-item">
-                    <span class="status-indicator" id="modbus-status"></span>
-                    <span id="modbus-status-text">Loading...</span>
+                <div class="device-info-header">
+                    <div class="device-info-item">
+                        <span class="device-type" id="device-type">Loading...</span>
+                        <span class="firmware-version" id="firmware-version">Loading...</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-indicator" id="modbus-status"></span>
+                        <span id="modbus-status-text">Loading...</span>
+                    </div>
                 </div>
             </div>
             
@@ -237,12 +243,13 @@
                                 <th>I2C Address</th>
                                 <th>Modbus Register</th>
                                 <th>Enabled</th>
+                                <th>Calibrated</th>
                                 <th>Actions</th>
                             </tr>
                         </thead>
                         <tbody id="sensor-table-body">
                             <tr class="no-sensors">
-                                <td colspan="6">No sensors configured</td>
+                                <td colspan="7">No sensors configured</td>
                             </tr>
                         </tbody>
                     </table>
@@ -310,10 +317,77 @@
                         <span class="checkbox-text">Enable sensor</span>
                     </label>
                 </div>
+                
+                <div class="form-section">
+                    <h4>Calibration Settings</h4>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="sensor-calibration-offset">Offset</label>
+                            <input type="number" id="sensor-calibration-offset" step="0.01" value="0" placeholder="0.0">
+                            <small class="form-help">Added to raw sensor reading</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="sensor-calibration-scale">Scale Factor</label>
+                            <input type="number" id="sensor-calibration-scale" step="0.001" value="1" placeholder="1.0" min="0.001">
+                            <small class="form-help">Raw reading multiplied by this factor</small>
+                        </div>
+                    </div>
+                    <small class="form-help">Final value = (Raw × Scale) + Offset</small>
+                </div>
             </form>
             <div class="modal-footer">
                 <button type="button" onclick="hideSensorModal()">Cancel</button>
                 <button type="button" onclick="saveSensor()">Save</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Calibration modal -->
+    <div class="modal-overlay" id="calibration-modal-overlay" onclick="hideCalibrationModal()">
+        <div class="modal" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <h3 id="calibration-modal-title">Calibrate Sensor</h3>
+                <button class="modal-close" onclick="hideCalibrationModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="calibration-info">
+                    <div class="sensor-info">
+                        <strong>Sensor:</strong> <span id="calibration-sensor-name"></span><br>
+                        <strong>Type:</strong> <span id="calibration-sensor-type"></span>
+                    </div>
+                </div>
+                
+                <div class="form-section">
+                    <h4>Calibration Parameters</h4>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="calibration-offset">Offset</label>
+                            <input type="number" id="calibration-offset" step="0.01" value="0" placeholder="0.0">
+                            <small class="form-help">Added to raw sensor reading</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="calibration-scale">Scale Factor</label>
+                            <input type="number" id="calibration-scale" step="0.001" value="1" placeholder="1.0" min="0.001">
+                            <small class="form-help">Raw reading multiplied by this factor</small>
+                        </div>
+                    </div>
+                    <div class="calibration-formula">
+                        <strong>Formula:</strong> Final Value = (Raw Reading × Scale Factor) + Offset
+                    </div>
+                </div>
+                
+                <div class="calibration-examples">
+                    <h4>Common Calibrations</h4>
+                    <div class="calibration-presets">
+                        <button type="button" onclick="resetCalibration()" class="preset-btn">Reset to Default</button>
+                        <button type="button" onclick="document.getElementById('calibration-offset').value = 2.0; document.getElementById('calibration-scale').value = 1.0;" class="preset-btn">+2°C Offset</button>
+                        <button type="button" onclick="document.getElementById('calibration-offset').value = 0; document.getElementById('calibration-scale').value = 0.95;" class="preset-btn">5% Scale Down</button>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" onclick="hideCalibrationModal()">Cancel</button>
+                <button type="button" onclick="saveCalibration()">Save Calibration</button>
             </div>
         </div>
     </div>

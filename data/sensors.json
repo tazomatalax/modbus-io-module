@@ -5,24 +5,25 @@
   "sensors": [
     {
       "enabled": true,
-      "name": "BME280_Main",
+      "name": "Environment Temperature",
       "type": "BME280",
       "i2cAddress": 118,
-      "modbusRegister": 10
+      "modbusRegister": 10,
+      "calibration": {
+        "offset": 0,
+        "scale": 1
+      }
     },
     {
       "enabled": true,
-      "name": "pH_Sensor",
-      "type": "EZO_PH",
-      "i2cAddress": 99,
-      "modbusRegister": 15
-    },
-    {
-      "enabled": false,
-      "name": "Distance_Sensor",
-      "type": "VL53L1X",
-      "i2cAddress": 41,
-      "modbusRegister": 20
+      "name": "Environment Humidity",
+      "type": "BME280",
+      "i2cAddress": 118,
+      "modbusRegister": 11,
+      "calibration": {
+        "offset": -2.5,
+        "scale": 1.02
+      }
     }
   ]
 }

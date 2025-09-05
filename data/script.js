@@ -216,6 +216,18 @@ function loadConfig() {
             }
             
             console.log("Configuration loaded successfully:", data);
+            
+            // Detect device type and store device info
+            isSimulator = data.is_simulator || false;
+            deviceInfo = {
+                isSimulator: isSimulator,
+                firmwareVersion: data.firmware_version || "Unknown",
+                deviceType: data.device_type || "Modbus IO Module"
+            };
+            
+            // Update device info display
+            updateDeviceInfoDisplay();
+            
             document.getElementById('dhcp').checked = data.dhcp;
             document.getElementById('ip').value = data.ip;
             document.getElementById('subnet').value = data.subnet;
@@ -384,17 +396,34 @@ function updateIOStatus() {
             // Update analog chart with new values
             updateAnalogChart(data.ai);
             
-            // Update I2C sensors
+            // Update I2C sensors with dynamic display
             const i2cContainer = document.getElementById('i2c-sensors-container');
-            if (data.i2c_sensors) {
+            if (data.i2c_sensors && Object.keys(data.i2c_sensors).length > 0) {
+                let sensorHtml = '';
+                
+                // Display all configured sensor values
+                for (const [sensorKey, sensorValue] of Object.entries(data.i2c_sensors)) {
+                    const displayName = getSensorDisplayName(sensorKey);
+                    const unit = getSensorUnit(sensorKey);
+                    
+                    sensorHtml += `
+                        <div class="io-item analog-value">
+                            <span><strong>${displayName}</strong></span>
+                            <span>${sensorValue} ${unit}</span>
+                        </div>
+                    `;
+                }
+                
+                i2cContainer.innerHTML = sensorHtml;
+            } else {
+                // Show message when no sensor data is available
+                const messageText = isSimulator 
+                    ? 'No sensors configured or sensor simulation disabled' 
+                    : 'No sensors configured';
+                
                 i2cContainer.innerHTML = `
-                    <div class="io-item analog-value">
-                        <span><strong>Temperature</strong></span>
-                        <span>${data.i2c_sensors.temperature} °C</span>
-                    </div>
-                    <div class="io-item analog-value">
-                        <span><strong>Humidity</strong></span>
-                        <span>${data.i2c_sensors.humidity} %</span>
+                    <div class="io-item" style="color: #666; font-style: italic;">
+                        <span>${messageText}</span>
                     </div>
                 `;
             }
@@ -782,8 +811,72 @@ function formatDuration(seconds) {
     }
 }
 
-// Global simulation control functions
+// Device mode detection
+let isSimulator = false;
+let deviceInfo = {};
+
+// Global simulation control functions (only used in simulator mode)
 let globalSimulationEnabled = false;
+
+function updateDeviceInfoDisplay() {
+    console.log("Updating device info display:", deviceInfo);
+    
+    // Update device info in the UI if elements exist
+    const deviceTypeElement = document.getElementById('device-type');
+    const firmwareVersionElement = document.getElementById('firmware-version');
+    
+    if (deviceTypeElement) {
+        deviceTypeElement.textContent = deviceInfo.deviceType;
+    }
+    
+    if (firmwareVersionElement) {
+        firmwareVersionElement.textContent = deviceInfo.firmwareVersion;
+    }
+    
+    // Show/hide simulator-specific controls
+    const simControlsCard = document.getElementById('sim-controls-card');
+    const globalSimToggle = document.getElementById('global-simulation-toggle');
+    
+    if (simControlsCard) {
+        simControlsCard.style.display = deviceInfo.isSimulator ? 'block' : 'none';
+    }
+    
+    // Update sensor data display logic
+    updateSensorDataDisplayMode();
+}
+
+function updateSensorDataDisplayMode() {
+    // This function can be used to adjust UI behavior based on hardware vs simulator
+    console.log("Sensor data display mode updated for", deviceInfo.isSimulator ? "simulator" : "hardware");
+}
+
+function getSensorDisplayName(sensorKey) {
+    const displayNames = {
+        'temperature': 'Temperature',
+        'humidity': 'Humidity',
+        'pressure': 'Pressure',
+        'light': 'Light Level',
+        'ph': 'pH Level',
+        'ec': 'Electrical Conductivity',
+        'co2': 'CO2 Level'
+    };
+    
+    return displayNames[sensorKey] || sensorKey.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+}
+
+function getSensorUnit(sensorKey) {
+    const units = {
+        'temperature': '°C',
+        'humidity': '%',
+        'pressure': 'hPa',
+        'light': 'lux',
+        'ph': 'pH',
+        'ec': 'µS/cm',
+        'co2': 'ppm'
+    };
+    
+    return units[sensorKey] || '';
+}
 
 function loadSimulationState() {
     console.log("Loading global simulation state...");
@@ -796,16 +889,20 @@ function loadSimulationState() {
         })
         .then(data => {
             globalSimulationEnabled = data.enabled || false;
-            document.getElementById('global-simulation-toggle').checked = globalSimulationEnabled;
-            document.getElementById('simulation-status-text').textContent = globalSimulationEnabled ? 'ON' : 'OFF';
+            if (isSimulator) {
+                document.getElementById('global-simulation-toggle').checked = globalSimulationEnabled;
+                document.getElementById('simulation-status-text').textContent = globalSimulationEnabled ? 'ON' : 'OFF';
+            }
             console.log("Global simulation state:", globalSimulationEnabled ? 'ON' : 'OFF');
         })
         .catch(error => {
             console.error('Error loading simulation state:', error);
             // Default to OFF on error
             globalSimulationEnabled = false;
-            document.getElementById('global-simulation-toggle').checked = false;
-            document.getElementById('simulation-status-text').textContent = 'OFF';
+            if (isSimulator) {
+                document.getElementById('global-simulation-toggle').checked = false;
+                document.getElementById('simulation-status-text').textContent = 'OFF';
+            }
         });
 }
 
@@ -1096,7 +1193,7 @@ function renderSensorTable() {
     const tableBody = document.getElementById('sensor-table-body');
     
     if (sensorConfigData.length === 0) {
-        tableBody.innerHTML = '<tr class="no-sensors"><td colspan="6">No sensors configured</td></tr>';
+        tableBody.innerHTML = '<tr class="no-sensors"><td colspan="7">No sensors configured</td></tr>';
         return;
     }
     
@@ -1104,6 +1201,9 @@ function renderSensorTable() {
         const i2cAddress = sensor.i2cAddress ? `0x${sensor.i2cAddress.toString(16).toUpperCase().padStart(2, '0')}` : 'N/A';
         const enabledClass = sensor.enabled ? 'sensor-enabled' : 'sensor-disabled';
         const enabledText = sensor.enabled ? 'Yes' : 'No';
+        const hasCalibration = sensor.calibration && (sensor.calibration.offset !== undefined || sensor.calibration.scale !== undefined);
+        const calibrationText = hasCalibration ? 'Yes' : 'No';
+        const calibrationClass = hasCalibration ? 'calibration-enabled' : 'calibration-disabled';
         
         return `
             <tr>
@@ -1112,9 +1212,11 @@ function renderSensorTable() {
                 <td>${i2cAddress}</td>
                 <td>${sensor.modbusRegister || 'N/A'}</td>
                 <td class="${enabledClass}">${enabledText}</td>
+                <td class="${calibrationClass}">${calibrationText}</td>
                 <td>
                     <div class="sensor-actions">
                         <button class="edit-btn" onclick="editSensor(${index})" title="Edit sensor">Edit</button>
+                        <button class="calibrate-btn" onclick="calibrateSensor(${index})" title="Calibrate sensor">Calibrate</button>
                         <button class="delete-btn" onclick="deleteSensor(${index})" title="Delete sensor">Delete</button>
                     </div>
                 </td>
@@ -1132,6 +1234,11 @@ function showAddSensorModal() {
     document.getElementById('sensor-modal-title').textContent = 'Add Sensor';
     document.getElementById('sensor-form').reset();
     document.getElementById('sensor-enabled').checked = true;
+    
+    // Reset calibration to defaults
+    document.getElementById('sensor-calibration-offset').value = 0;
+    document.getElementById('sensor-calibration-scale').value = 1;
+    
     document.getElementById('sensor-modal-overlay').classList.add('show');
 }
 
@@ -1151,6 +1258,15 @@ function editSensor(index) {
     document.getElementById('sensor-i2c-address').value = sensor.i2cAddress ? `0x${sensor.i2cAddress.toString(16).toUpperCase().padStart(2, '0')}` : '';
     document.getElementById('sensor-modbus-register').value = sensor.modbusRegister || '';
     document.getElementById('sensor-enabled').checked = sensor.enabled;
+    
+    // Load calibration data if it exists
+    if (sensor.calibration) {
+        document.getElementById('sensor-calibration-offset').value = sensor.calibration.offset || 0;
+        document.getElementById('sensor-calibration-scale').value = sensor.calibration.scale || 1;
+    } else {
+        document.getElementById('sensor-calibration-offset').value = 0;
+        document.getElementById('sensor-calibration-scale').value = 1;
+    }
     
     document.getElementById('sensor-modal-overlay').classList.add('show');
 }
@@ -1228,12 +1344,20 @@ function saveSensor() {
         return;
     }
     
+    // Get calibration data
+    const calibrationOffset = parseFloat(document.getElementById('sensor-calibration-offset').value) || 0;
+    const calibrationScale = parseFloat(document.getElementById('sensor-calibration-scale').value) || 1;
+    
     const sensor = {
         enabled: enabled,
         name: name,
         type: type,
         i2cAddress: i2cAddress,
-        modbusRegister: modbusRegister
+        modbusRegister: modbusRegister,
+        calibration: {
+            offset: calibrationOffset,
+            scale: calibrationScale
+        }
     };
     
     if (editingSensorIndex === -1) {
@@ -1252,6 +1376,74 @@ function saveSensor() {
     
     renderSensorTable();
     hideSensorModal();
+}
+
+// Show calibration modal for a specific sensor
+function calibrateSensor(index) {
+    if (index < 0 || index >= sensorConfigData.length) {
+        showToast('Invalid sensor index', 'error');
+        return;
+    }
+    
+    const sensor = sensorConfigData[index];
+    editingSensorIndex = index;
+    
+    document.getElementById('calibration-modal-title').textContent = `Calibrate ${sensor.name}`;
+    document.getElementById('calibration-sensor-name').textContent = sensor.name;
+    document.getElementById('calibration-sensor-type').textContent = sensor.type;
+    
+    // Load current calibration values
+    if (sensor.calibration) {
+        document.getElementById('calibration-offset').value = sensor.calibration.offset || 0;
+        document.getElementById('calibration-scale').value = sensor.calibration.scale || 1;
+    } else {
+        document.getElementById('calibration-offset').value = 0;
+        document.getElementById('calibration-scale').value = 1;
+    }
+    
+    document.getElementById('calibration-modal-overlay').classList.add('show');
+}
+
+// Hide calibration modal
+function hideCalibrationModal() {
+    document.getElementById('calibration-modal-overlay').classList.remove('show');
+    editingSensorIndex = -1;
+}
+
+// Save calibration data
+function saveCalibration() {
+    if (editingSensorIndex < 0 || editingSensorIndex >= sensorConfigData.length) {
+        showToast('Invalid sensor selected', 'error');
+        return;
+    }
+    
+    const offset = parseFloat(document.getElementById('calibration-offset').value) || 0;
+    const scale = parseFloat(document.getElementById('calibration-scale').value) || 1;
+    
+    if (scale === 0) {
+        showToast('Scale factor cannot be zero', 'error');
+        return;
+    }
+    
+    // Update sensor calibration
+    if (!sensorConfigData[editingSensorIndex].calibration) {
+        sensorConfigData[editingSensorIndex].calibration = {};
+    }
+    
+    sensorConfigData[editingSensorIndex].calibration.offset = offset;
+    sensorConfigData[editingSensorIndex].calibration.scale = scale;
+    
+    // Update UI
+    renderSensorTable();
+    hideCalibrationModal();
+    
+    showToast('Calibration updated successfully', 'success');
+}
+
+// Reset calibration to defaults
+function resetCalibration() {
+    document.getElementById('calibration-offset').value = 0;
+    document.getElementById('calibration-scale').value = 1;
 }
 
 // Delete sensor
