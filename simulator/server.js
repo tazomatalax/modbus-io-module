@@ -364,9 +364,9 @@ const state = {
     dInRaw: Array(8).fill(false),
     dInLatched: Array(8).fill(false),
     dOut: Array(8).fill(false),
-    aIn: [0, 0, 0],
-    temperature: 23.45,
-    humidity: 55.20,
+    aIn: [1650, 1200, 800], // Realistic mid-range values when simulation is off
+    temperature: 22.5,      // Room temperature default
+    humidity: 45.0,         // Typical indoor humidity
     pressure: 1013.25,
   },
   modbusClients: [],
@@ -646,18 +646,24 @@ function updateSensors() {
   const t = Date.now();
   
   // I2C-like sensors
-  if (state.sim.sensorsMode === 'auto') {
+  // Only simulate if global simulation is enabled AND in auto mode
+  if (state.sim.globalSimulationEnabled && state.sim.sensorsMode === 'auto') {
     state.io.temperature = 23.45 + Math.sin(t / 10000) * 2.0;
     state.io.humidity = 55.2 + Math.cos(t / 8000) * 5.0;
     state.io.pressure = 1013.25 + Math.sin(t / 15000) * 10.0;
   }
+  // If global simulation is disabled, temperature/humidity/pressure remain at their last values
+  // On real hardware, these would be actual I2C sensor readings
   
   // Analog inputs in mV (simulate 0-3300 range)
-  if (state.sim.aiMode === 'auto') {
+  // Only simulate if global simulation is enabled AND in auto mode
+  if (state.sim.globalSimulationEnabled && state.sim.aiMode === 'auto') {
     state.io.aIn[0] = Math.round(1650 + 800 * Math.sin(t / 5000));
     state.io.aIn[1] = Math.round(1200 + 600 * Math.cos(t / 7000));
     state.io.aIn[2] = Math.round(800 + 500 * Math.sin(t / 9000));
   }
+  // If global simulation is disabled, analog inputs remain at their last values
+  // On real hardware, these would be actual ADC readings
 }
 
 // Digital inputs simulation: random toggles with latching behavior
