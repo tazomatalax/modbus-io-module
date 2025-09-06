@@ -1069,6 +1069,66 @@ function resetSingleLatch(inputIndex) {
 let sensorConfigData = [];
 let editingSensorIndex = -1;
 
+// EZO Calibration Management
+let currentEzoSensorIndex = -1;
+
+// EZO Sensor calibration configurations
+const EZO_CALIBRATION_CONFIG = {
+    'EZO_PH': {
+        name: 'pH Sensor',
+        buttons: [
+            { label: 'Mid (7.0)', command: 'Cal,mid,7.00', type: 'primary', description: 'Calibrate mid point (pH 7.0) - Always calibrate this first!' },
+            { label: 'Low (4.0)', command: 'Cal,low,4.00', type: 'secondary', description: 'Calibrate low point (pH 4.0)' },
+            { label: 'High (10.0)', command: 'Cal,high,10.00', type: 'secondary', description: 'Calibrate high point (pH 10.0)' },
+            { label: 'Clear Cal', command: 'Cal,clear', type: 'warning', description: 'Clear all calibration data' },
+            { label: 'Check Status', command: 'Cal,?', type: 'info', description: 'Check calibration status' }
+        ],
+        notes: [
+            '• Always calibrate Mid point (pH 7.0) FIRST - this clears previous calibrations',
+            '• Rinse probe thoroughly between different calibration solutions',
+            '• Allow readings to stabilize before issuing calibration commands',
+            '• Use pH buffer solutions at current temperature',
+            '• Expected responses: *OK (success), *ER (error), or calibration status'
+        ]
+    },
+    'EZO_EC': {
+        name: 'Conductivity Sensor', 
+        buttons: [
+            { label: 'Dry Cal', command: 'Cal,dry', type: 'primary', description: 'Calibrate dry (probe must be completely dry) - Always do this first!' },
+            { label: 'Single Point', command: 'Cal,one,{value}', type: 'secondary', description: 'Single point calibration (enter EC value)', needsValue: true },
+            { label: 'Low Point', command: 'Cal,low,{value}', type: 'secondary', description: 'Low point calibration (enter EC value)', needsValue: true },
+            { label: 'High Point', command: 'Cal,high,{value}', type: 'secondary', description: 'High point calibration (enter EC value)', needsValue: true },
+            { label: 'Clear Cal', command: 'Cal,clear', type: 'warning', description: 'Clear all calibration data' },
+            { label: 'Check Status', command: 'Cal,?', type: 'info', description: 'Check calibration status' }
+        ],
+        notes: [
+            '• Always calibrate Dry point FIRST with completely dry probe',
+            '• For dual-point calibration: do Dry, then Low, then High',
+            '• For single-point: do Dry, then Single Point',
+            '• Use certified conductivity standards',
+            '• Typical values: Low ~1000 µS/cm, High ~80000 µS/cm',
+            '• Expected responses: *OK (success), *ER (error), or calibration status'
+        ]
+    },
+    'EZO_DO': {
+        name: 'Dissolved Oxygen Sensor',
+        buttons: [
+            { label: 'Atmospheric', command: 'Cal,atmospheric', type: 'primary', description: 'Calibrate at atmospheric oxygen levels (probe in air)' },
+            { label: 'Zero Point', command: 'Cal,zero', type: 'secondary', description: 'Calibrate zero dissolved oxygen (probe in zero DO solution)' },
+            { label: 'Clear Cal', command: 'Cal,clear', type: 'warning', description: 'Clear all calibration data' },
+            { label: 'Check Status', command: 'Cal,?', type: 'info', description: 'Check calibration status' }
+        ],
+        notes: [
+            '• For Atmospheric calibration: remove probe cap and expose to air until stable',
+            '• Expected reading after atmospheric cal: 9.09-9.1X mg/L',
+            '• Zero calibration is optional (only needed for readings under 1 mg/L)',
+            '• For zero cal: use zero dissolved oxygen solution, stir to remove air bubbles',
+            '• Wait for readings to stabilize before calibrating',
+            '• Expected responses: *OK (success), *ER (error), or calibration status'
+        ]
+    }
+};
+
 // Load sensor configuration from the server
 function loadSensorConfig() {
     console.log("Loading sensor configuration...");
@@ -1217,6 +1277,7 @@ function renderSensorTable() {
                     <div class="sensor-actions">
                         <button class="edit-btn" onclick="editSensor(${index})" title="Edit sensor">Edit</button>
                         <button class="calibrate-btn" onclick="calibrateSensor(${index})" title="Calibrate sensor">Calibrate</button>
+                        ${sensor.type.startsWith('EZO_') ? '<button class="ezo-calibrate-btn" onclick="showEzoCalibrationModal(' + index + ')" title="EZO Calibration">EZO Cal</button>' : ''}
                         <button class="delete-btn" onclick="deleteSensor(${index})" title="Delete sensor">Delete</button>
                     </div>
                 </td>
@@ -1830,4 +1891,141 @@ function saveSensorConfig() {
         }
         showToast('Error saving sensor configuration: ' + error.message, 'error', false, 5000);
     });
+}
+
+// EZO Calibration Functions
+
+function showEzoCalibrationModal(index) {
+    if (index < 0 || index >= sensorConfigData.length) {
+        showToast('Invalid sensor index', 'error');
+        return;
+    }
+    
+    const sensor = sensorConfigData[index];
+    if (!sensor.type.startsWith('EZO_')) {
+        showToast('This sensor is not an EZO sensor', 'error');
+        return;
+    }
+    
+    currentEzoSensorIndex = index;
+    
+    // Update modal title and sensor info
+    document.getElementById('ezo-calibration-modal-title').textContent = `EZO Calibration - ${sensor.name}`;
+    document.getElementById('ezo-calibration-sensor-name').textContent = sensor.name;
+    document.getElementById('ezo-calibration-sensor-type').textContent = sensor.type;
+    document.getElementById('ezo-calibration-sensor-address').textContent = `0x${sensor.i2cAddress.toString(16).toUpperCase().padStart(2, '0')}`;
+    
+    // Clear previous response
+    document.getElementById('ezo-sensor-response').textContent = 'No response yet';
+    
+    // Get calibration config for this sensor type
+    const calibrationConfig = EZO_CALIBRATION_CONFIG[sensor.type];
+    if (!calibrationConfig) {
+        showToast(`Calibration not supported for sensor type: ${sensor.type}`, 'error');
+        return;
+    }
+    
+    // Populate calibration buttons
+    const buttonsContainer = document.getElementById('ezo-calibration-buttons');
+    buttonsContainer.innerHTML = calibrationConfig.buttons.map(button => {
+        const buttonClass = `calibration-btn ${button.type}`;
+        const onclick = button.needsValue ? 
+            `sendEzoCalibrationCommandWithValue('${button.command}', '${button.label}')` :
+            `sendEzoCalibrationCommand('${button.command}')`;
+        
+        return `<button class="${buttonClass}" onclick="${onclick}" title="${button.description}">
+            ${button.label}
+        </button>`;
+    }).join('');
+    
+    // Populate calibration notes
+    const notesContainer = document.getElementById('ezo-calibration-notes');
+    notesContainer.innerHTML = '<ul>' + calibrationConfig.notes.map(note => `<li>${note}</li>`).join('') + '</ul>';
+    
+    // Show the modal
+    document.getElementById('ezo-calibration-modal-overlay').classList.add('show');
+}
+
+function hideEzoCalibrationModal() {
+    document.getElementById('ezo-calibration-modal-overlay').classList.remove('show');
+    currentEzoSensorIndex = -1;
+}
+
+function sendEzoCalibrationCommand(command) {
+    if (currentEzoSensorIndex < 0) {
+        showToast('No sensor selected for calibration', 'error');
+        return;
+    }
+    
+    const sensor = sensorConfigData[currentEzoSensorIndex];
+    console.log(`Sending EZO calibration command '${command}' to sensor ${sensor.name}`);
+    
+    fetch('/api/sensor/command', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+            sensorIndex: currentEzoSensorIndex, 
+            command: command 
+        })
+    })
+    .then(response => {
+        if (!response.ok) {
+            throw new Error('Network response was not ok');
+        }
+        return response.json();
+    })
+    .then(data => {
+        if (data.success) {
+            showToast(`Command '${command}' sent successfully`, 'success');
+            // Clear the response display and show "Waiting..."
+            document.getElementById('ezo-sensor-response').textContent = 'Waiting for response...';
+        } else {
+            showToast(`Failed to send command: ${data.message}`, 'error');
+        }
+    })
+    .catch(error => {
+        showToast(`Error sending command: ${error.message}`, 'error');
+    });
+}
+
+function sendEzoCalibrationCommandWithValue(commandTemplate, buttonLabel) {
+    const value = prompt(`Enter the value for ${buttonLabel}:`);
+    if (value === null) return; // User cancelled
+    
+    if (!value.trim()) {
+        showToast('Please enter a valid value', 'error');
+        return;
+    }
+    
+    // Replace {value} placeholder with the entered value
+    const command = commandTemplate.replace('{value}', value.trim());
+    sendEzoCalibrationCommand(command);
+}
+
+// Modify updateIOStatus to update EZO calibration response when modal is open
+const originalUpdateIOStatus = updateIOStatus;
+
+function updateIOStatus() {
+    // Call the original function
+    originalUpdateIOStatus();
+    
+    // Update EZO calibration modal response if it's open
+    const ezoModal = document.getElementById('ezo-calibration-modal-overlay');
+    if (ezoModal && ezoModal.classList.contains('show') && currentEzoSensorIndex >= 0) {
+        // Get the latest sensor data from the iostatus response
+        fetch('/iostatus')
+            .then(response => response.json())
+            .then(data => {
+                if (data.ezo_sensors && data.ezo_sensors[currentEzoSensorIndex]) {
+                    const sensorData = data.ezo_sensors[currentEzoSensorIndex];
+                    const responseElement = document.getElementById('ezo-sensor-response');
+                    if (sensorData.response && sensorData.response.trim() !== '') {
+                        responseElement.textContent = sensorData.response;
+                    }
+                }
+            })
+            .catch(error => {
+                console.log('Could not update EZO sensor response:', error);
+            });
+    }
 }

@@ -34,8 +34,8 @@ static bool ezoSensorsInitialized = false;
  * - Coils (FC5): 100-107 - Reset latches for digital inputs 0-7
  *   (Write 1 to reset the latch for the corresponding input)
  * - Input Registers (FC4): 0-2 - Analog input values
- * - Input Registers (FC4): 3 - Temperature (scaled x100, e.g., 2550 = 25.50°C)
- * - Input Registers (FC4): 4 - Humidity (scaled x100, e.g., 6050 = 60.50%)
+ * - Input Registers (FC4): 3 - Temperature (scaled x100, e.g., 2550 = 25.50°C) [PLACEHOLDER - COMMENTED OUT]
+ * - Input Registers (FC4): 4 - Humidity (scaled x100, e.g., 6050 = 60.50%) [PLACEHOLDER - COMMENTED OUT]
  * 
  * Web Interface:
  * - Network Configuration (IP, Gateway, Subnet, DHCP)
@@ -792,8 +792,9 @@ void updateIOpins() {
     static uint32_t sensorReadTime = 0;
     if (millis() - sensorReadTime > 1000) { // Update every 1 second
         // Initialize sensor values to safe defaults
-        ioStatus.temperature = 0.0;
-        ioStatus.humidity = 0.0;
+        // PLACEHOLDER SENSORS - COMMENTED OUT (only enable when simulation is on)
+        // ioStatus.temperature = 0.0;
+        // ioStatus.humidity = 0.0;
         ioStatus.pressure = 0.0;
         
         // Read from configured sensors
@@ -878,11 +879,12 @@ void updateIOForClient(int clientIndex) {
     }
     
     // I2C Sensor Data Modbus Mapping - Convert float values to 16-bit integers
-    uint16_t temp_x_100 = (uint16_t)(ioStatus.temperature * 100);
-    uint16_t hum_x_100 = (uint16_t)(ioStatus.humidity * 100);
+    // PLACEHOLDER SENSORS - COMMENTED OUT (only enable when simulation is on or real sensors added)
+    // uint16_t temp_x_100 = (uint16_t)(ioStatus.temperature * 100);
+    // uint16_t hum_x_100 = (uint16_t)(ioStatus.humidity * 100);
 
-    modbusClients[clientIndex].server.inputRegisterWrite(3, temp_x_100); // Temperature
-    modbusClients[clientIndex].server.inputRegisterWrite(4, hum_x_100); // Humidity
+    // modbusClients[clientIndex].server.inputRegisterWrite(3, temp_x_100); // Temperature
+    // modbusClients[clientIndex].server.inputRegisterWrite(4, hum_x_100); // Humidity
     
     // Check coils 100-107 for latch reset commands
     for (int i = 0; i < 8; i++) {

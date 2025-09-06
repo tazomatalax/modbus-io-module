@@ -505,6 +505,49 @@
         </div>
     </div>
     
+    <!-- EZO Sensor Calibration modal -->
+    <div class="modal-overlay" id="ezo-calibration-modal-overlay" onclick="hideEzoCalibrationModal()">
+        <div class="modal" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <h3 id="ezo-calibration-modal-title">EZO Sensor Calibration</h3>
+                <button class="modal-close" onclick="hideEzoCalibrationModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="calibration-info">
+                    <div class="sensor-info">
+                        <strong>Sensor:</strong> <span id="ezo-calibration-sensor-name"></span><br>
+                        <strong>Type:</strong> <span id="ezo-calibration-sensor-type"></span><br>
+                        <strong>I2C Address:</strong> <span id="ezo-calibration-sensor-address"></span>
+                    </div>
+                </div>
+                
+                <div class="calibration-response-section">
+                    <h4>Sensor Response</h4>
+                    <div class="response-display">
+                        <span id="ezo-sensor-response">No response yet</span>
+                    </div>
+                </div>
+                
+                <div class="calibration-commands-section">
+                    <h4>Calibration Commands</h4>
+                    <div id="ezo-calibration-buttons" class="calibration-buttons">
+                        <!-- Buttons will be populated dynamically based on sensor type -->
+                    </div>
+                </div>
+                
+                <div class="calibration-notes">
+                    <h4>Important Notes</h4>
+                    <div id="ezo-calibration-notes" class="calibration-notes-content">
+                        <!-- Notes will be populated dynamically based on sensor type -->
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" onclick="hideEzoCalibrationModal()">Close</button>
+            </div>
+        </div>
+    </div>
+    
     <script src="script.js"></script>
 </body>
 </html>
