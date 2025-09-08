@@ -88,6 +88,13 @@ void setup() {
     Serial.println("Setup network and services...");
     // Setup network and services
     setupEthernet();
+    
+    // Print IP address for easy connection
+    Serial.println("========================================");
+    Serial.print("IP Address: ");
+    Serial.println(eth.localIP());
+    Serial.println("========================================");
+    
     setupModbus();
     setupWebServer();
     
@@ -837,6 +844,16 @@ void updateIOpins() {
         // No built-in sensors - all sensor data comes from configured I2C sensors
         if (numConfiguredSensors == 0) {
             Serial.println("No I2C sensors configured");
+        }
+        
+        // Print IP address every 30 seconds for easy reference
+        static uint32_t ipPrintTime = 0;
+        if (millis() - ipPrintTime > 30000) {
+            Serial.println("========================================");
+            Serial.print("Device IP Address: ");
+            Serial.println(eth.localIP());
+            Serial.println("========================================");
+            ipPrintTime = millis();
         }
         
         sensorReadTime = millis();
