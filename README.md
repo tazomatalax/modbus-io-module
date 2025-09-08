@@ -1,6 +1,6 @@
 # Modbus TCP IO Module
 
-A flexible Ethernet-based Modbus TCP IO module built on the Wiznet W5500-EVB-Pico board (RP2040). Features a modern web interface for configuration and real-time monitoring.
+A flexible Ethernet-based Modbus TCP IO module built on the Wiznet W5500-EVB-Pico board (RP2040). Features a modern web interface for configuration and real-time monitoring with support for configurable I2C sensors.
 
 ![W5500-EVB-PoE-Pico Pinout](images/W5500-EVB-PoE-Pico-pinout.png)
 
@@ -30,6 +30,13 @@ A flexible Ethernet-based Modbus TCP IO module built on the Wiznet W5500-EVB-Pic
   - Values displayed in millivolts (0-3300mV)
   - Real-time trend graphs
 
+### I2C Sensor Support
+- Configurable I2C sensors via web interface
+- EZO sensor support (pH, DO, EC with calibration commands)
+- Temperature compensation for pH measurements
+- Dynamic sensor configuration and calibration
+- Sensor data available via Modbus and web interface
+
 ### Modbus Server
 - Protocol: Modbus TCP
 - Default Port: 502
@@ -41,9 +48,7 @@ A flexible Ethernet-based Modbus TCP IO module built on the Wiznet W5500-EVB-Pic
     - 100-107: Digital input latch reset
   - **Input Registers (FC4)**: 32 registers
     - 0-2: Analog input values (millivolts)
-    - 3: Temperature (scaled ×100, e.g., 2550 = 25.50°C)
-    - 4: Humidity (scaled ×100, e.g., 6050 = 60.50%)
-    - 5-31: Available for additional sensors
+    - 3+: Available for I2C sensor data
   - **Holding Registers (FC3/FC16)**: 16 registers
 
 ### Web Interface
@@ -58,17 +63,18 @@ A flexible Ethernet-based Modbus TCP IO module built on the Wiznet W5500-EVB-Pic
 - Interactive digital output control
 - Digital input latch reset functionality
 - Configuration management
-  - Network settings
-  - DHCP toggle with sliding switch
-  - Hostname configuration
+  - Network settings (DHCP toggle, IP configuration)
   - IO configuration with table-based layout
-    - Digital input pullup, inversion, and latching options
-    - Digital output initial state and inversion options
-- Status indicators
-  - Current IP address
-  - Hostname
-  - Modbus client connection status
-- Analog input trend visualization
+  - I2C sensor configuration and calibration
+- Real-time monitoring
+  - Digital input/output states
+  - Analog input values with trend graphs
+  - Connected Modbus clients
+  - I2C sensor data
+- Sensor management
+  - Add/edit/delete I2C sensors
+  - EZO sensor calibration interface
+  - Compact register usage summary
 
 ## Hardware
 
@@ -127,7 +133,7 @@ A flexible Ethernet-based Modbus TCP IO module built on the Wiznet W5500-EVB-Pic
 | SDA | GP24 | I2C Serial Data |
 | SCL | GP25 | I2C Serial Clock |
 
-*Note: I2C bus is initialized and available for sensor integration. Currently using placeholder data for Modbus registers 3-4.*
+*Note: I2C bus is initialized and ready for sensor connections. Sensors can be configured dynamically via the web interface.*
 
 ## Development
 
@@ -182,186 +188,57 @@ A flexible Ethernet-based Modbus TCP IO module built on the Wiznet W5500-EVB-Pic
 - Modbus client connection monitoring
 - Built-in LED indicates Modbus client connection
 
-## I2C Sensor Integration Guide
+## Sensor Configuration
 
-The system is designed with built-in I2C sensor support and currently provides placeholder sensor data for testing and integration. Temperature and humidity data are available via Modbus Input Registers 3 and 4.
+### Supported Sensors
 
-### Current Status
-- **I2C Bus**: Initialized and ready (SDA: GP24, SCL: GP25)
-- **Placeholder Data**: Simulated temperature/humidity values for testing
-- **Modbus Mapping**: Registers 3 (temperature ×100) and 4 (humidity ×100)
+#### EZO Sensors (Atlas Scientific)
+- **EZO-pH**: pH measurement with temperature compensation
+- **EZO-DO**: Dissolved oxygen measurement  
+- **EZO-EC**: Electrical conductivity measurement
+- **EZO-RTD**: High-precision temperature measurement
 
-### Adding Real I2C Sensors
+EZO sensors include built-in calibration routines accessible via the web interface.
 
-To integrate actual I2C sensors (e.g., BME280, SHT30, DHT22), modify these files:
+#### Adding Custom Sensors
 
-#### 1. Update Library Dependencies (`platformio.ini`)
+To add support for new I2C sensor types:
 
-Add your sensor library to the `lib_deps` section:
+1. **Add Sensor Library** (if needed) to `platformio.ini`:
+   ```ini
+   lib_deps = 
+       # Existing libraries...
+       your/sensor-library@^1.0.0
+   ```
 
-```ini
-lib_deps = 
-    # Existing libraries...
-    adafruit/Adafruit BME280 Library@^2.2.2    ; For BME280
-    # adafruit/Adafruit SHT31 Library@^2.2.0   ; For SHT31
-    # adafruit/Adafruit Unified Sensor@^1.1.9  ; Often required
-```
+2. **Implement Sensor Reading Logic** in `src/main.cpp`:
+   ```cpp
+   // Add to the sensor reading loop around line 810
+   else if (strcmp(configuredSensors[i].type, "YOUR_SENSOR") == 0) {
+       // Add your sensor reading code here
+       float sensorValue = yourSensor.readValue();
+       // Store or process the value as needed
+   }
+   ```
 
-#### 2. Add Sensor Includes (`src/main.cpp` - Lines 4-11)
+3. **Configure via Web Interface**: Use the sensor configuration page to add your sensor with appropriate I2C address and Modbus register mapping.
 
-Replace the commented template includes:
+### Web-Based Configuration
 
-```cpp
-// Current template (lines 4-7):
-// #include <Adafruit_Sensor.h>
-// #include <Adafruit_BME280.h>
+1. **Access Web Interface**: Connect to the device IP address
+2. **Navigate to Sensor Configuration**: Scroll to the sensor configuration section
+3. **Add New Sensor**: Click "Add Sensor" and fill in:
+   - Name (descriptive label)
+   - Type (sensor model/type)
+   - I2C Address (in hex format, e.g., 0x48)
+   - Modbus Register (starting from register 3)
+4. **Calibration**: Use built-in calibration tools for supported sensors
+5. **Save Configuration**: Click "Save & Reboot" to apply changes
 
-// Replace with actual includes:
-#include <Adafruit_Sensor.h>
-#include <Adafruit_BME280.h>
-```
+### Troubleshooting
 
-#### 3. Create Sensor Instance (`src/main.cpp` - Lines 9-11)
-
-Replace the commented template instance:
-
-```cpp
-// Current template (lines 10-11):
-// Adafruit_BME280 bme; // Create sensor object
-
-// Replace with actual instance:
-Adafruit_BME280 bme; // Create sensor object
-```
-
-#### 4. Initialize Sensor (`src/main.cpp` - Lines 87-93)
-
-Replace the commented initialization in `setup()`:
-
-```cpp
-// Current template (lines 87-93):
-// if (!bme.begin(0x76)) { // Common I2C address for BME280
-//     Serial.println("Could not find a valid BME280 sensor, check wiring!");
-//     // Handle sensor initialization failure as needed
-// } else {
-//     Serial.println("BME280 sensor initialized successfully");
-// }
-
-// Replace with actual initialization:
-if (!bme.begin(0x76)) { // Common I2C address for BME280
-    Serial.println("Could not find a valid BME280 sensor, check wiring!");
-    // Handle sensor initialization failure as needed
-} else {
-    Serial.println("BME280 sensor initialized successfully");
-}
-```
-
-#### 5. Replace Placeholder Data (`src/main.cpp` - Lines 605-624)
-
-In the `updateIOpins()` function, replace placeholder data generation:
-
-```cpp
-// Current placeholder code (lines 605-614):
-static uint32_t sensorReadTime = 0;
-if (millis() - sensorReadTime > 1000) { // Update every 1 second
-    // Placeholder sensor values - simulate realistic sensor readings
-    ioStatus.temperature = 23.45 + sin(millis() / 10000.0) * 2.0;
-    ioStatus.humidity = 55.20 + cos(millis() / 8000.0) * 5.0;
-    ioStatus.pressure = 1013.25 + sin(millis() / 15000.0) * 10.0;
-    sensorReadTime = millis();
-}
-
-// Replace with actual sensor readings:
-static uint32_t sensorReadTime = 0;
-if (millis() - sensorReadTime > 1000) { // Update every 1 second
-    ioStatus.temperature = bme.readTemperature();    // Temperature in Celsius
-    ioStatus.humidity = bme.readHumidity();          // Humidity in %
-    ioStatus.pressure = bme.readPressure() / 100.0F; // Pressure in hPa
-    
-    // Add error checking:
-    if (isnan(ioStatus.temperature) || isnan(ioStatus.humidity)) {
-        Serial.println("Failed to read from BME280 sensor!");
-        // Set default/error values if needed
-        ioStatus.temperature = -999.0;
-        ioStatus.humidity = -999.0;
-    }
-    sensorReadTime = millis();
-}
-```
-
-### Sensor Examples
-
-#### BME280 Environmental Sensor
-- **I2C Address**: 0x76 or 0x77
-- **Measurements**: Temperature, Humidity, Pressure
-- **Library**: `Adafruit BME280 Library`
-- **Typical Range**: -40°C to 85°C, 0-100% RH, 300-1100 hPa
-
-#### SHT31 Temperature/Humidity Sensor
-- **I2C Address**: 0x44 or 0x45
-- **Measurements**: Temperature, Humidity
-- **Library**: `Adafruit SHT31 Library`
-- **Typical Range**: -40°C to 125°C, 0-100% RH
-
-### Adding More Sensors
-
-To add additional sensor data beyond temperature/humidity:
-
-#### 1. Extend IOStatus Structure (`include/sys_init.h` - Lines 80-84)
-
-```cpp
-struct IOStatus {
-    // Existing fields...
-    float temperature;    // Temperature in Celsius
-    float humidity;       // Humidity in %
-    float pressure;       // Pressure in hPa
-    
-    // Add new sensor fields:
-    float lightLevel;     // Light sensor (lux)
-    float co2Level;       // CO2 sensor (ppm)
-    float soilMoisture;   // Soil moisture (%)
-};
-```
-
-#### 2. Map to Modbus Registers (`src/main.cpp` - Lines 628-633)
-
-```cpp
-void updateIOForClient(int clientIndex) {
-    // Existing mappings...
-    modbusClients[clientIndex].server.inputRegisterWrite(3, (uint16_t)(ioStatus.temperature * 100));
-    modbusClients[clientIndex].server.inputRegisterWrite(4, (uint16_t)(ioStatus.humidity * 100));
-    
-    // Add new sensor mappings:
-    modbusClients[clientIndex].server.inputRegisterWrite(5, (uint16_t)ioStatus.pressure);        // hPa as integer
-    modbusClients[clientIndex].server.inputRegisterWrite(6, (uint16_t)ioStatus.lightLevel);      // Lux as integer
-    modbusClients[clientIndex].server.inputRegisterWrite(7, (uint16_t)ioStatus.co2Level);        // PPM as integer
-    modbusClients[clientIndex].server.inputRegisterWrite(8, (uint16_t)(ioStatus.soilMoisture * 100)); // Scaled x100
-}
-```
-
-#### 3. Update Register Documentation (`src/main.cpp` - Lines 29-30)
-
-```cpp
- * - Input Registers (FC4): 3 - Temperature (scaled x100, e.g., 2550 = 25.50°C)
- * - Input Registers (FC4): 4 - Humidity (scaled x100, e.g., 6050 = 60.50%)
- * - Input Registers (FC4): 5 - Pressure (hPa as integer, e.g., 1013 = 1013 hPa)
- * - Input Registers (FC4): 6 - Light Level (lux as integer)
- * - Input Registers (FC4): 7 - CO2 Level (ppm as integer)
- * - Input Registers (FC4): 8 - Soil Moisture (scaled x100, e.g., 4530 = 45.30%)
-```
-
-### Testing Without Physical Sensors
-
-The current implementation includes realistic placeholder data that simulates sensor behavior:
-- **Temperature**: Varies between 21.45°C and 25.45°C
-- **Humidity**: Varies between 50.20% and 60.20%
-- **Update Rate**: Every 1 second
-
-This allows full Modbus TCP testing and integration validation before connecting physical sensors.
-
-### Troubleshooting I2C Sensors
-
-1. **Check Wiring**: Verify SDA (GP24) and SCL (GP25) connections
-2. **I2C Address**: Use I2C scanner sketch to verify sensor address
-3. **Power Supply**: Ensure sensor has proper 3.3V power
-4. **Serial Output**: Monitor debug messages during sensor initialization
-5. **Pull-up Resistors**: Some sensors may require external 4.7kΩ pull-ups
+- **Check I2C Wiring**: Verify SDA (GP24) and SCL (GP25) connections
+- **Verify I2C Address**: Ensure the sensor address matches configuration
+- **Power Requirements**: Most sensors require 3.3V power supply
+- **Serial Monitor**: Check debug output for sensor initialization messages
+- **Pull-up Resistors**: Some sensors may need external 4.7kΩ pull-ups on SDA/SCL

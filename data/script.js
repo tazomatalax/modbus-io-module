@@ -417,15 +417,25 @@ function updateIOStatus() {
                 i2cContainer.innerHTML = sensorHtml;
             } else {
                 // Show message when no sensor data is available
-                const messageText = isSimulator 
-                    ? 'No sensors configured or sensor simulation disabled' 
-                    : 'No sensors configured';
+                const messageText = 'No sensors configured';
                 
                 i2cContainer.innerHTML = `
                     <div class="io-item" style="color: #666; font-style: italic;">
                         <span>${messageText}</span>
                     </div>
                 `;
+            }
+            
+            // Update EZO calibration modal response if it's open
+            const ezoModal = document.getElementById('ezo-calibration-modal-overlay');
+            if (ezoModal && ezoModal.classList.contains('show') && currentEzoSensorIndex >= 0) {
+                if (data.ezo_sensors && data.ezo_sensors[currentEzoSensorIndex]) {
+                    const sensorData = data.ezo_sensors[currentEzoSensorIndex];
+                    const responseElement = document.getElementById('ezo-sensor-response');
+                    if (sensorData.response && sensorData.response.trim() !== '') {
+                        responseElement.textContent = sensorData.response;
+                    }
+                }
             }
             
             // Reset attempts counter on success
@@ -815,8 +825,6 @@ function formatDuration(seconds) {
 let isSimulator = false;
 let deviceInfo = {};
 
-// Global simulation control functions (only used in simulator mode)
-let globalSimulationEnabled = false;
 
 function updateDeviceInfoDisplay() {
     console.log("Updating device info display:", deviceInfo);
@@ -833,13 +841,6 @@ function updateDeviceInfoDisplay() {
         firmwareVersionElement.textContent = deviceInfo.firmwareVersion;
     }
     
-    // Show/hide simulator-specific controls
-    const simControlsCard = document.getElementById('sim-controls-card');
-    const globalSimToggle = document.getElementById('global-simulation-toggle');
-    
-    if (simControlsCard) {
-        simControlsCard.style.display = deviceInfo.isSimulator ? 'block' : 'none';
-    }
     
     // Update sensor data display logic
     updateSensorDataDisplayMode();
@@ -878,73 +879,6 @@ function getSensorUnit(sensorKey) {
     return units[sensorKey] || '';
 }
 
-function loadSimulationState() {
-    console.log("Loading global simulation state...");
-    fetch('/simulate/global')
-        .then(response => {
-            if (!response.ok) {
-                throw new Error('Network response was not ok');
-            }
-            return response.json();
-        })
-        .then(data => {
-            globalSimulationEnabled = data.enabled || false;
-            if (isSimulator) {
-                document.getElementById('global-simulation-toggle').checked = globalSimulationEnabled;
-                document.getElementById('simulation-status-text').textContent = globalSimulationEnabled ? 'ON' : 'OFF';
-            }
-            console.log("Global simulation state:", globalSimulationEnabled ? 'ON' : 'OFF');
-        })
-        .catch(error => {
-            console.error('Error loading simulation state:', error);
-            // Default to OFF on error
-            globalSimulationEnabled = false;
-            if (isSimulator) {
-                document.getElementById('global-simulation-toggle').checked = false;
-                document.getElementById('simulation-status-text').textContent = 'OFF';
-            }
-        });
-}
-
-function toggleGlobalSimulation() {
-    const enabled = document.getElementById('global-simulation-toggle').checked;
-    
-    console.log("Toggling global simulation to:", enabled ? 'ON' : 'OFF');
-    
-    fetch('/simulate/global', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ enabled: enabled })
-    })
-    .then(response => {
-        if (!response.ok) {
-            throw new Error('Network response was not ok');
-        }
-        return response.json();
-    })
-    .then(data => {
-        if (data.success) {
-            globalSimulationEnabled = enabled;
-            document.getElementById('simulation-status-text').textContent = enabled ? 'ON' : 'OFF';
-            showToast(`Sensor simulation ${enabled ? 'enabled' : 'disabled'}`, 'success');
-            // Refresh IO status to show/hide simulated sensor data
-            updateIOStatus();
-        } else {
-            // Revert toggle state on failure
-            document.getElementById('global-simulation-toggle').checked = !enabled;
-            showToast('Failed to update simulation state', 'error');
-        }
-    })
-    .catch(error => {
-        console.error('Error toggling simulation:', error);
-        // Revert toggle state on error
-        document.getElementById('global-simulation-toggle').checked = !enabled;
-        document.getElementById('simulation-status-text').textContent = globalSimulationEnabled ? 'ON' : 'OFF';
-        showToast('Error updating simulation state: ' + error.message, 'error');
-    });
-}
 
 // Wait a short time before loading initial configuration to ensure server is ready
 setTimeout(() => {
@@ -962,23 +896,11 @@ setTimeout(() => {
     setTimeout(() => {
         loadSensorConfig();
     }, 1000);
-    
-    // Load simulation state after a short delay
-    setTimeout(() => {
-        loadSimulationState();
-    }, 1500);
 }, 500);
 
 // Add event listener for reset latches button
 document.getElementById('reset-latches-btn').addEventListener('click', resetLatches);
 
-// Add event listener for global simulation toggle
-document.addEventListener('DOMContentLoaded', function() {
-    const toggleElement = document.getElementById('global-simulation-toggle');
-    if (toggleElement) {
-        toggleElement.addEventListener('change', toggleGlobalSimulation);
-    }
-});
 
 // Function to reset all latched inputs
 // Note: Modbus clients can reset individual latches by writing to coils 100-107
@@ -1143,7 +1065,7 @@ function loadSensorConfig() {
             console.log("Sensor configuration loaded:", data);
             sensorConfigData = data.sensors || [];
             renderSensorTable();
-            renderModbusRegisterMap();
+            updateRegisterSummary();
         })
         .catch(error => {
             console.error('Error loading sensor configuration:', error);
@@ -1151,102 +1073,6 @@ function loadSensorConfig() {
         });
 }
 
-// Render the complete Modbus register usage map
-function renderModbusRegisterMap() {
-    // Get configured sensors to determine the range needed
-    const allSensors = sensorConfigData || [];
-    const activeSensors = allSensors.filter(sensor => sensor.enabled);
-    
-    // Find the highest register number used by sensors
-    let maxSensorRegister = 31; // Default firmware range
-    allSensors.forEach(sensor => {
-        if (sensor.modbusRegister !== undefined && sensor.modbusRegister > maxSensorRegister) {
-            maxSensorRegister = sensor.modbusRegister;
-        }
-    });
-    
-    // Extend range to accommodate all sensors, with some padding
-    const inputRegisterRange = Math.max(32, maxSensorRegister + 10);
-    
-    // Define system register allocations based on the firmware
-    const systemMap = {
-        discreteInputs: [
-            { range: [0, 7], type: 'system', label: 'DI' }
-        ],
-        coils: [
-            { range: [0, 7], type: 'system', label: 'DO' },
-            { range: [100, 107], type: 'used', label: 'Latch Reset' }
-        ],
-        inputRegisters: [
-            { range: [0, 2], type: 'system', label: 'AI' },
-            { range: [3, 3], type: 'system', label: 'Temp' },
-            { range: [4, 4], type: 'system', label: 'Humidity' }
-        ],
-        holdingRegisters: []
-    };
-    
-    // Render each register type
-    renderRegisterSection('discrete-inputs-map', 16, systemMap.discreteInputs, [], 'Discrete Input');
-    renderRegisterSection('coils-map', 128, systemMap.coils, [], 'Coil');
-    renderRegisterSection('input-registers-map', inputRegisterRange, systemMap.inputRegisters, allSensors, 'Input Reg');
-    renderRegisterSection('holding-registers-map', 16, systemMap.holdingRegisters, [], 'Holding Reg');
-}
-
-// Helper function to render a register section
-function renderRegisterSection(elementId, maxRegisters, systemMappings, sensors, labelPrefix) {
-    const container = document.getElementById(elementId);
-    const registers = [];
-    
-    // Initialize all registers as available
-    for (let i = 0; i < maxRegisters; i++) {
-        registers[i] = {
-            number: i,
-            type: 'available',
-            label: 'Available',
-            title: `${labelPrefix} ${i}: Available for use`
-        };
-    }
-    
-    // Apply system mappings
-    systemMappings.forEach(mapping => {
-        const [start, end] = mapping.range;
-        for (let i = start; i <= end; i++) {
-            if (i < maxRegisters) {
-                registers[i] = {
-                    number: i,
-                    type: mapping.type,
-                    label: `${mapping.label}${mapping.range[0] === mapping.range[1] ? '' : (i - start + 1)}`,
-                    title: `${labelPrefix} ${i}: ${mapping.label} ${mapping.range[0] === mapping.range[1] ? '' : (i - start + 1)}`
-                };
-            }
-        }
-    });
-    
-    // Apply sensor mappings (only for input registers in this system)
-    if (elementId === 'input-registers-map') {
-        sensors.forEach(sensor => {
-            const reg = sensor.modbusRegister;
-            if (reg !== undefined && reg < maxRegisters) {
-                const sensorType = sensor.enabled ? 'sensor' : 'sensor-disabled';
-                const enabledStatus = sensor.enabled ? 'Enabled' : 'Disabled';
-                registers[reg] = {
-                    number: reg,
-                    type: sensorType,
-                    label: sensor.name.length > 8 ? sensor.name.substring(0, 6) + '...' : sensor.name,
-                    title: `${labelPrefix} ${reg}: ${sensor.name} (${sensor.type}) - ${enabledStatus}`
-                };
-            }
-        });
-    }
-    
-    // Render the registers
-    container.innerHTML = registers.map(reg => `
-        <div class="register-item ${reg.type}" title="${reg.title}">
-            <div class="register-number">${reg.number}</div>
-            <div class="register-label">${reg.label}</div>
-        </div>
-    `).join('');
-}
 
 // Render the sensor table
 function renderSensorTable() {
@@ -1285,8 +1111,35 @@ function renderSensorTable() {
         `;
     }).join('');
     
-    // Also update the register usage map
-    renderModbusRegisterMap();
+    // Update register summary
+    updateRegisterSummary();
+}
+
+// Update the compact register summary
+function updateRegisterSummary() {
+    const usedRegisters = sensorConfigData
+        .filter(sensor => sensor.modbusRegister !== undefined)
+        .map(sensor => sensor.modbusRegister)
+        .sort((a, b) => a - b);
+    
+    const usedRegisterElement = document.getElementById('used-registers');
+    if (usedRegisterElement) {
+        if (usedRegisters.length === 0) {
+            usedRegisterElement.textContent = 'None';
+        } else {
+            usedRegisterElement.textContent = usedRegisters.join(', ');
+        }
+    }
+    
+    // Find next available register (first unused register >= 3)
+    const availableRegisterElement = document.getElementById('available-registers');
+    if (availableRegisterElement) {
+        let nextAvailable = 3;
+        while (usedRegisters.includes(nextAvailable)) {
+            nextAvailable++;
+        }
+        availableRegisterElement.textContent = `${nextAvailable}+`;
+    }
 }
 
 // Show the add sensor modal
@@ -1439,9 +1292,9 @@ function saveSensor() {
         return;
     }
     
-    // Validate Modbus register range - system reserves 0-4 for built-in I/O
-    if (modbusRegister < 5) {
-        showToast('Modbus register must be 5 or higher (0-4 are reserved for system I/O)', 'error');
+    // Validate Modbus register range - system reserves 0-2 for built-in I/O
+    if (modbusRegister < 3) {
+        showToast('Modbus register must be 3 or higher (0-2 are reserved for system I/O)', 'error');
         return;
     }
     
@@ -2002,30 +1855,3 @@ function sendEzoCalibrationCommandWithValue(commandTemplate, buttonLabel) {
     sendEzoCalibrationCommand(command);
 }
 
-// Modify updateIOStatus to update EZO calibration response when modal is open
-const originalUpdateIOStatus = updateIOStatus;
-
-function updateIOStatus() {
-    // Call the original function
-    originalUpdateIOStatus();
-    
-    // Update EZO calibration modal response if it's open
-    const ezoModal = document.getElementById('ezo-calibration-modal-overlay');
-    if (ezoModal && ezoModal.classList.contains('show') && currentEzoSensorIndex >= 0) {
-        // Get the latest sensor data from the iostatus response
-        fetch('/iostatus')
-            .then(response => response.json())
-            .then(data => {
-                if (data.ezo_sensors && data.ezo_sensors[currentEzoSensorIndex]) {
-                    const sensorData = data.ezo_sensors[currentEzoSensorIndex];
-                    const responseElement = document.getElementById('ezo-sensor-response');
-                    if (sensorData.response && sensorData.response.trim() !== '') {
-                        responseElement.textContent = sensorData.response;
-                    }
-                }
-            })
-            .catch(error => {
-                console.log('Could not update EZO sensor response:', error);
-            });
-    }
-}

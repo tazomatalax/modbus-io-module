@@ -33,9 +33,8 @@ static bool ezoSensorsInitialized = false;
  * - Coils (FC1/FC5): 0-7 - Digital output states
  * - Coils (FC5): 100-107 - Reset latches for digital inputs 0-7
  *   (Write 1 to reset the latch for the corresponding input)
- * - Input Registers (FC4): 0-2 - Analog input values
- * - Input Registers (FC4): 3 - Temperature (scaled x100, e.g., 2550 = 25.50°C) [PLACEHOLDER - COMMENTED OUT]
- * - Input Registers (FC4): 4 - Humidity (scaled x100, e.g., 6050 = 60.50%) [PLACEHOLDER - COMMENTED OUT]
+ * - Input Registers (FC4): 0-2 - Analog input values (in mV)
+ * - Input Registers (FC4): 3+ - Available for I2C sensor data
  * 
  * Web Interface:
  * - Network Configuration (IP, Gateway, Subnet, DHCP)
@@ -791,11 +790,8 @@ void updateIOpins() {
     // I2C Sensor Reading - Dynamic sensor configuration
     static uint32_t sensorReadTime = 0;
     if (millis() - sensorReadTime > 1000) { // Update every 1 second
-        // Initialize sensor values to safe defaults
-        // PLACEHOLDER SENSORS - COMMENTED OUT (only enable when simulation is on)
-        // ioStatus.temperature = 0.0;
-        // ioStatus.humidity = 0.0;
-        ioStatus.pressure = 0.0;
+        // Initialize sensor values - only temperature is used by EZO_RTD if configured
+        ioStatus.temperature = 0.0;  // Only used by EZO_RTD sensors for pH compensation
         
         // Read from configured sensors
         for (int i = 0; i < numConfiguredSensors; i++) {
@@ -806,16 +802,8 @@ void updateIOpins() {
                     configuredSensors[i].i2cAddress
                 );
                 
-                // Placeholder sensor reading logic - to be replaced with actual sensor libraries
-                // For now, generate simulated values based on sensor type
-                if (strcmp(configuredSensors[i].type, "BME280") == 0) {
-                    // Simulate BME280 readings
-                    ioStatus.temperature = 23.45 + sin(millis() / 10000.0) * 2.0; // 21.45-25.45°C range
-                    ioStatus.humidity = 55.20 + cos(millis() / 8000.0) * 5.0;     // 50.20-60.20% range
-                    ioStatus.pressure = 1013.25 + sin(millis() / 15000.0) * 10.0; // 1003.25-1023.25 hPa range
-                    Serial.printf("BME280 simulated readings: T=%.2f°C, H=%.2f%%, P=%.2fhPa\n", 
-                        ioStatus.temperature, ioStatus.humidity, ioStatus.pressure);
-                } else if (strncmp(configuredSensors[i].type, "EZO_", 4) == 0) {
+                // Add actual sensor reading logic here based on sensor type
+                if (strncmp(configuredSensors[i].type, "EZO_", 4) == 0) {
                     // Parse EZO sensor response from the response field
                     if (strlen(configuredSensors[i].response) > 0 && strcmp(configuredSensors[i].response, "ERROR") != 0) {
                         float value = atof(configuredSensors[i].response);
@@ -837,28 +825,18 @@ void updateIOpins() {
                     } else if (strcmp(configuredSensors[i].response, "ERROR") == 0) {
                         Serial.printf("EZO sensor %s has error response\n", configuredSensors[i].type);
                     }
-                } else if (strcmp(configuredSensors[i].type, "VL53L1X") == 0) {
-                    // Simulate distance sensor readings
-                    float distance = 100.0 + sin(millis() / 5000.0) * 50.0; // 50-150mm range
-                    Serial.printf("VL53L1X simulated reading: Distance=%.0fmm\n", distance);
                 }
-                
-                // TODO: Implement actual sensor reading based on sensor type
+                // TODO: Add support for other sensor types here
                 // Example for BME280:
-                // if (strcmp(configuredSensors[i].type, "BME280") == 0) {
-                //     ioStatus.temperature = bme.readTemperature();
-                //     ioStatus.humidity = bme.readHumidity();
-                //     ioStatus.pressure = bme.readPressure() / 100.0F;
+                // else if (strcmp(configuredSensors[i].type, "BME280") == 0) {
+                //     // Add BME280 library initialization and reading code
                 // }
             }
         }
         
-        // If no sensors are configured, use legacy placeholder values
+        // No built-in sensors - all sensor data comes from configured I2C sensors
         if (numConfiguredSensors == 0) {
-            ioStatus.temperature = 23.45 + sin(millis() / 10000.0) * 2.0;
-            ioStatus.humidity = 55.20 + cos(millis() / 8000.0) * 5.0;
-            ioStatus.pressure = 1013.25 + sin(millis() / 15000.0) * 10.0;
-            Serial.println("Using legacy placeholder sensor values (no sensors configured)");
+            Serial.println("No I2C sensors configured");
         }
         
         sensorReadTime = millis();
@@ -1303,10 +1281,26 @@ void handleGetIOStatus() {
         ai.add(ioStatus.aIn[i]);
     }
 
-    // I2C Sensor Data - Add sensor readings as nested object
+    // I2C Sensor Data - Only include if sensors are actually configured and providing data
     JsonObject i2c_sensors = doc.createNestedObject("i2c_sensors");
-    i2c_sensors["temperature"] = String(ioStatus.temperature, 2);
-    i2c_sensors["humidity"] = String(ioStatus.humidity, 2);
+    
+    // Only add sensor data if we have configured sensors providing real data
+    bool hasSensorData = false;
+    for (int i = 0; i < numConfiguredSensors; i++) {
+        if (configuredSensors[i].enabled && strncmp(configuredSensors[i].type, "EZO_RTD", 7) == 0) {
+            // EZO_RTD provides temperature
+            if (strlen(configuredSensors[i].response) > 0 && strcmp(configuredSensors[i].response, "ERROR") != 0) {
+                i2c_sensors["temperature"] = String(ioStatus.temperature, 2);
+                hasSensorData = true;
+            }
+        }
+        // TODO: Add other sensor types that provide environmental data here
+    }
+    
+    // If no sensor data is available, don't send any sensor fields
+    if (!hasSensorData) {
+        doc.remove("i2c_sensors");
+    }
 
     // EZO Sensor Responses - Add response strings for real-time feedback
     JsonArray ezo_sensors = doc.createNestedArray("ezo_sensors");
