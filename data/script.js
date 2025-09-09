@@ -367,13 +367,23 @@ function updateIOStatus() {
                 </div>`;
             }).join('');
 
-            // Update analog inputs with matching colors from chart
+            // Update analog inputs with matching colors from chart and engineering units
             const aiDiv = document.getElementById('analog-inputs');
             aiDiv.innerHTML = data.ai.map((value, index) => {
                 const analogClass = `analog${index + 1}`;
+                let displayValue = `${value} mV`;
+                let sensorName = `AI${index + 1}`;
+                
+                // Check if engineering units are available for this analog input
+                if (data.ai_engineering && data.ai_engineering[`ai${index}`]) {
+                    const engineering = data.ai_engineering[`ai${index}`];
+                    displayValue = `${engineering.value.toFixed(2)} ${engineering.units || ''}`;
+                    sensorName = engineering.name || `AI${index + 1}`;
+                }
+                
                 return `<div class="io-item analog-value ${analogClass}">
-                    <span><strong>AI${index + 1}</strong></span>
-                    <span>${value} mV</span>
+                    <span><strong>${sensorName}</strong></span>
+                    <span>${displayValue}</span>
                 </div>`;
             }).join('');
             
@@ -1079,7 +1089,7 @@ function renderSensorTable() {
     const tableBody = document.getElementById('sensor-table-body');
     
     if (sensorConfigData.length === 0) {
-        tableBody.innerHTML = '<tr class="no-sensors"><td colspan="7">No sensors configured</td></tr>';
+        tableBody.innerHTML = '<tr class="no-sensors"><td colspan="9">No sensors configured</td></tr>';
         return;
     }
     
@@ -1087,16 +1097,20 @@ function renderSensorTable() {
         const i2cAddress = sensor.i2cAddress ? `0x${sensor.i2cAddress.toString(16).toUpperCase().padStart(2, '0')}` : 'N/A';
         const enabledClass = sensor.enabled ? 'sensor-enabled' : 'sensor-disabled';
         const enabledText = sensor.enabled ? 'Yes' : 'No';
-        const hasCalibration = sensor.calibration && (sensor.calibration.offset !== undefined || sensor.calibration.scale !== undefined);
+        const hasCalibration = sensor.calibration && (sensor.calibration.offset !== undefined || sensor.calibration.scale !== undefined || sensor.formula);
         const calibrationText = hasCalibration ? 'Yes' : 'No';
         const calibrationClass = hasCalibration ? 'calibration-enabled' : 'calibration-disabled';
+        const sensorType = sensor.sensor_type || 'I2C';
+        const units = sensor.units || '';
         
         return `
             <tr>
                 <td>${sensor.name}</td>
                 <td>${sensor.type}</td>
+                <td>${sensorType}</td>
                 <td>${i2cAddress}</td>
                 <td>${sensor.modbusRegister || 'N/A'}</td>
+                <td>${units}</td>
                 <td class="${enabledClass}">${enabledText}</td>
                 <td class="${calibrationClass}">${calibrationText}</td>
                 <td>
@@ -1110,6 +1124,9 @@ function renderSensorTable() {
             </tr>
         `;
     }).join('');
+    
+    // Update terminal target dropdown
+    updateTerminalTargets();
     
     // Update register summary
     updateRegisterSummary();
@@ -1148,6 +1165,7 @@ function showAddSensorModal() {
     document.getElementById('sensor-modal-title').textContent = 'Add Sensor';
     document.getElementById('sensor-form').reset();
     document.getElementById('sensor-enabled').checked = true;
+    document.getElementById('sensor-type-select').value = 'I2C';
     
     // Setup sensor calibration method listeners
     setupSensorCalibrationMethodListeners();
@@ -1158,6 +1176,8 @@ function showAddSensorModal() {
     document.getElementById('sensor-calibration-scale').value = 1;
     document.getElementById('sensor-calibration-polynomial').value = '';
     document.getElementById('sensor-calibration-expression').value = '';
+    document.getElementById('sensor-formula').value = '';
+    document.getElementById('sensor-units').value = '';
     showSensorCalibrationMethod('linear');
     
     document.getElementById('sensor-modal-overlay').classList.add('show');
@@ -1176,9 +1196,12 @@ function editSensor(index) {
     document.getElementById('sensor-modal-title').textContent = 'Edit Sensor';
     document.getElementById('sensor-name').value = sensor.name;
     document.getElementById('sensor-type').value = sensor.type;
+    document.getElementById('sensor-type-select').value = sensor.sensor_type || 'I2C';
     document.getElementById('sensor-i2c-address').value = sensor.i2cAddress ? `0x${sensor.i2cAddress.toString(16).toUpperCase().padStart(2, '0')}` : '';
     document.getElementById('sensor-modbus-register').value = sensor.modbusRegister || '';
     document.getElementById('sensor-enabled').checked = sensor.enabled;
+    document.getElementById('sensor-units').value = sensor.units || '';
+    document.getElementById('sensor-formula').value = sensor.formula || '';
     
     // Setup sensor calibration method listeners
     setupSensorCalibrationMethodListeners();
@@ -1276,9 +1299,12 @@ function saveSensor() {
     
     const name = document.getElementById('sensor-name').value.trim();
     const type = document.getElementById('sensor-type').value;
+    const sensorType = document.getElementById('sensor-type-select').value;
     const i2cAddressStr = document.getElementById('sensor-i2c-address').value.trim();
     const modbusRegister = parseInt(document.getElementById('sensor-modbus-register').value);
     const enabled = document.getElementById('sensor-enabled').checked;
+    const units = document.getElementById('sensor-units').value.trim();
+    const formula = document.getElementById('sensor-formula').value.trim();
     
     // Validate inputs
     if (!name || !type || !i2cAddressStr || isNaN(modbusRegister)) {
@@ -1393,6 +1419,9 @@ function saveSensor() {
         enabled: enabled,
         name: name,
         type: type,
+        sensor_type: sensorType,
+        formula: formula,
+        units: units,
         i2cAddress: i2cAddress,
         modbusRegister: modbusRegister,
         calibration: calibration
@@ -1854,4 +1883,99 @@ function sendEzoCalibrationCommandWithValue(commandTemplate, buttonLabel) {
     const command = commandTemplate.replace('{value}', value.trim());
     sendEzoCalibrationCommand(command);
 }
+
+// Terminal Functions
+function updateTerminalTargets() {
+    const terminalTarget = document.getElementById('terminal-target');
+    if (!terminalTarget) return;
+    
+    // Clear existing options except IP
+    terminalTarget.innerHTML = '<option value="IP">IP Commands</option>';
+    
+    // Add configured sensors as targets
+    sensorConfigData.forEach((sensor, index) => {
+        if (sensor.enabled) {
+            terminalTarget.innerHTML += `<option value="sensor_${index}">${sensor.name}</option>`;
+        }
+    });
+}
+
+function executeTerminalCommand() {
+    const target = document.getElementById('terminal-target').value;
+    const command = document.getElementById('terminal-command').value.trim();
+    
+    if (!command) {
+        showToast('Please enter a command', 'error');
+        return;
+    }
+    
+    addTerminalLine(`> ${command}`, 'command');
+    addTerminalLine('Executing...', 'info');
+    
+    const payload = {
+        target: target,
+        command: command
+    };
+    
+    fetch('/api/terminal/command', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+    })
+    .then(response => {
+        if (!response.ok) {
+            throw new Error('Network response was not ok');
+        }
+        return response.json();
+    })
+    .then(data => {
+        if (data.success) {
+            addTerminalLine(data.output || 'Command executed successfully', 'output');
+        } else {
+            addTerminalLine(`Error: ${data.error || 'Unknown error'}`, 'error');
+        }
+    })
+    .catch(error => {
+        addTerminalLine(`Error: ${error.message}`, 'error');
+    });
+    
+    // Clear command input
+    document.getElementById('terminal-command').value = '';
+}
+
+function addTerminalLine(text, type = 'output') {
+    const terminalOutput = document.getElementById('terminal-output');
+    const line = document.createElement('div');
+    line.className = `terminal-line ${type}`;
+    line.textContent = text;
+    terminalOutput.appendChild(line);
+    
+    // Auto-scroll to bottom
+    terminalOutput.scrollTop = terminalOutput.scrollHeight;
+    
+    // Limit number of lines to prevent memory issues
+    const lines = terminalOutput.children;
+    if (lines.length > 100) {
+        terminalOutput.removeChild(lines[0]);
+    }
+}
+
+function clearTerminal() {
+    const terminalOutput = document.getElementById('terminal-output');
+    terminalOutput.innerHTML = '<div class="terminal-line">Terminal cleared.</div>';
+}
+
+// Allow Enter key to execute terminal commands
+document.addEventListener('DOMContentLoaded', function() {
+    const terminalCommand = document.getElementById('terminal-command');
+    if (terminalCommand) {
+        terminalCommand.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                executeTerminalCommand();
+            }
+        });
+    }
+});
 

@@ -178,8 +178,10 @@
                             <tr>
                                 <th>Name</th>
                                 <th>Type</th>
+                                <th>Sensor Type</th>
                                 <th>I2C Address</th>
                                 <th>Modbus Register</th>
+                                <th>Units</th>
                                 <th>Enabled</th>
                                 <th>Calibrated</th>
                                 <th>Actions</th>
@@ -187,10 +189,38 @@
                         </thead>
                         <tbody id="sensor-table-body">
                             <tr class="no-sensors">
-                                <td colspan="7">No sensors configured</td>
+                                <td colspan="9">No sensors configured</td>
                             </tr>
                         </tbody>
                     </table>
+                </div>
+            </div>
+        </div>
+        
+        <div class="card config-card">
+            <div class="card-header">
+                <h2>Terminal</h2>
+            </div>
+            <div class="card-body">
+                <div class="terminal-controls">
+                    <div class="form-group">
+                        <label for="terminal-target">Target</label>
+                        <select id="terminal-target">
+                            <option value="IP">IP Commands</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="terminal-command">Command</label>
+                        <input type="text" id="terminal-command" placeholder="Enter command...">
+                    </div>
+                    <button onclick="executeTerminalCommand()">Execute</button>
+                    <button onclick="clearTerminal()">Clear</button>
+                </div>
+                
+                <div class="terminal-output-container">
+                    <div class="terminal-output" id="terminal-output">
+                        <div class="terminal-line">Terminal ready. Select a target and enter a command.</div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -224,6 +254,15 @@
                     <input type="text" id="sensor-name" maxlength="31" placeholder="e.g., Temperature Sensor" required>
                 </div>
                 <div class="form-group">
+                    <label for="sensor-type-select">Sensor Type</label>
+                    <select id="sensor-type-select" required>
+                        <option value="I2C">I2C</option>
+                        <option value="UART">UART</option>
+                        <option value="Digital">Digital</option>
+                        <option value="Analog">Analog</option>
+                    </select>
+                </div>
+                <div class="form-group">
                     <label for="sensor-type">Type</label>
                     <select id="sensor-type" required>
                         <option value="">Select sensor type</option>
@@ -247,6 +286,10 @@
                         <label for="sensor-modbus-register">Modbus Register</label>
                         <input type="number" id="sensor-modbus-register" min="3" max="65535" placeholder="100" required>
                         <small class="form-help">Registers 0-2 reserved for system I/O. Use 3 or higher.</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="sensor-units">Engineering Units</label>
+                        <input type="text" id="sensor-units" maxlength="15" placeholder="e.g., °C, ppm, mV">
                     </div>
                 </div>
                 <div class="form-group">
@@ -302,6 +345,11 @@
                             <label for="sensor-calibration-expression">Expression</label>
                             <input type="text" id="sensor-calibration-expression" placeholder="x * 1.8 + 32" value="">
                             <small class="form-help">Mathematical expression (x = raw reading)</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="sensor-formula">Generic Formula</label>
+                            <input type="text" id="sensor-formula" maxlength="63" placeholder="e.g., x*1.8+32, sqrt(x), x^2+3*x+1">
+                            <small class="form-help">Any mathematical formula for conversion (x = raw value)</small>
                         </div>
                     </div>
                 </div>

@@ -76,9 +76,11 @@ struct SensorConfig {
     bool enabled;
     char name[32];
     char type[16]; // "BME280", "EZO_PH", etc.
+    char sensor_type[16]; // New: "I2C", "UART", "Digital", "Analog"
+    char formula[64];     // New: mathematical conversion formula
+    char units[16];       // New: engineering units for display
     uint8_t i2cAddress;
     uint16_t modbusRegister;
-    
     // EZO sensor state tracking
     bool cmdPending;
     unsigned long lastCmdSent;
@@ -154,3 +156,5 @@ void handleSetSensorConfig();
 void handleEzoSensors();
 void initializeEzoSensors();
 void handleSensorCommand();
+void handleTerminalCommand();
+float applyFormulaConversion(float rawValue, const char* formula);

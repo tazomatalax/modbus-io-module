@@ -1444,3 +1444,69 @@ button:hover {
         font-size: 0.8em;
     }
 }
+
+/* Terminal Styles */
+.terminal-controls {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 15px;
+    flex-wrap: wrap;
+    align-items: end;
+}
+
+.terminal-controls .form-group {
+    flex: 1;
+    min-width: 120px;
+}
+
+.terminal-controls button {
+    padding: 8px 16px;
+    background-color: var(--primary-color);
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    height: 36px;
+}
+
+.terminal-controls button:hover {
+    background-color: var(--primary-hover);
+}
+
+.terminal-output-container {
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background-color: #1e1e1e;
+    color: #ffffff;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+.terminal-output {
+    padding: 15px;
+    font-family: 'Courier New', monospace;
+    font-size: 14px;
+    line-height: 1.4;
+}
+
+.terminal-line {
+    margin-bottom: 5px;
+    word-wrap: break-word;
+}
+
+.terminal-line.command {
+    color: #00ff00;
+    font-weight: bold;
+}
+
+.terminal-line.error {
+    color: #ff6b6b;
+}
+
+.terminal-line.info {
+    color: #74c0fc;
+}
+
+.terminal-line.output {
+    color: #ffffff;
+}

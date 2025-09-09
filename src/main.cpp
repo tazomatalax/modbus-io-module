@@ -1,6 +1,7 @@
 #include "sys_init.h"
 #include <Wire.h>
 #include <Ezo_i2c.h>
+#include <tinyexpr.h>
 
 SensorConfig configuredSensors[MAX_SENSORS];
 int numConfiguredSensors = 0;
@@ -494,6 +495,19 @@ void loadSensorConfig() {
             strncpy(configuredSensors[index].type, type, sizeof(configuredSensors[index].type) - 1);
             configuredSensors[index].type[sizeof(configuredSensors[index].type) - 1] = '\0';
             
+            // Load new fields
+            const char* sensorType = sensor["sensor_type"] | "I2C";
+            strncpy(configuredSensors[index].sensor_type, sensorType, sizeof(configuredSensors[index].sensor_type) - 1);
+            configuredSensors[index].sensor_type[sizeof(configuredSensors[index].sensor_type) - 1] = '\0';
+            
+            const char* formula = sensor["formula"] | "";
+            strncpy(configuredSensors[index].formula, formula, sizeof(configuredSensors[index].formula) - 1);
+            configuredSensors[index].formula[sizeof(configuredSensors[index].formula) - 1] = '\0';
+            
+            const char* units = sensor["units"] | "";
+            strncpy(configuredSensors[index].units, units, sizeof(configuredSensors[index].units) - 1);
+            configuredSensors[index].units[sizeof(configuredSensors[index].units) - 1] = '\0';
+            
             configuredSensors[index].i2cAddress = sensor["i2cAddress"] | 0;
             configuredSensors[index].modbusRegister = sensor["modbusRegister"] | 0;
             
@@ -530,6 +544,9 @@ void saveSensorConfig() {
         sensor["enabled"] = configuredSensors[i].enabled;
         sensor["name"] = configuredSensors[i].name;
         sensor["type"] = configuredSensors[i].type;
+        sensor["sensor_type"] = configuredSensors[i].sensor_type;
+        sensor["formula"] = configuredSensors[i].formula;
+        sensor["units"] = configuredSensors[i].units;
         sensor["i2cAddress"] = configuredSensors[i].i2cAddress;
         sensor["modbusRegister"] = configuredSensors[i].modbusRegister;
     }
@@ -550,6 +567,28 @@ void saveSensorConfig() {
     
     // Close the file
     sensorsFile.close();
+}
+
+// Function to apply mathematical formula conversion
+float applyFormulaConversion(float rawValue, const char* formula) {
+    if (!formula || strlen(formula) == 0) {
+        return rawValue; // No formula, return raw value
+    }
+    
+    // Parse and evaluate the formula using tinyexpr
+    te_variable vars[] = {{"x", &rawValue}};
+    int err;
+    te_expr *expr = te_compile(formula, vars, 1, &err);
+    
+    if (!expr) {
+        Serial.printf("Formula parse error at position %d: %s\n", err, formula);
+        return rawValue; // Return raw value on error
+    }
+    
+    float result = te_eval(expr);
+    te_free(expr);
+    
+    return result;
 }
 
 // Reset all latched inputs
@@ -704,6 +743,7 @@ void setupWebServer() {
     webServer.on("/sensors/config", HTTP_GET, handleGetSensorConfig);
     webServer.on("/sensors/config", HTTP_POST, handleSetSensorConfig);
     webServer.on("/api/sensor/command", HTTP_POST, handleSensorCommand);
+    webServer.on("/api/terminal/command", HTTP_POST, handleTerminalCommand);
     webServer.begin();
     
     Serial.println("Web server started");
@@ -791,6 +831,23 @@ void updateIOpins() {
     for (int i = 0; i < 3; i++) {
         uint32_t rawValue = analogRead(ANALOG_INPUTS[i]);
         uint16_t valueToWrite = (rawValue * 3300UL) / 4095UL;
+        
+        // Apply formula conversion if configured for analog sensors
+        for (int j = 0; j < numConfiguredSensors; j++) {
+            if (configuredSensors[j].enabled && 
+                strcmp(configuredSensors[j].sensor_type, "Analog") == 0 &&
+                configuredSensors[j].modbusRegister == i) {
+                
+                if (strlen(configuredSensors[j].formula) > 0) {
+                    float convertedValue = applyFormulaConversion((float)valueToWrite, configuredSensors[j].formula);
+                    valueToWrite = (uint16_t)convertedValue;
+                    Serial.printf("Analog %d: Raw=%d mV, Formula=%s, Converted=%d\n", 
+                        i, (rawValue * 3300UL) / 4095UL, configuredSensors[j].formula, valueToWrite);
+                }
+                break;
+            }
+        }
+        
         ioStatus.aIn[i] = valueToWrite;
     }
     
@@ -1292,10 +1349,31 @@ void handleGetIOStatus() {
         do_.add(ioStatus.dOut[i]);
     }
 
-    // Add analog input values - always in millivolts
+    // Add analog input values - always in millivolts, but also show engineering units if configured
     JsonArray ai = doc.createNestedArray("ai");
+    JsonObject ai_engineering = doc.createNestedObject("ai_engineering");
     for (int i = 0; i < sizeof(ANALOG_INPUTS)/sizeof(ANALOG_INPUTS[0]); i++) {
         ai.add(ioStatus.aIn[i]);
+        
+        // Check if this analog input has a configured sensor with formula and units
+        for (int j = 0; j < numConfiguredSensors; j++) {
+            if (configuredSensors[j].enabled && 
+                strcmp(configuredSensors[j].sensor_type, "Analog") == 0 &&
+                configuredSensors[j].modbusRegister == i) {
+                
+                float engineeringValue = ioStatus.aIn[i];
+                if (strlen(configuredSensors[j].formula) > 0) {
+                    engineeringValue = applyFormulaConversion((float)ioStatus.aIn[i], configuredSensors[j].formula);
+                }
+                
+                String key = "ai" + String(i);
+                JsonObject aiData = ai_engineering.createNestedObject(key);
+                aiData["value"] = engineeringValue;
+                aiData["units"] = configuredSensors[j].units;
+                aiData["name"] = configuredSensors[j].name;
+                break;
+            }
+        }
     }
 
     // I2C Sensor Data - Only include if sensors are actually configured and providing data
@@ -1665,6 +1743,33 @@ void handleSetSensorConfig() {
         strncpy(configuredSensors[index].type, type, sizeof(configuredSensors[index].type) - 1);
         configuredSensors[index].type[sizeof(configuredSensors[index].type) - 1] = '\0';
         
+        // Handle new sensor_type field
+        const char* sensorType = sensor["sensor_type"] | "I2C";
+        if (strlen(sensorType) >= sizeof(configuredSensors[index].sensor_type)) {
+            webServer.send(400, "application/json", "{\"success\":false,\"message\":\"Sensor type field too long\"}");
+            return;
+        }
+        strncpy(configuredSensors[index].sensor_type, sensorType, sizeof(configuredSensors[index].sensor_type) - 1);
+        configuredSensors[index].sensor_type[sizeof(configuredSensors[index].sensor_type) - 1] = '\0';
+        
+        // Handle new formula field
+        const char* formula = sensor["formula"] | "";
+        if (strlen(formula) >= sizeof(configuredSensors[index].formula)) {
+            webServer.send(400, "application/json", "{\"success\":false,\"message\":\"Formula too long\"}");
+            return;
+        }
+        strncpy(configuredSensors[index].formula, formula, sizeof(configuredSensors[index].formula) - 1);
+        configuredSensors[index].formula[sizeof(configuredSensors[index].formula) - 1] = '\0';
+        
+        // Handle new units field
+        const char* units = sensor["units"] | "";
+        if (strlen(units) >= sizeof(configuredSensors[index].units)) {
+            webServer.send(400, "application/json", "{\"success\":false,\"message\":\"Units field too long\"}");
+            return;
+        }
+        strncpy(configuredSensors[index].units, units, sizeof(configuredSensors[index].units) - 1);
+        configuredSensors[index].units[sizeof(configuredSensors[index].units) - 1] = '\0';
+        
         configuredSensors[index].i2cAddress = sensor["i2cAddress"] | 0;
         configuredSensors[index].modbusRegister = sensor["modbusRegister"] | 0;
         
@@ -1770,6 +1875,146 @@ void handleSensorCommand() {
     responseDoc["message"] = "Command sent successfully";
     responseDoc["sensorName"] = configuredSensors[sensorIndex].name;
     responseDoc["command"] = command;
+    
+    String response;
+    serializeJson(responseDoc, response);
+    webServer.send(200, "application/json", response);
+}
+
+void handleTerminalCommand() {
+    Serial.println("Handling terminal command request");
+    
+    if (!webServer.hasArg("plain")) {
+        webServer.send(400, "application/json", "{\"success\":false,\"message\":\"No request body\"}");
+        return;
+    }
+    
+    String requestBody = webServer.arg("plain");
+    StaticJsonDocument<256> doc;
+    DeserializationError error = deserializeJson(doc, requestBody);
+    
+    if (error) {
+        Serial.print("JSON deserialization failed: ");
+        Serial.println(error.c_str());
+        webServer.send(400, "application/json", "{\"success\":false,\"message\":\"Invalid JSON\"}");
+        return;
+    }
+    
+    // Validate required fields
+    if (!doc.containsKey("target") || !doc.containsKey("command")) {
+        webServer.send(400, "application/json", "{\"success\":false,\"message\":\"Missing target or command field\"}");
+        return;
+    }
+    
+    const char* target = doc["target"];
+    const char* command = doc["command"];
+    
+    StaticJsonDocument<512> responseDoc;
+    responseDoc["success"] = true;
+    
+    // Route command based on target
+    if (strcmp(target, "IP") == 0) {
+        // Handle IP commands
+        String output = "";
+        
+        if (strcmp(command, "ipconfig") == 0 || strcmp(command, "ifconfig") == 0) {
+            output += "Network Configuration:\n";
+            output += "IP Address: " + eth.localIP().toString() + "\n";
+            output += "Subnet Mask: " + eth.subnetMask().toString() + "\n";
+            output += "Gateway: " + eth.gatewayIP().toString() + "\n";
+            uint8_t mac[6];
+            eth.macAddress(mac);
+            char macStr[18];
+            sprintf(macStr, "%02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+            output += "MAC Address: " + String(macStr) + "\n";
+            output += "DHCP: " + String(config.dhcpEnabled ? "Enabled" : "Disabled") + "\n";
+            output += "Hostname: " + String(config.hostname) + "\n";
+        }
+        else if (strncmp(command, "arp", 3) == 0) {
+            output += "ARP Table (simplified):\n";
+            output += "Note: Full ARP table access requires low-level lwIP integration\n";
+            output += "Gateway: " + eth.gatewayIP().toString() + " (via routing table)\n";
+        }
+        else if (strcmp(command, "ping") == 0) {
+            output += "Ping functionality not implemented in this terminal\n";
+            output += "Use network tools on your computer to ping " + eth.localIP().toString() + "\n";
+        }
+        else if (strcmp(command, "netstat") == 0) {
+            output += "Network Status:\n";
+            output += "Modbus TCP Server: Port " + String(config.modbusPort) + " (Active)\n";
+            output += "Web Server: Port 80 (Active)\n";
+            output += "Connected Modbus Clients: " + String(connectedClients) + "\n";
+        }
+        else {
+            output += "Unknown IP command: " + String(command) + "\n";
+            output += "Available commands: ipconfig, arp, netstat\n";
+        }
+        
+        responseDoc["output"] = output;
+    }
+    else if (strncmp(target, "sensor_", 7) == 0) {
+        // Extract sensor index from target (format: "sensor_X")
+        int sensorIndex = atoi(target + 7);
+        
+        if (sensorIndex < 0 || sensorIndex >= numConfiguredSensors) {
+            responseDoc["success"] = false;
+            responseDoc["error"] = "Invalid sensor index";
+        }
+        else if (!configuredSensors[sensorIndex].enabled) {
+            responseDoc["success"] = false;
+            responseDoc["error"] = "Sensor is not enabled";
+        }
+        else {
+            // Handle sensor-specific commands
+            String output = "";
+            
+            if (strcmp(command, "info") == 0) {
+                output += "Sensor Information:\n";
+                output += "Name: " + String(configuredSensors[sensorIndex].name) + "\n";
+                output += "Type: " + String(configuredSensors[sensorIndex].type) + "\n";
+                output += "Sensor Type: " + String(configuredSensors[sensorIndex].sensor_type) + "\n";
+                output += "I2C Address: 0x" + String(configuredSensors[sensorIndex].i2cAddress, HEX) + "\n";
+                output += "Modbus Register: " + String(configuredSensors[sensorIndex].modbusRegister) + "\n";
+                output += "Formula: " + String(configuredSensors[sensorIndex].formula) + "\n";
+                output += "Units: " + String(configuredSensors[sensorIndex].units) + "\n";
+                output += "Enabled: " + String(configuredSensors[sensorIndex].enabled ? "Yes" : "No") + "\n";
+            }
+            else if (strcmp(command, "read") == 0) {
+                if (strncmp(configuredSensors[sensorIndex].type, "EZO_", 4) == 0) {
+                    output += "Reading EZO sensor...\n";
+                    output += "Last response: " + String(configuredSensors[sensorIndex].response) + "\n";
+                    output += "Use 'R' command to trigger a new reading\n";
+                }
+                else {
+                    output += "Direct reading not supported for this sensor type\n";
+                    output += "Check Modbus register " + String(configuredSensors[sensorIndex].modbusRegister) + " for current value\n";
+                }
+            }
+            else if (strncmp(configuredSensors[sensorIndex].type, "EZO_", 4) == 0) {
+                // For EZO sensors, pass the command directly
+                if (ezoSensors[sensorIndex] != nullptr) {
+                    ezoSensors[sensorIndex]->send_cmd(command);
+                    configuredSensors[sensorIndex].lastCmdSent = millis();
+                    configuredSensors[sensorIndex].cmdPending = true;
+                    output += "Command '" + String(command) + "' sent to EZO sensor\n";
+                    output += "Check sensor response in a few seconds\n";
+                }
+                else {
+                    output += "EZO sensor not initialized\n";
+                }
+            }
+            else {
+                output += "Unknown command for this sensor type: " + String(command) + "\n";
+                output += "Available commands: info, read\n";
+            }
+            
+            responseDoc["output"] = output;
+        }
+    }
+    else {
+        responseDoc["success"] = false;
+        responseDoc["error"] = "Unknown target: " + String(target);
+    }
     
     String response;
     serializeJson(responseDoc, response);
