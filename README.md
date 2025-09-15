@@ -1,6 +1,19 @@
-# Modbus TCP IO Module
+# Modbus TCP IO Module - Enhanced
 
-A flexible Ethernet-based Modbus TCP IO module built on the Wiznet W5500-EVB-Pico board (RP2040). Features a modern web interface for configuration and real-time monitoring with support for configurable I2C sensors.
+A flexible Ethernet-based Modbus TCP IO module built on the Wiznet W5500-EVB-Pico board (RP2040). Features a modern web interface for configuration and real-time monitoring with support for multiple sensor types, mathematical calibration, and built-in diagnostic tools.
+
+## 🆕 Latest Enhancements (v2.0.0 - September 9, 2025)
+
+### Multi-Sensor Type Support
+- **I2C, UART, Digital, and Analog** sensor types
+- **Mathematical Formula Conversion**: Custom calibration expressions (e.g., `(x * 1.8) + 32`)
+- **Engineering Units**: Display converted values with proper units (°C, %, psi, etc.)
+- **Terminal Interface**: Built-in diagnostics with network and sensor commands
+
+### Diagnostic Terminal
+- **Network Commands**: `ipconfig`, `arp`, `ping`, `tracert`
+- **Sensor Commands**: `sensor list`, `sensor read <id>`, `sensor info <id>`, `sensor test <id>`
+- **Real-time Troubleshooting**: Immediate feedback for system diagnostics
 
 ![W5500-EVB-PoE-Pico Pinout](images/W5500-EVB-PoE-Pico-pinout.png)
 
