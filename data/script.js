@@ -1,134 +1,17 @@
-// Create data structures for the analog input chart
-let analogChart;
-// Define chart colors for consistency
-const chartColors = {
-    analog1: 'rgb(255, 99, 132)',  // Pink/Red
-    analog2: 'rgb(54, 162, 235)',  // Blue
-    analog3: 'rgb(75, 192, 192)'   // Teal
+// Global variables for configuration state
+let ioConfigState = {
+    di_pullup: [false, false, false, false, false, false, false, false],
+    di_invert: [false, false, false, false, false, false, false, false],
+    di_latch: [false, false, false, false, false, false, false, false],
+    do_invert: [false, false, false, false, false, false, false, false],
+    do_init: [false, false, false, false, false, false, false, false]
 };
 
-let analogChartData = {
-    labels: [],
-    datasets: [
-        {
-            label: 'Analog 1',
-            data: [],
-            borderColor: chartColors.analog1,
-            backgroundColor: 'rgba(255, 99, 132, 0.1)',
-            tension: 0.2,
-            pointRadius: 1,
-            borderWidth: 2
-        },
-        {
-            label: 'Analog 2',
-            data: [],
-            borderColor: chartColors.analog2,
-            backgroundColor: 'rgba(54, 162, 235, 0.1)',
-            tension: 0.2,
-            pointRadius: 1,
-            borderWidth: 2
-        },
-        {
-            label: 'Analog 3',
-            data: [],
-            borderColor: chartColors.analog3,
-            backgroundColor: 'rgba(75, 192, 192, 0.1)',
-            tension: 0.2,
-            pointRadius: 1,
-            borderWidth: 2
-        }
-    ]
-};
-
-// Maximum number of data points to show in the chart (1 hour at 1 point per second)
-const MAX_DATA_POINTS = 240;
-
-// Initialize the chart once document is ready
-document.addEventListener('DOMContentLoaded', function() {
-    const ctx = document.getElementById('analog-chart').getContext('2d');
-    
-    // Initialize the chart
-    analogChart = new Chart(ctx, {
-        type: 'line',
-        data: analogChartData,
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            animation: {
-                duration: 100
-            },
-            scales: {
-                x: {
-                    display: true,
-                    title: {
-                        display: true,
-                        text: 'Time'
-                    },
-                    ticks: {
-                        maxTicksLimit: 10,
-                        maxRotation: 0
-                    },
-                    adapters: {
-                        date: {
-                            locale: 'en-US'
-                        }
-                    }
-                },
-                y: {
-                    display: true,
-                    title: {
-                        display: true,
-                        text: 'mV'
-                    },
-                    suggestedMin: 0,
-                    suggestedMax: 3300
-                }
-            },
-            interaction: {
-                mode: 'index',
-                intersect: false
-            },
-            plugins: {
-                legend: {
-                    display: false  // Hide the legend since we're color-coding the values
-                },
-                tooltip: {
-                    enabled: true
-                }
-            }
-        }
-    });
-});
-
-// Function to update the chart with new analog input values
-function updateAnalogChart(analogValues) {
-    if (!analogChart) return;
-    
-    // Add current timestamp as label
-    const now = new Date();
-    const timeString = now.getHours().toString().padStart(2, '0') + ':' + 
-                      now.getMinutes().toString().padStart(2, '0') + ':' + 
-                      now.getSeconds().toString().padStart(2, '0');
-    
-    // Add new data point with timestamp
-    analogChartData.labels.push(timeString);
-    
-    // Add data for each analog input
-    for (let i = 0; i < Math.min(analogValues.length, 3); i++) {
-        analogChartData.datasets[i].data.push(analogValues[i]);
-    }
-    
-    // Remove old data points if we exceed the maximum
-    if (analogChartData.datasets[0].data.length > MAX_DATA_POINTS) {
-        analogChartData.labels.shift();
-        analogChartData.datasets.forEach(dataset => {
-            dataset.data.shift();
-        });
-    }
-    
-    // Update chart
-    analogChart.update();
-}
+// Global variables for sensor management
+let currentSensorConfig = [];
+let currentCalibratedSensors = [];
+let currentSensorCommand = null;
+let currentSensorI2CData = null;
 
 // Toast notification functions
 function showToast(message, type, countdown = false, duration = 3000) {
@@ -291,6 +174,7 @@ let ioStatusLoadAttempts = 0;
 const MAX_IO_STATUS_LOAD_ATTEMPTS = 5;
 
 function updateIOStatus() {
+    console.log("=== UPDATE IO STATUS CALLED ===");
     console.log("Fetching IO status...");
     fetch('/iostatus')
         .then(response => {
@@ -300,7 +184,16 @@ function updateIOStatus() {
             return response.json();
         })
         .then(data => {
-            console.log("IO status loaded successfully:", data);
+            console.log("=== IO STATUS RESPONSE ===");
+            console.log("Full data object:", data);
+            console.log("configured_sensors exists:", !!data.configured_sensors);
+            console.log("configured_sensors length:", data.configured_sensors ? data.configured_sensors.length : 'N/A');
+            if (data.configured_sensors) {
+                console.log("configured_sensors content:", data.configured_sensors);
+            }
+            
+            // Store the current IO status for calibration modal
+            window.currentIOStatus = data;
             
             // Update Modbus status
             const statusIndicator = document.getElementById('modbus-status');
@@ -314,68 +207,20 @@ function updateIOStatus() {
                 statusText.textContent = 'Disconnected';
             }
 
-            // Update client count
+            // Update client count and modbus status
             document.getElementById('client-count').textContent = data.modbus_client_count;
-
-            // Update digital inputs
-            const diDiv = document.getElementById('digital-inputs');
-            diDiv.innerHTML = data.di.map((value, index) => {
-                const isInverted = ioConfigState.di_invert[index];
-                const isLatched = data.di_latched && data.di_latched[index];
-                const isLatchEnabled = ioConfigState.di_latch[index];
-                const rawValue = data.di_raw && data.di_raw[index];
-                
-                // Create status text that includes raw value and latched information when relevant
-                let statusText = value ? 'ON' : 'OFF';
-                let indicators = '';
-                
-                if (isInverted) {
-                    indicators += '<span class="inverted-indicator" title="This input is inverted"></span>';
+            
+            // Update modbus status indicator
+            const modbusStatus = document.getElementById('modbus-status');
+            if (modbusStatus) {
+                if (data.modbus_client_count > 0) {
+                    modbusStatus.textContent = 'Active';
+                    modbusStatus.className = 'status-indicator active';
+                } else {
+                    modbusStatus.textContent = 'No Clients';
+                    modbusStatus.className = 'status-indicator inactive';
                 }
-                
-                if (isLatchEnabled) {
-                    indicators += '<span class="latch-enabled-indicator" title="Latching enabled"></span>';
-                }
-                
-                if (isLatched) {
-                    indicators += '<span class="latched-indicator" title="Input is currently latched">L</span>';
-                    // If latched and raw value is different, show both states
-                    if (value !== rawValue) {
-                        statusText = `ON`;
-                    }
-                }
-                
-                // Add click handler for latched inputs to reset them individually
-                const clickHandler = isLatched ? 
-                    `onclick="resetSingleLatch(${index})"` : '';
-                const clickableClass = isLatched ? 'latched-clickable' : '';
-                
-                return `<div class="io-item ${value ? 'io-on' : 'io-off'} ${clickableClass}" ${clickHandler}>
-                    <span><strong>DI${index + 1}</strong>${indicators}</span>
-                    <span>${statusText}</span>
-                </div>`;
-            }).join('');
-
-            // Update digital outputs with click handlers
-            const doDiv = document.getElementById('digital-outputs');
-            doDiv.innerHTML = data.do.map((value, index) => {
-                const isInverted = ioConfigState.do_invert[index];
-                return `<div class="io-item output-item ${value ? 'io-on' : 'io-off'}" 
-                      onclick="toggleOutput(${index}, ${value})">
-                    <span><strong>DO${index + 1}</strong>${isInverted ? ' <span class="inverted-indicator" title="This output is inverted"></span>' : ''}</span>
-                    <span>${value ? 'ON' : 'OFF'}</span>
-                </div>`;
-            }).join('');
-
-            // Update analog inputs with matching colors from chart
-            const aiDiv = document.getElementById('analog-inputs');
-            aiDiv.innerHTML = data.ai.map((value, index) => {
-                const analogClass = `analog${index + 1}`;
-                return `<div class="io-item analog-value ${analogClass}">
-                    <span><strong>AI${index + 1}</strong></span>
-                    <span>${value} mV</span>
-                </div>`;
-            }).join('');
+            }
             
             // Update connected clients
             const clientList = document.getElementById('client-list');
@@ -393,35 +238,285 @@ function updateIOStatus() {
                 clientList.innerHTML = '<div class="no-clients">No clients connected</div>';
             }
             
-            // Update analog chart with new values
-            updateAnalogChart(data.ai);
+            // Update I2C sensors with dynamic display - remove this legacy section as it conflicts with new sensor data flow
+            // This section is now handled by the configured_sensors logic below
             
-            // Update I2C sensors with dynamic display
-            const i2cContainer = document.getElementById('i2c-sensors-container');
-            if (data.i2c_sensors && Object.keys(data.i2c_sensors).length > 0) {
-                let sensorHtml = '';
+            // Update Protocol-based Configured Sensors section
+            console.log("Debug: Checking configured_sensors data:", data.configured_sensors);
+            if (data.configured_sensors && data.configured_sensors.length > 0) {
+                console.log("Debug: Found", data.configured_sensors.length, "configured sensors");
+                // Organize sensors by protocol
+                const sensorsByProtocol = {
+                    'I2C': [],
+                    'UART': [],
+                    'Analog Voltage': [],
+                    'One-Wire': [],
+                    'Digital Counter': []
+                };
                 
-                // Display all configured sensor values
-                for (const [sensorKey, sensorValue] of Object.entries(data.i2c_sensors)) {
-                    const displayName = getSensorDisplayName(sensorKey);
-                    const unit = getSensorUnit(sensorKey);
+                data.configured_sensors.forEach(sensor => {
+                    // Determine protocol from sensor configuration or type
+                    let protocol = 'I2C'; // default
                     
-                    sensorHtml += `
-                        <div class="io-item analog-value">
-                            <span><strong>${displayName}</strong></span>
-                            <span>${sensorValue} ${unit}</span>
+                    if (sensor.protocol) {
+                        protocol = sensor.protocol;
+                    } else {
+                        // Infer protocol from sensor type if not specified
+                        if (sensor.type && sensor.type.includes('ANALOG')) {
+                            protocol = 'Analog Voltage';
+                        } else if (sensor.type && sensor.type.includes('UART')) {
+                            protocol = 'UART';
+                        } else if (sensor.type && sensor.type.includes('DS18B20')) {
+                            protocol = 'One-Wire';
+                        } else if (sensor.type && sensor.type.includes('DIGITAL')) {
+                            protocol = 'Digital Counter';
+                        }
+                    }
+                    
+                    if (sensorsByProtocol[protocol]) {
+                        sensorsByProtocol[protocol].push(sensor);
+                    }
+                });
+                
+                console.log("Debug: Sensors organized by protocol:", sensorsByProtocol);
+                
+                // Update each protocol category with visual flow
+                Object.keys(sensorsByProtocol).forEach(protocol => {
+                    let containerId, categoryId;
+                    
+                    switch(protocol) {
+                        case 'I2C':
+                            containerId = 'i2c-sensors-flow';
+                            categoryId = 'i2c-category';
+                            break;
+                        case 'UART':
+                            containerId = 'uart-sensors-flow';
+                            categoryId = 'uart-category';
+                            break;
+                        case 'Analog Voltage':
+                            containerId = 'analog-sensors-flow';
+                            categoryId = 'analog-category';
+                            break;
+                        case 'One-Wire':
+                            containerId = 'onewire-sensors-flow';
+                            categoryId = 'onewire-category';
+                            break;
+                        case 'Digital Counter':
+                            containerId = 'digital-sensors-flow';
+                            categoryId = 'digital-category';
+                            break;
+                        default:
+                            return; // Skip unknown protocols
+                    }
+                    
+                    const container = document.getElementById(containerId);
+                    const category = document.getElementById(categoryId);
+                    
+                    if (container && category) {
+                        if (sensorsByProtocol[protocol].length > 0) {
+                            let sensorsHtml = '';
+                            
+                            sensorsByProtocol[protocol].forEach(sensor => {
+                                const statusClass = sensor.enabled ? 'sensor-status-enabled' : 'sensor-status-disabled';
+                                const statusText = sensor.enabled ? 'Enabled' : 'Disabled';
+                                
+                                // Raw data stage
+                                let rawValue = 'No data';
+                                let rawDetails = '';
+                                
+                                // Use raw I2C data if available
+                                if (sensor.raw_i2c_data && sensor.raw_i2c_data.length > 0) {
+                                    rawValue = sensor.raw_i2c_data;
+                                    rawDetails = `<div class="raw-data-details"><strong>I2C Register:</strong> ${sensor.i2c_parsing?.register || 'N/A'}<br><strong>Data Length:</strong> ${sensor.i2c_parsing?.data_length || 'N/A'} bytes</div>`;
+                                } 
+                                // Fallback to raw_value if I2C data not available
+                                else if (sensor.raw_value !== undefined) {
+                                    rawValue = sensor.raw_value;
+                                }
+                                
+                                // Calibration stage
+                                let calibratedValue = 'Uncalibrated';
+                                let calibratedUnit = '';
+                                if (sensor.calibrated_value !== undefined) {
+                                    calibratedValue = sensor.calibrated_value;
+                                    calibratedUnit = sensor.unit || '';
+                                }
+                                
+                                // Modbus stage - use current_value as final output
+                                let modbusValue = 'Not mapped';
+                                let modbusRegister = '';
+                                if (sensor.modbus_register !== undefined && sensor.modbus_register > 0) {
+                                    modbusRegister = `Reg ${sensor.modbus_register}`;
+                                    if (sensor.current_value !== undefined) {
+                                        modbusValue = sensor.current_value.toString();
+                                    }
+                                }
+                                
+                                // Handle secondary values for multi-value sensors
+                                let secondaryValueHtml = '';
+                                if (sensor.secondary_value) {
+                                    secondaryValueHtml = `
+                                        <div class="secondary-value-section">
+                                            <h5>Secondary Value: ${sensor.secondary_value.name}</h5>
+                                            <div class="sensor-flow-pipeline">
+                                                <div class="flow-stage">
+                                                    <div class="flow-stage-box flow-stage-raw">
+                                                        <div class="flow-stage-title">Raw</div>
+                                                        <div class="flow-stage-value">${sensor.secondary_value.raw}</div>
+                                                    </div>
+                                                </div>
+                                                <div class="flow-arrow">→</div>
+                                                <div class="flow-stage">
+                                                    <div class="flow-stage-box flow-stage-calibration">
+                                                        <div class="flow-stage-title">Calibrated</div>
+                                                        <div class="flow-stage-value">${sensor.secondary_value.calibrated}</div>
+                                                    </div>
+                                                </div>
+                                                <div class="flow-arrow">→</div>
+                                                <div class="flow-stage">
+                                                    <div class="flow-stage-box flow-stage-modbus">
+                                                        <div class="flow-stage-title">Modbus</div>
+                                                        <div class="flow-stage-value">${sensor.secondary_value.calibrated}</div>
+                                                        <div class="flow-stage-unit">${sensor.secondary_value.modbus_register ? `Reg ${sensor.secondary_value.modbus_register}` : 'Not mapped'}</div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    `;
+                                }
+                                
+                                sensorsHtml += `
+                                    <div class="sensor-flow-item">
+                                        <div class="sensor-flow-header">
+                                            <div class="sensor-flow-title">${sensor.name}</div>
+                                            <div class="sensor-status-badge ${statusClass}">${statusText}</div>
+                                        </div>
+                                        
+                                        <div class="sensor-flow-pipeline">
+                                            <div class="flow-stage">
+                                                <div class="flow-stage-box flow-stage-raw">
+                                                    <div class="flow-stage-title">Raw Data</div>
+                                                    <div class="flow-stage-value">${rawValue}</div>
+                                                    ${rawDetails}
+                                                </div>
+                                            </div>
+                                            
+                                            <div class="flow-arrow">→</div>
+                                            
+                                            <div class="flow-stage">
+                                                <div class="flow-stage-box flow-stage-calibration">
+                                                    <div class="flow-stage-title">Calibrated</div>
+                                                    <div class="flow-stage-value">${calibratedValue}</div>
+                                                    <div class="flow-stage-unit">${calibratedUnit}</div>
+                                                    <button class="calibration-btn" onclick="showCalibrationModal('${sensor.name}')" title="Configure calibration">⚙</button>
+                                                </div>
+                                            </div>
+                                            
+                                            <div class="flow-arrow">→</div>
+                                            
+                                            <div class="flow-stage">
+                                                <div class="flow-stage-box flow-stage-modbus">
+                                                    <div class="flow-stage-title">Modbus Register</div>
+                                                    <div class="flow-stage-value">${modbusValue}</div>
+                                                    <div class="flow-stage-unit">${modbusRegister}</div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        
+                                        ${secondaryValueHtml}
+                                        
+                                        <div class="sensor-flow-actions">
+                                            <button class="flow-action-btn flow-action-refresh" onclick="refreshSensorData('${sensor.name}')" title="Refresh sensor data">🔄 Refresh</button>
+                                            <button class="flow-action-btn flow-action-test" onclick="testSensorRead('${sensor.name}')" title="Test sensor communication">🔍 Test</button>
+                                        </div>
+                                    </div>
+                                `;
+                            });
+                            
+                            container.innerHTML = sensorsHtml;
+                            category.classList.remove('empty');
+                            category.style.display = 'block';
+                        } else {
+                            category.classList.add('empty');
+                            category.style.display = 'none';
+                        }
+                    }
+                });
+            } else {
+                console.log("=== NO CONFIGURED SENSORS FOUND ===");
+                console.log("Data object keys:", Object.keys(data));
+                
+                // Hide all protocol categories when no sensors are configured
+                ['i2c-category', 'uart-category', 'analog-category', 'onewire-category', 'digital-category'].forEach(categoryId => {
+                    const category = document.getElementById(categoryId);
+                    if (category) {
+                        category.classList.add('empty');
+                        category.style.display = 'none';
+                    }
+                });
+            }
+            
+            // Update Modbus Register Map
+            const modbusContainer = document.getElementById('modbus-registers-container');
+            if (data.modbus_registers && data.modbus_registers.length > 0) {
+                let registerHtml = '';
+                
+                data.modbus_registers.forEach(reg => {
+                    const isSimulated = reg.simulated || false;
+                    const simulatedClass = isSimulated ? 'simulated' : '';
+                    
+                    let nameDisplay = '';
+                    if (reg.sensor_name) {
+                        nameDisplay = `<div class="register-name">${reg.sensor_name}</div>`;
+                    } else if (reg.type === 'analog_input') {
+                        nameDisplay = `<div class="register-name">Analog Input ${reg.register + 1}</div>`;
+                    } else {
+                        nameDisplay = `<div class="register-name">Register ${reg.register}</div>`;
+                    }
+                    
+                    let typeDisplay = '';
+                    if (reg.sensor_type) {
+                        typeDisplay = `<div class="register-type">${reg.sensor_type}</div>`;
+                    } else {
+                        typeDisplay = `<div class="register-type">${reg.type}</div>`;
+                    }
+                    
+                    let valueDisplay = '';
+                    if (reg.value !== undefined) {
+                        const unit = reg.unit || '';
+                        const value = typeof reg.value === 'number' ? 
+                                     (reg.value % 1 === 0 ? reg.value : reg.value.toFixed(2)) : 
+                                     reg.value;
+                        valueDisplay = `<span>${value} <span class="register-unit">${unit}</span></span>`;
+                    } else if (reg.response) {
+                        valueDisplay = `<span>${reg.response}</span>`;
+                    }
+                    
+                    const simulationBadge = isSimulated ? 
+                        '<span class="simulation-badge">SIM</span>' : '';
+                    
+                    registerHtml += `
+                        <div class="register-item ${simulatedClass}">
+                            <div class="register-info">
+                                <span class="register-number">${reg.register}</span>
+                                <div class="register-details">
+                                    ${nameDisplay}
+                                    ${typeDisplay}
+                                </div>
+                                ${simulationBadge}
+                            </div>
+                            <div class="register-value">
+                                ${valueDisplay}
+                            </div>
                         </div>
                     `;
-                }
+                });
                 
-                i2cContainer.innerHTML = sensorHtml;
+                modbusContainer.innerHTML = registerHtml;
             } else {
-                // Show message when no sensor data is available
-                const messageText = 'No sensors configured';
-                
-                i2cContainer.innerHTML = `
-                    <div class="io-item" style="color: #666; font-style: italic;">
-                        <span>${messageText}</span>
+                modbusContainer.innerHTML = `
+                    <div class="register-item" style="color: #666; font-style: italic;">
+                        <span>No register mappings available</span>
                     </div>
                 `;
             }
@@ -459,56 +554,6 @@ function updateIOStatus() {
 }
 
 // Function to reset a single latched input
-function resetSingleLatch(inputIndex) {
-    console.log(`Resetting latched input ${inputIndex}...`);
-    
-    // Show loading toast
-    const loadingToast = showToast(`Resetting input ${inputIndex + 1}...`, 'info');
-    
-    // Send request to server
-    fetch('/reset-latch', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ input: inputIndex })
-    })
-    .then(response => {
-        if (!response.ok) {
-            throw new Error('Network response was not ok');
-        }
-        return response.json();
-    })
-    .then(data => {
-        // Remove loading toast
-        document.getElementById('toast-container').removeChild(loadingToast);
-        
-        if (data.success) {
-            showToast(`Input ${inputIndex + 1} has been reset`, 'success');
-            // Update IO status immediately to show the changes
-            updateIOStatus();
-        } else {
-            showToast(`Failed to reset input ${inputIndex + 1}. Please try again.`, 'error', false, 5000);
-        }
-    })
-    .catch(error => {
-        // Remove loading toast if it exists
-        if (document.getElementById('toast-container').contains(loadingToast)) {
-            document.getElementById('toast-container').removeChild(loadingToast);
-        }
-        showToast('Error resetting latched input: ' + error.message, 'error', false, 5000);
-    });
-}
-
-// Global configuration state
-let ioConfigState = {
-    di_pullup: Array(8).fill(false),
-    di_invert: Array(8).fill(false),
-    di_latch: Array(8).fill(false),
-    do_invert: Array(8).fill(false),
-    do_initial_state: Array(8).fill(false)
-};
-
 function loadIOConfig() {
     console.log("Loading IO configuration...");
     fetch('/ioconfig')
@@ -771,27 +816,6 @@ function saveConfig() {
     });
 }
 
-function toggleOutput(index, currentState) {
-    const newState = currentState ? 0 : 1;
-    fetch('/setoutput', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-        },
-        body: `output=${index}&state=${newState}`
-    })
-    .then(response => {
-        if (!response.ok) {
-            throw new Error('Network response was not ok');
-        }
-        // Update will happen on next status refresh
-    })
-    .catch(error => {
-        console.error('Error:', error);
-        alert('Failed to toggle output');
-    });
-}
-
 function updateUI() {
     // Update IO status only - removed updateClientStatus() which doesn't exist
     updateIOStatus();
@@ -898,95 +922,6 @@ setTimeout(() => {
     }, 1000);
 }, 500);
 
-// Add event listener for reset latches button
-document.getElementById('reset-latches-btn').addEventListener('click', resetLatches);
-
-
-// Function to reset all latched inputs
-// Note: Modbus clients can reset individual latches by writing to coils 100-107
-function resetLatches() {
-    console.log('Resetting all latched inputs...');
-    
-    // Show loading toast
-    const loadingToast = showToast('Resetting latched inputs...', 'info');
-    
-    // Send request to server
-    fetch('/reset-latches', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        }
-    })
-    .then(response => {
-        if (!response.ok) {
-            throw new Error('Network response was not ok');
-        }
-        return response.json();
-    })
-    .then(data => {
-        // Remove loading toast
-        document.getElementById('toast-container').removeChild(loadingToast);
-        
-        if (data.success) {
-            showToast('Latched inputs have been reset', 'success');
-            // Update IO status immediately to show the changes
-            updateIOStatus();
-        } else {
-            showToast('Failed to reset latched inputs. Please try again.', 'error', false, 5000);
-        }
-    })
-    .catch(error => {
-        // Remove loading toast if it exists
-        if (document.getElementById('toast-container').contains(loadingToast)) {
-            document.getElementById('toast-container').removeChild(loadingToast);
-        }
-        showToast('Error resetting latched inputs: ' + error.message, 'error', false, 5000);
-    });
-}
-
-// Function to reset a single latched input
-// Note: Modbus clients can reset individual latches by writing to coils 100-107
-function resetSingleLatch(inputIndex) {
-    console.log(`Resetting latched input ${inputIndex}...`);
-    
-    // Show loading toast
-    const loadingToast = showToast(`Resetting input ${inputIndex + 1}...`, 'info');
-    
-    // Send request to server
-    fetch('/reset-latch', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ input: inputIndex })
-    })
-    .then(response => {
-        if (!response.ok) {
-            throw new Error('Network response was not ok');
-        }
-        return response.json();
-    })
-    .then(data => {
-        // Remove loading toast
-        document.getElementById('toast-container').removeChild(loadingToast);
-        
-        if (data.success) {
-            showToast(`Input ${inputIndex + 1} has been reset`, 'success');
-            // Update IO status immediately to show the changes
-            updateIOStatus();
-        } else {
-            showToast(`Failed to reset input ${inputIndex + 1}. Please try again.`, 'error', false, 5000);
-        }
-    })
-    .catch(error => {
-        // Remove loading toast if it exists
-        if (document.getElementById('toast-container').contains(loadingToast)) {
-            document.getElementById('toast-container').removeChild(loadingToast);
-        }
-        showToast('Error resetting latched input: ' + error.message, 'error', false, 5000);
-    });
-}
-
 // Sensor Management Functions
 let sensorConfigData = [];
 let editingSensorIndex = -1;
@@ -1084,7 +1019,9 @@ function renderSensorTable() {
     }
     
     tableBody.innerHTML = sensorConfigData.map((sensor, index) => {
-        const i2cAddress = sensor.i2cAddress ? `0x${sensor.i2cAddress.toString(16).toUpperCase().padStart(2, '0')}` : 'N/A';
+        const i2cAddress = sensor.type.startsWith('SIM_') ? 
+            (sensor.i2cAddress === 0 ? 'Simulated' : `0x${sensor.i2cAddress.toString(16).toUpperCase().padStart(2, '0')}`) :
+            (sensor.i2cAddress ? `0x${sensor.i2cAddress.toString(16).toUpperCase().padStart(2, '0')}` : 'N/A');
         const enabledClass = sensor.enabled ? 'sensor-enabled' : 'sensor-disabled';
         const enabledText = sensor.enabled ? 'Yes' : 'No';
         const hasCalibration = sensor.calibration && (sensor.calibration.offset !== undefined || sensor.calibration.scale !== undefined);
@@ -1102,8 +1039,6 @@ function renderSensorTable() {
                 <td>
                     <div class="sensor-actions">
                         <button class="edit-btn" onclick="editSensor(${index})" title="Edit sensor">Edit</button>
-                        <button class="calibrate-btn" onclick="calibrateSensor(${index})" title="Calibrate sensor">Calibrate</button>
-                        ${sensor.type.startsWith('EZO_') ? '<button class="ezo-calibrate-btn" onclick="showEzoCalibrationModal(' + index + ')" title="EZO Calibration">EZO Cal</button>' : ''}
                         <button class="delete-btn" onclick="deleteSensor(${index})" title="Delete sensor">Delete</button>
                     </div>
                 </td>
@@ -1146,12 +1081,13 @@ function updateRegisterSummary() {
 function showAddSensorModal() {
     editingSensorIndex = -1;
     document.getElementById('sensor-modal-title').textContent = 'Add Sensor';
+    document.getElementById('sensor-modal-overlay').querySelector('button[onclick="saveSensor()"]').textContent = 'Add';
     document.getElementById('sensor-form').reset();
     document.getElementById('sensor-enabled').checked = true;
-    
+
     // Setup sensor calibration method listeners
     setupSensorCalibrationMethodListeners();
-    
+
     // Reset calibration to defaults
     document.getElementById('sensor-method-linear').checked = true;
     document.getElementById('sensor-calibration-offset').value = 0;
@@ -1159,30 +1095,336 @@ function showAddSensorModal() {
     document.getElementById('sensor-calibration-polynomial').value = '';
     document.getElementById('sensor-calibration-expression').value = '';
     showSensorCalibrationMethod('linear');
+
+    // Setup sensor type change listener
+    document.getElementById('sensor-type').addEventListener('change', updateSensorFormFields);
     
+    // Initialize form fields visibility
+    updateSensorFormFields();
+
     document.getElementById('sensor-modal-overlay').classList.add('show');
 }
 
-// Show the edit sensor modal
+// Update protocol-specific configuration fields
+function updateSensorProtocolFields() {
+    const protocolType = document.getElementById('sensor-protocol').value;
+    const protocolConfig = document.getElementById('protocol-config');
+    
+    // Hide all protocol configs first
+    const allConfigs = document.querySelectorAll('.protocol-config');
+    allConfigs.forEach(config => config.style.display = 'none');
+    
+    // Show appropriate protocol config
+    if (protocolType === 'I2C') {
+        protocolConfig.style.display = 'block';
+        document.getElementById('i2c-config').style.display = 'block';
+        loadAvailablePins('I2C');
+    } else if (protocolType === 'UART') {
+        protocolConfig.style.display = 'block';
+        document.getElementById('uart-config').style.display = 'block';
+        loadAvailablePins('UART');
+    } else if (protocolType === 'Analog Voltage') {
+        protocolConfig.style.display = 'block';
+        document.getElementById('analog-config').style.display = 'block';
+        loadAvailablePins('Analog Voltage');
+    } else if (protocolType === 'One-Wire') {
+        protocolConfig.style.display = 'block';
+        document.getElementById('onewire-config').style.display = 'block';
+        loadAvailablePins('One-Wire');
+    } else if (protocolType === 'Digital Counter') {
+        protocolConfig.style.display = 'block';
+        document.getElementById('digital-config').style.display = 'block';
+        loadAvailablePins('Digital Counter');
+    } else {
+        // No protocol selected
+        protocolConfig.style.display = 'none';
+    }
+    
+    // Also update sensor type options based on protocol
+    updateSensorTypeOptions();
+}
+
+// Load available pins for the selected protocol
+function loadAvailablePins(protocol) {
+    fetch(`/available-pins?protocol=${encodeURIComponent(protocol)}`)
+        .then(response => response.json())
+        .then(data => {
+            if (protocol === 'I2C') {
+                const pinsSelect = document.getElementById('sensor-i2c-pins');
+                pinsSelect.innerHTML = '<option value="">Select I2C pins...</option>';
+                
+                if (data.pinPairs) {
+                    data.pinPairs.forEach(pair => {
+                        const option = document.createElement('option');
+                        option.value = `${pair.sda},${pair.scl}`;
+                        option.textContent = pair.label;
+                        pinsSelect.appendChild(option);
+                    });
+                }
+            } else if (protocol === 'UART') {
+                const pinsSelect = document.getElementById('sensor-uart-pins');
+                pinsSelect.innerHTML = '<option value="">Select UART pins...</option>';
+                
+                if (data.pinPairs) {
+                    data.pinPairs.forEach(pair => {
+                        const option = document.createElement('option');
+                        option.value = `${pair.tx},${pair.rx}`;
+                        option.textContent = pair.label;
+                        pinsSelect.appendChild(option);
+                    });
+                }
+            } else if (protocol === 'Analog Voltage') {
+                const pinsSelect = document.getElementById('sensor-analog-pin');
+                pinsSelect.innerHTML = '<option value="">Select analog pin...</option>';
+                
+                if (data.pins) {
+                    data.pins.forEach(pin => {
+                        const option = document.createElement('option');
+                        option.value = pin.pin;
+                        option.textContent = pin.label;
+                        pinsSelect.appendChild(option);
+                    });
+                }
+            } else if (protocol === 'One-Wire') {
+                const pinsSelect = document.getElementById('sensor-onewire-pin');
+                pinsSelect.innerHTML = '<option value="">Select One-Wire pin...</option>';
+                
+                if (data.pins) {
+                    data.pins.forEach(pin => {
+                        const option = document.createElement('option');
+                        option.value = pin.pin;
+                        option.textContent = pin.label;
+                        pinsSelect.appendChild(option);
+                    });
+                }
+            } else if (protocol === 'Digital Counter') {
+                const pinsSelect = document.getElementById('sensor-digital-pin');
+                pinsSelect.innerHTML = '<option value="">Select digital pin...</option>';
+                
+                if (data.pins) {
+                    data.pins.forEach(pin => {
+                        const option = document.createElement('option');
+                        option.value = pin.pin;
+                        option.textContent = pin.label;
+                        pinsSelect.appendChild(option);
+                    });
+                }
+            }
+        })
+        .catch(error => {
+            console.error('Error loading available pins:', error);
+            showToast('Error loading available pins', 'error');
+        });
+}
+
+// Update sensor type options based on selected protocol
+function updateSensorTypeOptions() {
+    const protocolType = document.getElementById('sensor-protocol').value;
+    const sensorTypeSelect = document.getElementById('sensor-type');
+    
+    // Clear current options
+    sensorTypeSelect.innerHTML = '<option value="">Select sensor type</option>';
+    
+    let optgroups = [];
+    
+    if (protocolType === 'I2C') {
+        optgroups.push({
+            label: 'Real I2C Sensors',
+            options: [
+                { value: 'BME280', text: 'BME280 (Temperature, Humidity, Pressure)' },
+                { value: 'SHT30', text: 'SHT30 (Temperature, Humidity)' },
+                { value: 'EZO_PH', text: 'EZO-pH (pH Sensor)' },
+                { value: 'EZO_EC', text: 'EZO-EC (Conductivity)' },
+                { value: 'EZO_DO', text: 'EZO-DO (Dissolved Oxygen)' },
+                { value: 'EZO_RTD', text: 'EZO-RTD (Temperature)' },
+                { value: 'EZO_ORP', text: 'EZO-ORP (Oxidation-Reduction Potential)' },
+                { value: 'GENERIC_I2C', text: 'Generic I2C Sensor' }
+            ]
+        });
+        optgroups.push({
+            label: 'Simulated I2C Sensors',
+            options: [
+                { value: 'SIM_I2C_TEMPERATURE', text: 'Simulated I2C Temperature' },
+                { value: 'SIM_I2C_HUMIDITY', text: 'Simulated I2C Humidity' },
+                { value: 'SIM_I2C_PRESSURE', text: 'Simulated I2C Pressure' }
+            ]
+        });
+    } else if (protocolType === 'UART') {
+        optgroups.push({
+            label: 'Real UART Sensors',
+            options: [
+                { value: 'MODBUS_RTU', text: 'Modbus RTU Sensor' },
+                { value: 'NMEA_GPS', text: 'NMEA GPS Receiver' },
+                { value: 'ASCII_SENSOR', text: 'ASCII Text Sensor' },
+                { value: 'BINARY_SENSOR', text: 'Binary Protocol Sensor' },
+                { value: 'GENERIC_UART', text: 'Generic UART Device' }
+            ]
+        });
+        optgroups.push({
+            label: 'Simulated UART Sensors',
+            options: [
+                { value: 'SIM_UART_TEMPERATURE', text: 'Simulated UART Temperature' },
+                { value: 'SIM_UART_FLOW', text: 'Simulated UART Flow Meter' }
+            ]
+        });
+    } else if (protocolType === 'Analog Voltage') {
+        optgroups.push({
+            label: 'Real Analog Sensors',
+            options: [
+                { value: 'ANALOG_4_20MA', text: '4-20mA Current Loop' },
+                { value: 'ANALOG_0_10V', text: '0-10V Voltage Input' },
+                { value: 'ANALOG_THERMISTOR', text: 'Thermistor Temperature' },
+                { value: 'ANALOG_PRESSURE', text: 'Analog Pressure Transducer' },
+                { value: 'ANALOG_CUSTOM', text: 'Custom Analog Input' }
+            ]
+        });
+        optgroups.push({
+            label: 'Simulated Analog Sensors',
+            options: [
+                { value: 'SIM_ANALOG_VOLTAGE', text: 'Simulated Analog Voltage' },
+                { value: 'SIM_ANALOG_CURRENT', text: 'Simulated Analog Current' }
+            ]
+        });
+    } else if (protocolType === 'One-Wire') {
+        optgroups.push({
+            label: 'Real One-Wire Sensors',
+            options: [
+                { value: 'DS18B20', text: 'DS18B20 Temperature Sensor' },
+                { value: 'DS18S20', text: 'DS18S20 Temperature Sensor' },
+                { value: 'DS1822', text: 'DS1822 Temperature Sensor' },
+                { value: 'GENERIC_ONEWIRE', text: 'Generic One-Wire Device' }
+            ]
+        });
+        optgroups.push({
+            label: 'Simulated One-Wire Sensors',
+            options: [
+                { value: 'SIM_ONEWIRE_TEMP', text: 'Simulated One-Wire Temperature' }
+            ]
+        });
+    } else if (protocolType === 'Digital Counter') {
+        optgroups.push({
+            label: 'Real Digital Sensors',
+            options: [
+                { value: 'DIGITAL_PULSE', text: 'Digital Pulse Counter' },
+                { value: 'DIGITAL_SWITCH', text: 'Digital Switch/Contact' },
+                { value: 'DIGITAL_ENCODER', text: 'Digital Encoder' },
+                { value: 'DIGITAL_FREQUENCY', text: 'Frequency Counter' },
+                { value: 'GENERIC_DIGITAL', text: 'Generic Digital Input' }
+            ]
+        });
+        optgroups.push({
+            label: 'Simulated Digital Sensors',
+            options: [
+                { value: 'SIM_DIGITAL_SWITCH', text: 'Simulated Digital Switch' },
+                { value: 'SIM_DIGITAL_COUNTER', text: 'Simulated Digital Counter' }
+            ]
+        });
+    }
+    
+    // Add optgroups to select
+    optgroups.forEach(group => {
+        const optgroup = document.createElement('optgroup');
+        optgroup.label = group.label;
+        
+        group.options.forEach(option => {
+            const optionElement = document.createElement('option');
+            optionElement.value = option.value;
+            optionElement.textContent = option.text;
+            optgroup.appendChild(optionElement);
+        });
+        
+        sensorTypeSelect.appendChild(optgroup);
+    });
+}
+
+// Update sensor form fields based on selected sensor type
+function updateSensorFormFields() {
+    const protocol = document.getElementById('sensor-protocol').value;
+    const sensorType = document.getElementById('sensor-type').value;
+    const i2cAddressContainer = document.getElementById('sensor-i2c-address').parentElement;
+    const i2cAddressField = document.getElementById('sensor-i2c-address');
+    
+    // Hide I2C address field for non-I2C protocols
+    if (protocol === 'I2C') {
+        i2cAddressContainer.style.display = 'block';
+        i2cAddressField.required = true;
+        
+        if (sensorType.startsWith('SIM_')) {
+            // For simulated I2C sensors, use 0x00 as default
+            i2cAddressField.value = '0x00';
+            i2cAddressField.required = false;
+        } else if (i2cAddressField.value === '0x00' || i2cAddressField.value === '') {
+            // Clear default for real I2C sensors
+            i2cAddressField.value = '';
+        }
+    } else {
+        // For non-I2C protocols, hide I2C address field
+        i2cAddressContainer.style.display = 'none';
+        i2cAddressField.value = '0x00'; // Use placeholder for non-I2C
+        i2cAddressField.required = false;
+    }
+    
+    // Set default modbus register if not already set
+    const modbusRegField = document.getElementById('sensor-modbus-register');
+    if (!modbusRegField.value) {
+        const nextRegister = getNextAvailableRegister();
+        modbusRegField.value = nextRegister;
+    }
+}
+
+// Helper function to get the next available modbus register
+function getNextAvailableRegister() {
+    let maxRegister = 2; // System reserves 0-2
+    sensorConfigData.forEach(sensor => {
+        if (sensor.modbusRegister > maxRegister) {
+            maxRegister = sensor.modbusRegister;
+        }
+    });
+    return maxRegister + 1;
+}// Show the edit sensor modal
 function editSensor(index) {
     if (index < 0 || index >= sensorConfigData.length) {
         showToast('Invalid sensor index', 'error');
         return;
     }
-    
+
     const sensor = sensorConfigData[index];
     editingSensorIndex = index;
-    
+
     document.getElementById('sensor-modal-title').textContent = 'Edit Sensor';
+    document.getElementById('sensor-modal-overlay').querySelector('button[onclick="saveSensor()"]').textContent = 'Update';
     document.getElementById('sensor-name').value = sensor.name;
+    document.getElementById('sensor-protocol').value = sensor.protocol || 'I2C';
     document.getElementById('sensor-type').value = sensor.type;
+    
+    // Trigger protocol change to update form fields
+    updateSensorProtocolFields();
+    
+    // Load pin assignments if they exist
+    if (sensor.protocol === 'I2C' && sensor.sdaPin !== undefined && sensor.sclPin !== undefined) {
+        document.getElementById('sensor-i2c-pins').value = `${sensor.sdaPin},${sensor.sclPin}`;
+    } else if (sensor.protocol === 'UART' && sensor.txPin !== undefined && sensor.rxPin !== undefined) {
+        document.getElementById('sensor-uart-pins').value = `${sensor.txPin},${sensor.rxPin}`;
+    } else if (sensor.protocol === 'Analog Voltage' && sensor.analogPin !== undefined) {
+        document.getElementById('sensor-analog-pin').value = sensor.analogPin.toString();
+    } else if (sensor.protocol === 'One-Wire' && sensor.digitalPin !== undefined) {
+        document.getElementById('sensor-onewire-pin').value = sensor.digitalPin.toString();
+    } else if (sensor.protocol === 'Digital Counter' && sensor.digitalPin !== undefined) {
+        document.getElementById('sensor-digital-pin').value = sensor.digitalPin.toString();
+    }
     document.getElementById('sensor-i2c-address').value = sensor.i2cAddress ? `0x${sensor.i2cAddress.toString(16).toUpperCase().padStart(2, '0')}` : '';
     document.getElementById('sensor-modbus-register').value = sensor.modbusRegister || '';
     document.getElementById('sensor-enabled').checked = sensor.enabled;
-    
+
     // Setup sensor calibration method listeners
     setupSensorCalibrationMethodListeners();
     
+    // Setup sensor type change listener
+    document.getElementById('sensor-type').addEventListener('change', updateSensorFormFields);
+    
+    // Update form fields based on sensor type
+    updateSensorFormFields();
+
     // Load calibration data and determine method
     if (sensor.calibration) {
         if (sensor.calibration.expression && sensor.calibration.expression.trim() !== '') {
@@ -1211,7 +1453,7 @@ function editSensor(index) {
         document.getElementById('sensor-calibration-expression').value = '';
         showSensorCalibrationMethod('linear');
     }
-    
+
     document.getElementById('sensor-modal-overlay').classList.add('show');
 }
 
@@ -1267,7 +1509,7 @@ function parseI2CAddress(addressStr) {
 }
 
 // Save sensor (add or update)
-function saveSensor() {
+function saveSensor() {    
     const form = document.getElementById('sensor-form');
     if (!form.checkValidity()) {
         form.reportValidity();
@@ -1275,21 +1517,43 @@ function saveSensor() {
     }
     
     const name = document.getElementById('sensor-name').value.trim();
+    const protocol = document.getElementById('sensor-protocol').value;
     const type = document.getElementById('sensor-type').value;
     const i2cAddressStr = document.getElementById('sensor-i2c-address').value.trim();
     const modbusRegister = parseInt(document.getElementById('sensor-modbus-register').value);
     const enabled = document.getElementById('sensor-enabled').checked;
     
     // Validate inputs
-    if (!name || !type || !i2cAddressStr || isNaN(modbusRegister)) {
+    if (!name || !protocol || !type || isNaN(modbusRegister)) {
         showToast('Please fill in all required fields', 'error');
         return;
     }
     
-    const i2cAddress = parseI2CAddress(i2cAddressStr);
-    if (i2cAddress < 1 || i2cAddress > 127) {
-        showToast('I2C address must be between 0x01 and 0x7F (1-127)', 'error');
-        return;
+    // For I2C sensors, validate I2C address
+    let i2cAddress = 0;
+    if (protocol === 'I2C') {
+        const i2cAddressStr = document.getElementById('sensor-i2c-address').value.trim();
+        if (!i2cAddressStr) {
+            showToast('I2C address is required for I2C sensors', 'error');
+            return;
+        }
+        
+        i2cAddress = parseI2CAddress(i2cAddressStr);
+        
+        // For simulated sensors, allow address 0x00, for real sensors validate range
+        if (type.startsWith('SIM_')) {
+            // Simulated sensors can use 0x00 as placeholder
+            if (i2cAddress < 0 || i2cAddress > 127) {
+                showToast('I2C address must be between 0x00 and 0x7F (0-127) for simulated sensors', 'error');
+                return;
+            }
+        } else {
+            // Real sensors need valid I2C addresses (1-127)
+            if (i2cAddress < 1 || i2cAddress > 127) {
+                showToast('I2C address must be between 0x01 and 0x7F (1-127) for real sensors', 'error');
+                return;
+            }
+        }
     }
     
     // Validate Modbus register range - system reserves 0-2 for built-in I/O
@@ -1303,13 +1567,61 @@ function saveSensor() {
         return;
     }
     
+    // Validate pin assignments based on protocol
+    switch (protocol) {
+        case 'I2C':
+            const i2cPinPair = document.getElementById('sensor-i2c-pins').value;
+            if (!i2cPinPair) {
+                showToast('Please select I2C pin pair', 'error');
+                return;
+            }
+            break;
+            
+        case 'UART':
+            const uartPinPair = document.getElementById('sensor-uart-pins').value;
+            if (!uartPinPair) {
+                showToast('Please select UART pin pair', 'error');
+                return;
+            }
+            break;
+            
+        case 'Analog Voltage':
+            const analogPin = document.getElementById('sensor-analog-pin').value;
+            if (!analogPin) {
+                showToast('Please select analog pin', 'error');
+                return;
+            }
+            break;
+            
+        case 'One-Wire':
+            const oneWirePin = document.getElementById('sensor-onewire-pin').value;
+            if (!oneWirePin) {
+                showToast('Please select one-wire pin', 'error');
+                return;
+            }
+            break;
+            
+        case 'Digital Counter':
+            const digitalPin = document.getElementById('sensor-digital-pin').value;
+            if (!digitalPin) {
+                showToast('Please select digital pin', 'error');
+                return;
+            }
+            break;
+    }
+    
     // Check for duplicate I2C addresses (excluding the sensor being edited)
-    const duplicateI2C = sensorConfigData.some((sensor, index) => 
-        index !== editingSensorIndex && sensor.i2cAddress === i2cAddress
-    );
-    if (duplicateI2C) {
-        showToast('I2C address already in use by another sensor', 'error');
-        return;
+    // Only check for I2C protocol sensors and skip simulated sensors using 0x00
+    if (protocol === 'I2C' && !(type.startsWith('SIM_') && i2cAddress === 0)) {
+        const duplicateI2C = sensorConfigData.some((sensor, index) => 
+            index !== editingSensorIndex && 
+            sensor.protocol === 'I2C' && 
+            sensor.i2cAddress === i2cAddress
+        );
+        if (duplicateI2C) {
+            showToast('I2C address already in use by another I2C sensor', 'error');
+            return;
+        }
     }
     
     // Check for duplicate Modbus registers (excluding the sensor being edited)
@@ -1389,13 +1701,59 @@ function saveSensor() {
         return;
     }
     
+    // Capture pin assignments based on protocol
+    let pinAssignments = {};
+    
+    switch (protocol) {
+        case 'I2C':
+            const i2cPinPair = document.getElementById('sensor-i2c-pins').value;
+            if (i2cPinPair) {
+                const [sdaPin, sclPin] = i2cPinPair.split(',').map(p => parseInt(p));
+                pinAssignments.sdaPin = sdaPin;
+                pinAssignments.sclPin = sclPin;
+            }
+            break;
+            
+        case 'UART':
+            const uartPinPair = document.getElementById('sensor-uart-pins').value;
+            if (uartPinPair) {
+                const [txPin, rxPin] = uartPinPair.split(',').map(p => parseInt(p));
+                pinAssignments.txPin = txPin;
+                pinAssignments.rxPin = rxPin;
+            }
+            break;
+            
+        case 'Analog Voltage':
+            const analogPin = document.getElementById('sensor-analog-pin').value;
+            if (analogPin) {
+                pinAssignments.analogPin = parseInt(analogPin);
+            }
+            break;
+            
+        case 'One-Wire':
+            const oneWirePin = document.getElementById('sensor-onewire-pin').value;
+            if (oneWirePin) {
+                pinAssignments.digitalPin = parseInt(oneWirePin);
+            }
+            break;
+            
+        case 'Digital Counter':
+            const digitalPin = document.getElementById('sensor-digital-pin').value;
+            if (digitalPin) {
+                pinAssignments.digitalPin = parseInt(digitalPin);
+            }
+            break;
+    }
+
     const sensor = {
         enabled: enabled,
         name: name,
+        protocol: protocol,
         type: type,
         i2cAddress: i2cAddress,
         modbusRegister: modbusRegister,
-        calibration: calibration
+        calibration: calibration,
+        ...pinAssignments
     };
     
     if (editingSensorIndex === -1) {
@@ -1405,14 +1763,19 @@ function saveSensor() {
             return;
         }
         sensorConfigData.push(sensor);
+        console.log('Sensor added to array:', sensor);
+        console.log('Current sensor array:', sensorConfigData);
         showToast('Sensor added successfully', 'success');
     } else {
         // Updating existing sensor
         sensorConfigData[editingSensorIndex] = sensor;
+        console.log('Sensor updated:', sensor);
         showToast('Sensor updated successfully', 'success');
     }
     
+    console.log('About to render table...');
     renderSensorTable();
+    console.log('Table rendered, hiding modal...');
     hideSensorModal();
 }
 
@@ -1581,11 +1944,19 @@ function validatePolynomial(polynomial) {
 // Hide calibration modal
 function hideCalibrationModal() {
     document.getElementById('calibration-modal-overlay').classList.remove('show');
+    document.getElementById('calibration-modal-overlay').style.display = 'none';
     editingSensorIndex = -1;
+    window.currentCalibrationSensor = null;
 }
 
 // Save calibration data
 function saveCalibration() {
+    // Check if we're using the new data flow interface
+    if (window.currentCalibraSensor) {
+        return saveDataFlowCalibration();
+    }
+    
+    // Legacy sensor config mode
     if (editingSensorIndex < 0 || editingSensorIndex >= sensorConfigData.length) {
         showToast('Invalid sensor selected', 'error');
         return;
@@ -1726,13 +2097,20 @@ function saveSensorConfig() {
         document.getElementById('toast-container').removeChild(loadingToast);
         
         if (data.success) {
-            // Show countdown toast with reboot message
-            showCountdownToast(
-                'Sensor configuration saved successfully! Device is rebooting...', 
-                'success', 
-                5, 
-                () => window.location.reload()
-            );
+            // Show success message and immediately refresh sensor data
+            showToast('Sensor configuration saved successfully!', 'success');
+            
+            // Close the sensor config modal
+            const modal = document.getElementById('sensor-config-modal');
+            if (modal) {
+                modal.style.display = 'none';
+            }
+            
+            // Immediately refresh the Status IO to show new sensors
+            setTimeout(() => {
+                updateIOStatus();
+                loadSensorConfig(); // Refresh the sensor config list too
+            }, 500); // Quick delay to ensure backend has processed
         } else {
             showToast('Failed to save sensor configuration: ' + (data.message || 'Unknown error'), 'error', false, 5000);
         }
@@ -1742,6 +2120,8 @@ function saveSensorConfig() {
         if (document.getElementById('toast-container').contains(loadingToast)) {
             document.getElementById('toast-container').removeChild(loadingToast);
         }
+        
+        // Show actual error since we're not rebooting anymore
         showToast('Error saving sensor configuration: ' + error.message, 'error', false, 5000);
     });
 }
@@ -1853,5 +2233,668 @@ function sendEzoCalibrationCommandWithValue(commandTemplate, buttonLabel) {
     // Replace {value} placeholder with the entered value
     const command = commandTemplate.replace('{value}', value.trim());
     sendEzoCalibrationCommand(command);
+}
+
+// ==================== TERMINAL FUNCTIONALITY ====================
+
+let watchInterval = null;
+let isWatching = false;
+
+// Update the terminal interface based on selected protocol
+function updateTerminalInterface() {
+    const protocol = document.getElementById('terminal-protocol').value;
+    const pinSelector = document.getElementById('terminal-pin');
+    const i2cAddressGroup = document.getElementById('i2c-address-group');
+    const commandInput = document.getElementById('terminal-command');
+    
+    // Clear current options
+    pinSelector.innerHTML = '<option value="">Select pin/port...</option>';
+    
+    // Hide/show I2C address field
+    i2cAddressGroup.style.display = protocol === 'i2c' ? 'block' : 'none';
+    
+    // Populate pin/port options based on protocol and configured sensors
+    switch (protocol) {
+        case 'digital':
+            for (let i = 0; i < 8; i++) {
+                pinSelector.innerHTML += `<option value="DI${i}">DI${i} - Digital Input ${i}</option>`;
+                pinSelector.innerHTML += `<option value="DO${i}">DO${i} - Digital Output ${i}</option>`;
+            }
+            commandInput.placeholder = 'Commands: read, write 1/0, config pullup/invert/latch';
+            break;
+        
+        case 'analog':
+            for (let i = 0; i < 3; i++) {
+                pinSelector.innerHTML += `<option value="AI${i}">AI${i} - Analog Input ${i}</option>`;
+            }
+            commandInput.placeholder = 'Commands: read, calibrate, range, simulate';
+            break;
+            
+        case 'i2c':
+            // Show only pins with I2C sensors configured
+            if (sensorConfigData && sensorConfigData.length > 0) {
+                sensorConfigData.forEach((sensor, index) => {
+                    if (sensor.protocol === 'I2C' && sensor.enabled) {
+                        pinSelector.innerHTML += `<option value="${sensor.sdaPin || 24}">${sensor.name} (SDA:${sensor.sdaPin || 24}, SCL:${sensor.sclPin || 25})</option>`;
+                    }
+                });
+            }
+            if (pinSelector.children.length === 1) {
+                pinSelector.innerHTML += '<option value="24">No I2C sensors configured</option>';
+            }
+            commandInput.placeholder = 'Commands: scan, read, write, detect, status';
+            break;
+            
+        case 'uart':
+            // Show only pins with UART sensors configured
+            if (sensorConfigData && sensorConfigData.length > 0) {
+                sensorConfigData.forEach((sensor, index) => {
+                    if (sensor.protocol === 'UART' && sensor.enabled) {
+                        pinSelector.innerHTML += `<option value="${sensor.txPin || 0}">${sensor.name} (TX:${sensor.txPin || 0}, RX:${sensor.rxPin || 1})</option>`;
+                    }
+                });
+            }
+            if (pinSelector.children.length === 1) {
+                pinSelector.innerHTML += '<option value="0">No UART sensors configured</option>';
+            }
+            commandInput.placeholder = 'Commands: init, send, read, baudrate, loopback, status';
+            break;
+            
+        case 'onewire':
+            // Show only pins with One-Wire sensors configured
+            if (sensorConfigData && sensorConfigData.length > 0) {
+                sensorConfigData.forEach((sensor, index) => {
+                    if (sensor.protocol === 'One-Wire' && sensor.enabled) {
+                        pinSelector.innerHTML += `<option value="${sensor.digitalPin || 0}">${sensor.name} (Pin ${sensor.digitalPin || 0})</option>`;
+                    }
+                });
+            }
+            if (pinSelector.children.length === 1) {
+                pinSelector.innerHTML += '<option value="0">No One-Wire sensors configured</option>';
+            }
+            commandInput.placeholder = 'Commands: scan, read, search, power, reset';
+            break;
+            
+        case 'analog':
+            for (let i = 0; i < 3; i++) {
+                pinSelector.innerHTML += `<option value="AI${i}">AI${i} - Analog Input ${i} (Pin ${26 + i})</option>`;
+            }
+            commandInput.placeholder = 'Commands: read, config';
+            break;
+            
+        case 'i2c':
+            pinSelector.innerHTML += '<option value="I2C0">I2C0 - SDA: Pin 24, SCL: Pin 25</option>';
+            commandInput.placeholder = 'Commands: scan, read [reg], write [reg] [data], probe';
+            break;
+            
+        case 'uart':
+            pinSelector.innerHTML += '<option value="UART0">UART0 - TX: Pin 0, RX: Pin 1</option>';
+            pinSelector.innerHTML += '<option value="UART1">UART1 - TX: Pin 4, RX: Pin 5</option>';
+            commandInput.placeholder = 'Commands: send [data], config [baud], read';
+            break;
+            
+        case 'network':
+            pinSelector.innerHTML += '<option value="ETH">Ethernet Interface - W5500</option>';
+            pinSelector.innerHTML += '<option value="ETH_PHY">Ethernet PHY Status</option>';
+            pinSelector.innerHTML += '<option value="ETH_PINS">Ethernet Pins (MISO:16, CS:17, SCK:18, MOSI:19, RST:20, IRQ:21)</option>';
+            pinSelector.innerHTML += '<option value="MODBUS">Modbus TCP Server</option>';
+            pinSelector.innerHTML += '<option value="MODBUS_CLIENTS">Connected Modbus Clients</option>';
+            commandInput.placeholder = 'Commands: status, clients, reset, config, link, stats';
+            break;
+            
+        case 'system':
+            pinSelector.innerHTML += '<option value="CPU">CPU Status</option>';
+            pinSelector.innerHTML += '<option value="MEMORY">Memory Usage</option>';
+            pinSelector.innerHTML += '<option value="SENSORS">All Sensors</option>';
+            commandInput.placeholder = 'Commands: status, reset, info, sensors';
+            break;
+    }
+}
+
+// Handle Enter key in terminal command input
+function handleTerminalKeypress(event) {
+    if (event.key === 'Enter') {
+        sendTerminalCommand();
+    }
+}
+
+// Send a terminal command
+function sendTerminalCommand() {
+    const protocol = document.getElementById('terminal-protocol').value;
+    const pin = document.getElementById('terminal-pin').value;
+    const command = document.getElementById('terminal-command').value.trim();
+    const i2cAddress = document.getElementById('terminal-i2c-address').value;
+    
+    if (!command) {
+        addTerminalOutput('Error: No command entered', 'error');
+        return;
+    }
+    
+    if (!pin && protocol !== 'system') {
+        addTerminalOutput('Error: No pin/port selected', 'error');
+        return;
+    }
+    
+    // Check for I2C address - but not required for scan command
+    if (protocol === 'i2c' && !i2cAddress && command.toLowerCase() !== 'scan') {
+        addTerminalOutput('Error: I2C address required (except for scan command)', 'error');
+        return;
+    }
+    
+    // Display the command in terminal
+    addTerminalOutput(`> ${command}`, 'command');
+    
+    // Handle special commands locally
+    if (command.toLowerCase() === 'help') {
+        showTerminalHelp();
+        return;
+    }
+    
+    if (command.toLowerCase() === 'clear') {
+        clearTerminalOutput();
+        return;
+    }
+    
+    // Send command to backend
+    const payload = {
+        protocol: protocol,
+        pin: pin,
+        command: command,
+        i2cAddress: i2cAddress
+    };
+    
+    fetch('/terminal/command', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            addTerminalOutput(data.response || 'Command executed successfully', 'success');
+        } else {
+            addTerminalOutput(data.error || 'Command failed', 'error');
+        }
+    })
+    .catch(error => {
+        addTerminalOutput(`Network error: ${error.message}`, 'error');
+    });
+    
+    // Clear command input
+    document.getElementById('terminal-command').value = '';
+}
+
+// Toggle watch mode
+function toggleWatch() {
+    const watchBtn = document.getElementById('watch-btn');
+    const watchStatus = document.getElementById('watch-status');
+    const protocol = document.getElementById('terminal-protocol').value;
+    const pin = document.getElementById('terminal-pin').value;
+    
+    if (!pin && protocol !== 'system') {
+        addTerminalOutput('Error: No pin/port selected for watching', 'error');
+        return;
+    }
+    
+    if (isWatching) {
+        // Stop watching
+        clearInterval(watchInterval);
+        isWatching = false;
+        watchBtn.textContent = 'Start Watch';
+        watchBtn.classList.remove('watching');
+        watchStatus.textContent = '';
+        watchStatus.classList.remove('watching');
+        addTerminalOutput('Watch mode stopped', 'success');
+    } else {
+        // Start watching
+        isWatching = true;
+        watchBtn.textContent = 'Stop Watch';
+        watchBtn.classList.add('watching');
+        watchStatus.textContent = `Watching ${pin}`;
+        watchStatus.classList.add('watching');
+        addTerminalOutput(`Started watching ${pin}`, 'success');
+        
+        // Start periodic updates
+        watchInterval = setInterval(() => {
+            const payload = {
+                protocol: protocol,
+                pin: pin,
+                command: 'read',
+                i2cAddress: document.getElementById('terminal-i2c-address').value
+            };
+            
+            fetch('/terminal/watch', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(payload)
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    const timestamp = new Date().toLocaleTimeString();
+                    addTerminalOutput(`[${timestamp}] ${data.response}`, 'response');
+                }
+            })
+            .catch(error => {
+                // Silently handle watch errors to avoid spam
+                console.error('Watch error:', error);
+            });
+        }, 1000); // Update every second
+    }
+}
+
+// Add output to terminal
+function addTerminalOutput(text, type = 'response') {
+    const terminal = document.getElementById('terminal-content');
+    const div = document.createElement('div');
+    div.className = `terminal-${type}`;
+    div.textContent = text;
+    
+    terminal.appendChild(div);
+    terminal.scrollTop = terminal.scrollHeight;
+}
+
+// Clear terminal output
+function clearTerminalOutput() {
+    const terminal = document.getElementById('terminal-content');
+    terminal.innerHTML = `
+        <div class="terminal-welcome">
+            Modbus IO Terminal - Ready<br>
+            Type 'help' for available commands<br>
+            > 
+        </div>
+    `;
+}
+
+// Show terminal help
+function showTerminalHelp() {
+    const helpText = `
+Available Commands:
+
+DIGITAL I/O:
+  read           - Read current pin state
+  write 1/0      - Set output pin state
+  config pullup  - Enable/disable pullup
+  config invert  - Enable/disable inversion
+  config latch   - Enable/disable latching
+
+ANALOG I/O:
+  read           - Read analog value (mV)
+  config         - Show pin configuration
+
+I2C:
+  scan           - Scan for I2C devices
+  read [reg]     - Read from register
+  write [reg] [data] - Write to register
+  probe          - Test device presence
+
+UART:
+  send [data]    - Send data
+  read           - Read available data
+  config [baud]  - Set baud rate
+
+NETWORK:
+  status         - Show connection status
+  clients        - List connected clients
+  reset          - Reset connections
+
+SYSTEM:
+  status         - System information
+  sensors        - List all sensors
+  reset          - Restart system
+  info           - Hardware details
+
+General:
+  help           - Show this help
+  clear          - Clear terminal
+    `;
+    
+    addTerminalOutput(helpText, 'success');
+}
+
+// Initialize terminal on page load
+document.addEventListener('DOMContentLoaded', function() {
+    updateTerminalInterface();
+    
+    // Add event listeners for byte extraction controls
+    const startByteInput = document.getElementById('data-start-byte');
+    const lengthInput = document.getElementById('data-length');
+    const formatSelect = document.getElementById('data-format');
+    
+    if (startByteInput) {
+        startByteInput.addEventListener('input', function() {
+            if (window.currentCalibrationSensor && window.currentCalibrationSensor.raw_i2c_data) {
+                updateByteVisualization(window.currentCalibrationSensor.raw_i2c_data);
+            }
+        });
+    }
+    
+    if (lengthInput) {
+        lengthInput.addEventListener('input', function() {
+            if (window.currentCalibrationSensor && window.currentCalibrationSensor.raw_i2c_data) {
+                updateByteVisualization(window.currentCalibrationSensor.raw_i2c_data);
+            }
+        });
+    }
+    
+    if (formatSelect) {
+        formatSelect.addEventListener('change', function() {
+            if (window.currentCalibrationSensor && window.currentCalibrationSensor.raw_i2c_data) {
+                updateByteVisualization(window.currentCalibrationSensor.raw_i2c_data);
+            }
+        });
+    }
+});
+
+// Data Flow Interface Functions
+
+// Show calibration modal for a specific sensor
+function showCalibrationModal(sensorName) {
+    console.log('Opening calibration modal for sensor:', sensorName);
+    
+    // Find the sensor in the current iostatus data
+    if (!currentIOStatus || !currentIOStatus.configured_sensors) {
+        console.error('No IO status data available');
+        return;
+    }
+    
+    const sensor = currentIOStatus.configured_sensors.find(s => s.name === sensorName);
+    if (!sensor) {
+        console.error('Sensor not found:', sensorName);
+        return;
+    }
+    
+    // Set up the modal with sensor info
+    document.getElementById('calibration-sensor-name').textContent = sensor.name;
+    document.getElementById('calibration-sensor-type').textContent = sensor.type;
+    document.getElementById('calibration-sensor-address').textContent = sensor.i2c_address ? `0x${sensor.i2c_address.toString(16).toUpperCase()}` : 'N/A';
+    
+    // Display current raw data and value
+    document.getElementById('calibration-raw-data').textContent = sensor.raw_i2c_data || sensor.raw_value || 'No data';
+    document.getElementById('calibration-current-value').textContent = sensor.current_value || 'No data';
+    
+    // Set up byte extraction for I2C sensors
+    const byteExtractionSection = document.getElementById('byte-extraction-section');
+    if (sensor.protocol === 'I2C' && sensor.raw_i2c_data) {
+        byteExtractionSection.style.display = 'block';
+        
+        // Load current I2C parsing settings if available
+        if (sensor.i2c_parsing) {
+            document.getElementById('data-start-byte').value = sensor.i2c_parsing.data_offset || 0;
+            document.getElementById('data-length').value = sensor.i2c_parsing.data_length || 2;
+            document.getElementById('data-format').value = sensor.i2c_parsing.data_format || 'uint16_le';
+        }
+        
+        // Update the byte visualization
+        updateByteVisualization(sensor.raw_i2c_data);
+    } else {
+        byteExtractionSection.style.display = 'none';
+    }
+    
+    // Load current calibration settings
+    if (sensor.calibration) {
+        if (sensor.calibration.method) {
+            const methodRadio = document.querySelector(`input[name="calibration-method"][value="${sensor.calibration.method}"]`);
+            if (methodRadio) {
+                methodRadio.checked = true;
+                showCalibrationMethod(sensor.calibration.method);
+            }
+        }
+        
+        // Set values based on calibration method
+        if (sensor.calibration.offset !== undefined) {
+            document.getElementById('calibration-offset').value = sensor.calibration.offset;
+        }
+        if (sensor.calibration.scale !== undefined) {
+            document.getElementById('calibration-scale').value = sensor.calibration.scale;
+        }
+        if (sensor.calibration.polynomial !== undefined) {
+            document.getElementById('calibration-polynomial').value = sensor.calibration.polynomial;
+        }
+        if (sensor.calibration.expression !== undefined) {
+            document.getElementById('calibration-expression').value = sensor.calibration.expression;
+        }
+    } else {
+        // Reset to defaults
+        document.getElementById('calibration-offset').value = 0;
+        document.getElementById('calibration-scale').value = 1;
+        document.getElementById('calibration-polynomial').value = '';
+        document.getElementById('calibration-expression').value = '';
+        document.querySelector('input[name="calibration-method"][value="linear"]').checked = true;
+        showCalibrationMethod('linear');
+    }
+    
+    // Store current sensor for saving
+    window.currentCalibrationSensor = sensor;
+    
+    // Show the modal
+    document.getElementById('calibration-modal-overlay').style.display = 'flex';
+    document.getElementById('calibration-modal-overlay').classList.add('show');
+}
+
+// Refresh sensor data
+function refreshSensorData(sensorName) {
+    console.log('Refreshing sensor data for:', sensorName);
+    
+    // Trigger a data update by calling updateIOStatus
+    updateIOStatus();
+    
+    // Show feedback
+    const button = event.target;
+    const originalText = button.textContent;
+    button.textContent = '🔄 Refreshing...';
+    button.disabled = true;
+    
+    setTimeout(() => {
+        button.textContent = originalText;
+        button.disabled = false;
+    }, 1000);
+}
+
+// Test sensor communication
+function testSensorRead(sensorName) {
+    console.log('Testing sensor communication for:', sensorName);
+    
+    // Find the sensor in the current config
+    if (!currentSensorConfig || !currentSensorConfig.sensors) {
+        console.error('No sensor config available');
+        return;
+    }
+    
+    const sensor = currentSensorConfig.sensors.find(s => s.name === sensorName);
+    if (!sensor) {
+        console.error('Sensor not found:', sensorName);
+        return;
+    }
+    
+    // Show feedback
+    const button = event.target;
+    const originalText = button.textContent;
+    button.textContent = '🔍 Testing...';
+    button.disabled = true;
+    
+    // Send a terminal command to test the sensor
+    if (sensor.type && sensor.type.includes('I2C')) {
+        const address = sensor.i2c_address || sensor.address;
+        if (address) {
+            // Use terminal command to test I2C sensor
+            executeTerminalCommand(`i2c probe 0x${address.toString(16).padStart(2, '0')}`);
+        }
+    }
+    
+    setTimeout(() => {
+        button.textContent = originalText;
+        button.disabled = false;
+    }, 1500);
+}
+
+// Update byte visualization display
+function updateByteVisualization(rawDataHex) {
+    if (!rawDataHex) {
+        document.getElementById('raw-bytes-display').textContent = 'No raw data available';
+        document.getElementById('extracted-value-display').textContent = 'Extracted: No data';
+        return;
+    }
+    
+    // Parse hex string into bytes
+    const bytes = [];
+    const cleanHex = rawDataHex.replace(/[^0-9A-Fa-f]/g, '');
+    for (let i = 0; i < cleanHex.length; i += 2) {
+        if (i + 1 < cleanHex.length) {
+            bytes.push(parseInt(cleanHex.substr(i, 2), 16));
+        }
+    }
+    
+    // Display bytes with highlighting
+    const startByte = parseInt(document.getElementById('data-start-byte').value) || 0;
+    const length = parseInt(document.getElementById('data-length').value) || 2;
+    
+    let bytesHtml = '';
+    for (let i = 0; i < bytes.length; i++) {
+        const isSelected = i >= startByte && i < startByte + length;
+        const byteClass = isSelected ? 'byte-highlight' : '';
+        bytesHtml += `<span class="${byteClass}">${bytes[i].toString(16).padStart(2, '0').toUpperCase()}</span> `;
+    }
+    
+    document.getElementById('raw-bytes-display').innerHTML = bytesHtml;
+    
+    // Calculate extracted value
+    testByteExtraction();
+}
+
+// Test byte extraction with current settings
+function testByteExtraction() {
+    const sensor = window.currentCalibrationSensor;
+    if (!sensor || !sensor.raw_i2c_data) {
+        document.getElementById('extracted-value-display').textContent = 'Extracted: No data';
+        return;
+    }
+    
+    const rawDataHex = sensor.raw_i2c_data;
+    const startByte = parseInt(document.getElementById('data-start-byte').value) || 0;
+    const length = parseInt(document.getElementById('data-length').value) || 2;
+    const format = document.getElementById('data-format').value;
+    
+    // Parse hex string into bytes
+    const bytes = [];
+    const cleanHex = rawDataHex.replace(/[^0-9A-Fa-f]/g, '');
+    for (let i = 0; i < cleanHex.length; i += 2) {
+        if (i + 1 < cleanHex.length) {
+            bytes.push(parseInt(cleanHex.substr(i, 2), 16));
+        }
+    }
+    
+    // Extract bytes
+    if (startByte >= bytes.length || startByte + length > bytes.length) {
+        document.getElementById('extracted-value-display').textContent = 'Extracted: Invalid range';
+        return;
+    }
+    
+    const extractedBytes = bytes.slice(startByte, startByte + length);
+    let value = 0;
+    
+    try {
+        switch (format) {
+            case 'uint8':
+                value = extractedBytes[0] || 0;
+                break;
+            case 'uint16_be':
+                value = (extractedBytes[0] << 8) | extractedBytes[1];
+                break;
+            case 'uint16_le':
+                value = (extractedBytes[1] << 8) | extractedBytes[0];
+                break;
+            case 'uint32_be':
+                value = (extractedBytes[0] << 24) | (extractedBytes[1] << 16) | (extractedBytes[2] << 8) | extractedBytes[3];
+                break;
+            case 'uint32_le':
+                value = (extractedBytes[3] << 24) | (extractedBytes[2] << 16) | (extractedBytes[1] << 8) | extractedBytes[0];
+                break;
+            case 'float32':
+                // Convert 4 bytes to IEEE 754 float
+                if (extractedBytes.length >= 4) {
+                    const buffer = new ArrayBuffer(4);
+                    const view = new DataView(buffer);
+                    view.setUint8(0, extractedBytes[0]);
+                    view.setUint8(1, extractedBytes[1]);
+                    view.setUint8(2, extractedBytes[2]);
+                    view.setUint8(3, extractedBytes[3]);
+                    value = view.getFloat32(0, false); // Big endian
+                }
+                break;
+        }
+        
+        document.getElementById('extracted-value-display').textContent = `Extracted: ${value}`;
+    } catch (error) {
+        document.getElementById('extracted-value-display').textContent = 'Extracted: Error';
+    }
+}
+
+// Enhanced calibration save function for data flow
+function saveDataFlowCalibration() {
+    if (!window.currentCalibrationSensor) {
+        console.error('No sensor selected for calibration');
+        return;
+    }
+    
+    const sensor = window.currentCalibrationSensor;
+    const method = document.querySelector('input[name="calibration-method"]:checked').value;
+    
+    // Prepare calibration data
+    const calibrationData = {
+        name: sensor.name,
+        method: method
+    };
+    
+    // Add I2C parsing settings for I2C sensors
+    if (sensor.protocol === 'I2C') {
+        calibrationData.i2c_parsing = {
+            data_offset: parseInt(document.getElementById('data-start-byte').value) || 0,
+            data_length: parseInt(document.getElementById('data-length').value) || 2,
+            data_format: document.getElementById('data-format').value || 'uint16_le'
+        };
+    }
+    
+    switch(method) {
+        case 'linear':
+            calibrationData.offset = parseFloat(document.getElementById('calibration-offset').value) || 0;
+            calibrationData.scale = parseFloat(document.getElementById('calibration-scale').value) || 1;
+            break;
+        case 'polynomial':
+            calibrationData.polynomial = document.getElementById('calibration-polynomial').value || '';
+            break;
+        case 'expression':
+            calibrationData.expression = document.getElementById('calibration-expression').value || '';
+            break;
+    }
+    
+    // Send calibration to backend
+    fetch('/api/sensor/calibration', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(calibrationData)
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            console.log('Calibration saved successfully');
+            hideCalibrationModal();
+            // Refresh the data to show updated calibration
+            updateIOStatus();
+        } else {
+            console.error('Failed to save calibration:', data.error);
+            alert('Failed to save calibration: ' + (data.error || 'Unknown error'));
+        }
+    })
+    .catch(error => {
+        console.error('Error saving calibration:', error);
+        alert('Error saving calibration: ' + error.message);
+    });
 }
 

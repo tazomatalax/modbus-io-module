@@ -362,6 +362,50 @@ input:checked + .slider:before {
     background-color: var(--analog-color);
 }
 
+/* Protocol Category Styles */
+.protocol-category {
+    margin-bottom: 20px;
+    border: 1px solid rgba(0,0,0,0.08);
+    border-radius: 6px;
+    background-color: #fafafa;
+}
+
+.protocol-category h4 {
+    margin: 0;
+    padding: 12px 15px;
+    background-color: rgba(0,0,0,0.03);
+    border-bottom: 1px solid rgba(0,0,0,0.08);
+    font-size: 1em;
+    font-weight: 500;
+    color: #555;
+    display: flex;
+    align-items: center;
+}
+
+.protocol-category h4::before {
+    content: "";
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    margin-right: 8px;
+}
+
+#i2c-category h4::before { background-color: #2196F3; }
+#uart-category h4::before { background-color: #4CAF50; }
+#analog-category h4::before { background-color: #FF9800; }
+#onewire-category h4::before { background-color: #9C27B0; }
+#digital-category h4::before { background-color: #F44336; }
+
+.protocol-category .io-grid {
+    padding: 15px;
+    min-height: 40px;
+}
+
+.protocol-category.empty {
+    display: none;
+}
+
 .io-item {
     display: flex;
     justify-content: space-between;
@@ -1278,6 +1322,35 @@ button:hover {
     background-color: #f8f9fa;
 }
 
+/* Protocol Configuration Styles */
+#protocol-config {
+    margin-top: 15px;
+    padding: 15px;
+    background-color: #f8f9fa;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+}
+
+.protocol-config {
+    animation: fadeIn 0.3s ease-in-out;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(-10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.protocol-config .form-group label {
+    font-weight: 600;
+    color: var(--primary-color);
+}
+
+.protocol-config .form-help {
+    font-size: 11px;
+    color: #666;
+    margin-top: 4px;
+}
+
 .modal-footer button {
     padding: 8px 20px;
     border: none;
@@ -1443,4 +1516,659 @@ button:hover {
         min-width: 70px;
         font-size: 0.8em;
     }
+}
+
+/* Modbus Register Map Styles */
+.modbus-registers {
+    display: grid;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.register-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: #fff;
+    font-size: 0.9em;
+}
+
+.register-item.simulated {
+    background: #e8f5e8;
+    border-left: 4px solid var(--success-color);
+}
+
+.register-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.register-number {
+    background: var(--primary-color);
+    color: white;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 0.8em;
+    font-weight: bold;
+    min-width: 20px;
+    text-align: center;
+}
+
+.register-details {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.register-name {
+    font-weight: bold;
+    color: #333;
+}
+
+.register-type {
+    font-size: 0.8em;
+    color: #666;
+}
+
+.register-value {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-weight: bold;
+}
+
+.register-unit {
+    font-size: 0.8em;
+    color: #666;
+    font-weight: normal;
+}
+
+.simulation-badge {
+    background: var(--success-color);
+    color: white;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 0.7em;
+    font-weight: bold;
+}
+
+@media (max-width: 600px) {
+    .register-item {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+    }
+    
+    .register-info {
+        width: 100%;
+    }
+    
+    .register-value {
+        align-self: flex-end;
+    }
+}
+
+/* Terminal Styles */
+.terminal-card {
+    margin-top: 20px;
+}
+
+.terminal-controls {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 15px;
+    margin-bottom: 20px;
+    padding: 15px;
+    background: #f8f9fa;
+    border-radius: 8px;
+}
+
+.control-group {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.control-group label {
+    font-weight: bold;
+    color: #333;
+    font-size: 0.9em;
+}
+
+.control-group select,
+.control-group input {
+    padding: 8px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 0.9em;
+}
+
+.terminal-command-area {
+    margin-bottom: 20px;
+}
+
+.terminal-command-area .control-group {
+    margin-bottom: 10px;
+}
+
+.terminal-command-area input {
+    width: 100%;
+    padding: 10px;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 0.9em;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+}
+
+.terminal-buttons {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.terminal-btn {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 4px;
+    font-size: 0.9em;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.send-btn {
+    background: var(--primary-color);
+    color: white;
+}
+
+.send-btn:hover {
+    background: var(--primary-hover);
+}
+
+.watch-btn {
+    background: var(--success-color);
+    color: white;
+}
+
+.watch-btn:hover {
+    background: #45a049;
+}
+
+.watch-btn.watching {
+    background: var(--error-color);
+}
+
+.watch-btn.watching:hover {
+    background: #da190b;
+}
+
+.clear-btn {
+    background: #6c757d;
+    color: white;
+}
+
+.clear-btn:hover {
+    background: #5a6268;
+}
+
+.terminal-output {
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    background: #1e1e1e;
+    color: #ffffff;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 0.85em;
+    min-height: 300px;
+    max-height: 500px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.terminal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 12px;
+    background: #2d2d2d;
+    border-bottom: 1px solid #444;
+    font-size: 0.8em;
+    color: #ccc;
+}
+
+.watch-status {
+    font-weight: bold;
+}
+
+.watch-status.watching {
+    color: var(--success-color);
+}
+
+.terminal-content {
+    flex: 1;
+    padding: 10px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    line-height: 1.4;
+}
+
+.terminal-welcome {
+    color: #4CAF50;
+    margin-bottom: 10px;
+}
+
+.terminal-command {
+    color: #61dafb;
+    margin: 5px 0;
+}
+
+.terminal-response {
+    color: #ffffff;
+    margin: 5px 0;
+    padding-left: 10px;
+}
+
+.terminal-error {
+    color: #ff6b6b;
+    margin: 5px 0;
+    padding-left: 10px;
+}
+
+.terminal-success {
+    color: #4CAF50;
+    margin: 5px 0;
+    padding-left: 10px;
+}
+
+.terminal-timestamp {
+    color: #888;
+    font-size: 0.8em;
+}
+
+@media (max-width: 600px) {
+    .terminal-controls {
+        grid-template-columns: 1fr;
+    }
+    
+    .terminal-buttons {
+        flex-direction: column;
+    }
+    
+    .terminal-btn {
+        width: 100%;
+    }
+}
+
+/* Sensor Data Flow Styles */
+.sensors-flow-container {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+    margin-top: 10px;
+}
+
+.sensor-flow-item {
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: white;
+    padding: 15px;
+    position: relative;
+}
+
+.sensor-flow-header {
+    display: flex;
+    justify-content: between;
+    align-items: center;
+    margin-bottom: 15px;
+    padding-bottom: 8px;
+    border-bottom: 2px solid var(--border-color);
+}
+
+.sensor-flow-title {
+    font-weight: bold;
+    font-size: 1.1em;
+    color: #333;
+}
+
+.sensor-status-badge {
+    padding: 3px 8px;
+    border-radius: 12px;
+    font-size: 0.8em;
+    font-weight: bold;
+    text-transform: uppercase;
+}
+
+.sensor-status-enabled {
+    background: #e8f5e8;
+    color: #2e7d32;
+}
+
+.sensor-status-disabled {
+    background: #ffebee;
+    color: #c62828;
+}
+
+.sensor-flow-pipeline {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    flex-wrap: wrap;
+}
+
+.flow-stage {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-width: 120px;
+    flex: 1;
+}
+
+.flow-stage-box {
+    border: 2px solid #ddd;
+    border-radius: 8px;
+    padding: 10px;
+    background: #f9f9f9;
+    text-align: center;
+    width: 100%;
+    min-height: 60px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    position: relative;
+}
+
+.flow-stage-raw {
+    border-color: #2196F3;
+    background: #e3f2fd;
+}
+
+.flow-stage-calibration {
+    border-color: #ff9800;
+    background: #fff3e0;
+}
+
+.flow-stage-modbus {
+    border-color: #4caf50;
+    background: #e8f5e8;
+}
+
+.flow-stage-title {
+    font-weight: bold;
+    font-size: 0.9em;
+    margin-bottom: 5px;
+    color: #555;
+}
+
+.flow-stage-value {
+    font-family: 'Courier New', monospace;
+    font-size: 0.95em;
+    color: #333;
+    word-break: break-all;
+}
+
+.flow-stage-unit {
+    font-size: 0.8em;
+    color: #666;
+    margin-top: 2px;
+}
+
+.flow-arrow {
+    color: #666;
+    font-size: 1.5em;
+    font-weight: bold;
+    margin: 0 5px;
+    align-self: center;
+}
+
+.calibration-btn {
+    position: absolute;
+    top: -8px;
+    right: -8px;
+    background: var(--warning-color);
+    color: white;
+    border: none;
+    border-radius: 50%;
+    width: 24px;
+    height: 24px;
+    font-size: 0.8em;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+.calibration-btn:hover {
+    background: #f57c00;
+    transform: scale(1.1);
+}
+
+.raw-data-details {
+    margin-top: 8px;
+    font-size: 0.8em;
+    color: #666;
+    text-align: left;
+}
+
+.raw-data-bytes {
+    font-family: 'Courier New', monospace;
+    background: #f0f0f0;
+    padding: 4px 6px;
+    border-radius: 4px;
+    margin-top: 4px;
+}
+
+.sensor-flow-actions {
+    margin-top: 10px;
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+}
+
+.flow-action-btn {
+    padding: 4px 8px;
+    border: 1px solid #ddd;
+    background: white;
+    border-radius: 4px;
+    font-size: 0.8em;
+    cursor: pointer;
+}
+
+.flow-action-btn:hover {
+    background: #f5f5f5;
+}
+
+.flow-action-refresh {
+    color: #2196F3;
+    border-color: #2196F3;
+}
+
+.flow-action-test {
+    color: #ff9800;
+    border-color: #ff9800;
+}
+
+.secondary-value-section {
+    margin-top: 15px;
+    padding-top: 15px;
+    border-top: 1px solid #eee;
+}
+
+.secondary-value-section h5 {
+    margin: 0 0 10px 0;
+    color: #666;
+    font-size: 0.9em;
+    font-weight: bold;
+}
+
+.secondary-value-section .sensor-flow-pipeline {
+    gap: 10px;
+}
+
+.secondary-value-section .flow-stage {
+    min-width: 100px;
+}
+
+.secondary-value-section .flow-stage-box {
+    min-height: 45px;
+    padding: 8px;
+}
+
+.secondary-value-section .flow-stage-title {
+    font-size: 0.8em;
+}
+
+.secondary-value-section .flow-stage-value {
+    font-size: 0.85em;
+}
+
+/* Responsive design for flow */
+@media (max-width: 768px) {
+    .sensor-flow-pipeline {
+        flex-direction: column;
+        gap: 10px;
+    }
+    
+    .flow-arrow {
+        transform: rotate(90deg);
+        margin: 5px 0;
+    }
+    
+    .flow-stage {
+        min-width: unset;
+        width: 100%;
+    }
+}
+
+/* Calibration Modal Enhancements */
+.calibration-info {
+    background: #f9f9f9;
+    padding: 15px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+}
+
+.modbus-status-display {
+    background: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+    padding: 15px;
+    margin-bottom: 10px;
+}
+
+.status-item {
+    display: flex;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.status-item:last-child {
+    margin-bottom: 0;
+}
+
+.status-label {
+    font-weight: bold;
+    margin-right: 10px;
+    min-width: 120px;
+}
+
+.status-value {
+    font-family: 'Courier New', monospace;
+    background: #e9ecef;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-weight: bold;
+}
+
+.current-data-info {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid #ddd;
+}
+
+.raw-data-display {
+    font-family: 'Courier New', monospace;
+    background: #f0f0f0;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 0.9em;
+}
+
+#byte-extraction-section {
+    background: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+    padding: 15px;
+    margin-bottom: 20px;
+}
+
+.byte-extraction-controls .form-row {
+    display: flex;
+    gap: 15px;
+    margin-bottom: 15px;
+}
+
+.byte-extraction-controls .form-group {
+    flex: 1;
+}
+
+.byte-preview {
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    padding: 15px;
+    margin-top: 15px;
+}
+
+.byte-visualization {
+    margin-bottom: 15px;
+}
+
+.raw-bytes {
+    font-family: 'Courier New', monospace;
+    background: #e9ecef;
+    padding: 10px;
+    border-radius: 4px;
+    margin-bottom: 10px;
+    font-size: 0.9em;
+    min-height: 30px;
+    display: flex;
+    align-items: center;
+}
+
+.extracted-value {
+    font-family: 'Courier New', monospace;
+    background: #d1ecf1;
+    color: #0c5460;
+    padding: 10px;
+    border-radius: 4px;
+    font-weight: bold;
+    font-size: 1.1em;
+    text-align: center;
+}
+
+.test-extraction-btn {
+    background: var(--primary-color);
+    color: white;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.9em;
+}
+
+.test-extraction-btn:hover {
+    background: var(--primary-hover);
+}
+
+.byte-highlight {
+    background: #ffeaa7;
+    padding: 2px 4px;
+    border-radius: 3px;
+    margin: 0 2px;
+    font-weight: bold;
 }
