@@ -1152,15 +1152,11 @@ function loadAvailablePins(protocol) {
             if (protocol === 'I2C') {
                 const pinsSelect = document.getElementById('sensor-i2c-pins');
                 pinsSelect.innerHTML = '<option value="">Select I2C pins...</option>';
-                
-                if (data.pinPairs) {
-                    data.pinPairs.forEach(pair => {
-                        const option = document.createElement('option');
-                        option.value = `${pair.sda},${pair.scl}`;
-                        option.textContent = pair.label;
-                        pinsSelect.appendChild(option);
-                    });
-                }
+                // Only show valid I2C pair GP4/GP5
+                const option = document.createElement('option');
+                option.value = '4,5';
+                option.textContent = 'SDA: GP4, SCL: GP5';
+                pinsSelect.appendChild(option);
             } else if (protocol === 'UART') {
                 const pinsSelect = document.getElementById('sensor-uart-pins');
                 pinsSelect.innerHTML = '<option value="">Select UART pins...</option>';
