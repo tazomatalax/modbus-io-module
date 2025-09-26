@@ -1,53 +1,289 @@
-Of course. Implementing a web terminal and advanced analog calibration is a significant but very achievable project. Breaking it down into a clear, itemized task list is the best way to approach it.
+# Modbus IO Module - Advanced Sensor Functionality Restoration Plan
 
-Here is a phased plan, ordered to build features incrementally. This plan is designed to be followed within your Visual Studio Code and PlatformIO environment.
+## Overview
+Based on analysis of the current codebase and documentation, this plan restores and enhances the advanced sensor functionality that was partially implemented but commented out during recent fixes. The system previously supported formula-based calibration, multiple sensor types, and terminal commands as evidenced by existing includes, commented code, and changelog entries.
 
-### High-Level Strategy
-
-We will tackle this in two major phases. It's crucial to complete the analog calibration first, as it builds upon existing UI and firmware structures. The web terminal is a larger feature that requires adding real-time communication (WebSockets) and is best done second.
-
-*   **Phase 1: Advanced Analog Input Calibration**
-    *   First, implement simple linear calibration (multiplier and offset).
-    *   Then, extend it to support non-linear polynomial equations.
-*   **Phase 2: Web-based Peripheral Terminal**
-    *   Add WebSocket support to both the firmware and the simulator.
-    *   Build the terminal UI.
-    *   Implement the command parser and handlers for I2C and SDI-12.
+## Current Status Analysis
+- ✅ **Web server functioning** - Fixed port conflicts, filesystem uploaded
+- ✅ **Basic structure exists** - SensorConfig struct, API endpoints, HTML templates present
+- ❌ **Sensor functionality disabled** - Functions commented out for stability during network fixes
+- ❌ **Formula parser available** - config/formula_parser.h exists but not integrated
+- ❌ **Terminal not active** - HTML/CSS exists but backend commands missing
 
 ---
 
-### Phase 1: Advanced Analog Input Calibration
+## Phase 1: Restore Generic Sensor Types & Configuration
 
-#### **Part 1.1: Linear Calibration (Multiplier & Offset)**
+### Objective 1.1: Enhance SensorConfig Structure
+**Goal**: Update sensor configuration to support multiple sensor types with pin assignments
 
-**Goal:** Allow users to enter a multiplier and offset for each analog input to convert raw mV to a final unit (e.g., pressure, temperature).
+**Tasks**:
+1. **[Backend]** Update `SensorConfig` struct in `include/sys_init.h`:
+   ```cpp
+   struct SensorConfig {
+       bool enabled;
+       char name[32];
+       char sensor_type[16];     // "I2C", "UART", "Digital", "Analog", "OneWire"
+       char formula[64];         // Mathematical conversion formula  
+       char units[16];           // Engineering units (°C, %, psi, etc.)
+       uint8_t pin_assignment;   // GPIO pin number for sensor
+       uint8_t i2cAddress;       // For I2C sensors
+       int modbusRegister;       // Target Modbus register
+       float calibrationOffset;
+       float calibrationSlope;
+       // EZO sensor state tracking
+       bool cmdPending;
+       unsigned long lastCmdSent;
+       char response[64];
+       char calibrationData[256];
+   };
+   ```
 
-**Firmware (`src/main.cpp`, `include/sys_init.h`)**
+2. **[Backend]** Uncomment and enhance sensor configuration functions in `src/main.cpp`:
+   - `loadSensorConfig()` - Parse sensor types and pin assignments
+   - `saveSensorConfig()` - Save enhanced configuration
+   - `handlePOSTSensorConfig()` - Process web form submissions
 
-1.  **[Task 1] Update Data Structures:**
-    *   **File:** `include/sys_init.h`
-    *   **Action:** Modify the `Config` struct to store calibration settings for the three analog inputs. Add these new fields:
-        ```cpp
-        struct Config {
-            // ... existing fields
-            float aInMultiplier[3];
-            float aInOffset[3];
-        };
+3. **[Frontend]** Enhance sensor configuration modal in `data/index.html`:
+   - Add sensor type dropdown: I2C, UART/RS485, Digital, Analog, OneWire
+   - Add pin assignment selector (GPIO pins 0-29)
+   - Add formula input field
+   - Add engineering units field
+   - Maintain existing fields (name, address, Modbus register)
 
-        // Also update DEFAULT_CONFIG
-        const Config DEFAULT_CONFIG = {
-            // ... existing fields
-            {1.0, 1.0, 1.0}, // aInMultiplier
-            {0.0, 0.0, 0.0}, // aInOffset
-        };
-        ```
+### Objective 1.2: Integrate Formula Parser
+**Goal**: Activate mathematical formula conversion for sensor readings
 
-2.  **[Task 2] Update Configuration Management:**
-    *   **File:** `src/main.cpp`
-    *   **Action:** Update `loadConfig()` and `saveConfig()` to handle the new `aInMultiplier` and `aInOffset` arrays. This involves serializing and deserializing them from `config.json`. Remember to handle the case where these fields might be missing from an older config file.
+**Tasks**:
+1. **[Backend]** Uncomment `#include "../config/formula_parser.h"` in `src/main.cpp`
+2. **[Backend]** Integrate `applyFormula()` function into sensor reading pipeline
+3. **[Backend]** Update `updateIOpins()` to apply formulas to raw sensor values
+4. **[Frontend]** Add formula examples and validation in web interface
 
-3.  **[Task 3] Create a New API Endpoint for Analog Config:**
-    *   **File:** `src/main.cpp`
+### Objective 1.3: Implement Pin Assignment Logic
+**Goal**: Map configured sensors to actual GPIO pins based on sensor type
+
+**Tasks**:
+1. **[Backend]** Create pin assignment validation:
+   - I2C sensors: Validate I2C address (0x03-0x77)
+   - Analog sensors: GPIO 26-28 (ADC pins)
+   - Digital sensors: GPIO 0-15 (configurable as input/output)
+   - UART sensors: GPIO 16-17 (UART1) or 0-1 (UART0)
+   - OneWire sensors: Any GPIO pin
+
+2. **[Backend]** Update sensor initialization based on type:
+   - I2C: Initialize I2C bus, probe address
+   - Analog: Configure ADC channel
+   - Digital: Set pinMode (INPUT/OUTPUT)
+   - UART: Initialize UART with appropriate baud rate
+
+---
+
+## Phase 2: Restore Sensor Data Flow Display
+
+### Objective 2.1: Raw Sensor Output Display
+**Goal**: Show real-time raw sensor values before calibration
+
+**Tasks**:
+1. **[Backend]** Update `/iostatus` endpoint to include raw values:
+   ```json
+   {
+     "sensors": [
+       {
+         "id": 0,
+         "name": "Temperature",
+         "type": "I2C",
+         "pin": 4,
+         "raw_value": 1650,
+         "converted_value": 25.2,
+         "units": "°C",
+         "formula": "(x - 273.15)",
+         "status": "active"
+       }
+     ]
+   }
+   ```
+
+2. **[Frontend]** Update sensor data flow containers in `data/index.html`:
+   - Display raw sensor readings
+   - Group by sensor type (I2C, UART, Analog, OneWire)
+   - Real-time updates via JavaScript polling
+
+### Objective 2.2: Calibration Modal & Data Flow Arrows
+**Goal**: Visual representation of raw → calibrated data transformation
+
+**Tasks**:
+1. **[Frontend]** Create calibration modal:
+   - Show raw value input
+   - Display formula being applied
+   - Show calculated result
+   - Allow formula editing and testing
+   - Simple multiplier/offset mode for basic sensors
+
+2. **[Frontend]** Add data flow visualization:
+   - Raw sensor box → Arrow → Calibration modal → Engineering units box
+   - Color coding for sensor types
+   - Status indicators (active/error/disabled)
+
+3. **[Backend]** Add calibration testing endpoint `/api/sensor/test-calibration`:
+   - Accept formula and test value
+   - Return calculated result
+   - Validate formula syntax
+
+### Objective 2.3: Engineering Units Display
+**Goal**: Show converted values with proper units throughout interface
+
+**Tasks**:
+1. **[Frontend]** Update sensor table to show both raw and converted values
+2. **[Frontend]** Add units column to sensor display
+3. **[Backend]** Ensure units are included in all sensor data responses
+
+---
+
+## Phase 3: Restore Terminal Functionality
+
+### Objective 3.1: Backend Terminal Command Processing
+**Goal**: Implement sensor query commands as per TERMINAL_GUIDE.md
+
+**Tasks**:
+1. **[Backend]** Uncomment and enhance `handlePOSTTerminalCommand()` in `src/main.cpp`
+
+2. **[Backend]** Implement sensor commands:
+   ```cpp
+   // Sensor Commands
+   if (cmd.startsWith("sensor list")) {
+       // List all configured sensors with ID, name, type, status
+   }
+   if (cmd.startsWith("sensor read ")) {
+       // Read specific sensor by ID: "sensor read 0"
+   }
+   if (cmd.startsWith("sensor info ")) {
+       // Show detailed info: type, pin, formula, units
+   }
+   if (cmd.startsWith("sensor test ")) {
+       // Test sensor connectivity and readings
+   }
+   ```
+
+3. **[Backend]** Implement I/O commands:
+   ```cpp
+   // Digital I/O Commands  
+   if (cmd.startsWith("di read ")) {
+       // Read digital input: "di read 0"
+   }
+   if (cmd.startsWith("do write ")) {
+       // Write digital output: "do write 0 HIGH"
+   }
+   if (cmd.startsWith("ai read ")) {
+       // Read analog input: "ai read 0"
+   }
+   ```
+
+4. **[Backend]** Implement network commands:
+   ```cpp
+   // Network Commands
+   if (cmd == "ipconfig") {
+       // Show IP, subnet, gateway, MAC
+   }
+   if (cmd.startsWith("ping ")) {
+       // Ping target IP (simple connectivity test)
+   }
+   ```
+
+### Objective 3.2: Frontend Terminal Interface
+**Goal**: Activate the terminal UI that exists in the HTML
+
+**Tasks**:
+1. **[Frontend]** Ensure terminal section is visible and functional in `data/index.html`
+2. **[Frontend]** Connect terminal input to backend via `/terminal/command` endpoint
+3. **[Frontend]** Add command history and autocomplete for sensor IDs
+4. **[Frontend]** Style terminal output with proper formatting and colors
+
+### Objective 3.3: Terminal Command Documentation
+**Goal**: Implement all commands specified in TERMINAL_GUIDE.md
+
+**Tasks**:
+1. **[Backend]** Add help command showing available commands
+2. **[Backend]** Add tab completion support for sensor names/IDs
+3. **[Backend]** Add watch mode for continuous monitoring
+4. **[Frontend]** Add command examples and help tooltips
+
+---
+
+## Phase 4: Integration & Testing
+
+### Objective 4.1: End-to-End Sensor Workflow
+**Goal**: Complete sensor configuration → data collection → display pipeline
+
+**Tasks**:
+1. **[Integration]** Test complete workflow:
+   - Configure sensor via web interface
+   - Save configuration and reboot
+   - Verify sensor appears in data flow
+   - Test terminal commands
+   - Validate Modbus register mapping
+
+2. **[Testing]** Validate each sensor type:
+   - I2C: BME280, VL53L1X simulation
+   - Analog: voltage divider sensors
+   - Digital: switch/relay sensors
+   - UART: simulated RS485 sensor
+
+### Objective 4.2: Error Handling & Validation
+**Goal**: Robust error handling for sensor operations
+
+**Tasks**:
+1. **[Backend]** Add sensor health monitoring
+2. **[Backend]** Handle sensor communication failures gracefully
+3. **[Frontend]** Display sensor error states in UI
+4. **[Backend]** Log sensor errors for debugging
+
+### Objective 4.3: Documentation & Examples
+**Goal**: Complete documentation for restored functionality
+
+**Tasks**:
+1. **[Documentation]** Update TERMINAL_GUIDE.md with implemented commands
+2. **[Documentation]** Create sensor configuration examples
+3. **[Documentation]** Update README with new capabilities
+4. **[Documentation]** Formula examples and syntax reference
+
+---
+
+## Implementation Priority
+
+### High Priority (Immediate)
+1. ✅ **Phase 1.1 & 1.2**: Restore basic sensor configuration and formula parser
+2. ✅ **Phase 2.1**: Raw sensor data display
+3. ✅ **Phase 3.1**: Basic terminal commands
+
+### Medium Priority (Next)
+4. **Phase 2.2**: Calibration modal and data flow visualization
+5. **Phase 3.2**: Enhanced terminal interface
+6. **Phase 1.3**: Advanced pin assignment logic
+
+### Lower Priority (Future)
+7. **Phase 4**: Full integration testing and documentation
+8. **Advanced Features**: Real-time graphing, data logging, alert systems
+
+---
+
+## Success Criteria
+
+- [ ] Sensor configuration modal allows selecting type and pin assignment
+- [ ] Formula-based calibration converts raw values to engineering units
+- [ ] Terminal commands can query and control all configured sensors
+- [ ] Data flow visualization shows raw → calibrated → units transformation
+- [ ] All sensor types (I2C, UART, Digital, Analog, OneWire) are supported
+- [ ] Modbus registers correctly expose calibrated sensor values
+- [ ] System maintains backward compatibility with existing configurations
+
+## Memory & Performance Considerations
+
+- Current usage: 29.8% RAM, 14.4% Flash
+- Sensor functions should not exceed 5% additional RAM usage
+- Formula parser must be efficient for real-time operations
+- Terminal commands should respond within 100ms
+- Sensor polling should not interfere with Modbus response times
     *   **Action:** Create two new handler functions, `handleGetAnalogConfig` and `handleSetAnalogConfig`, and register them in `setupWebServer()`.
         *   `handleGetAnalogConfig` (GET `/analogconfig`): Responds with a JSON object containing the `aInMultiplier` and `aInOffset` arrays from the `config`.
         *   `handleSetAnalogConfig` (POST `/analogconfig`): Receives a JSON object with the new multiplier/offset values and saves them using `saveConfig()`.

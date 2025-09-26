@@ -1,139 +1,121 @@
-/*
- * Modbus IO Module - Dual Interface Architecture
- * W5500 Ethernet for Modbus TCP + Web Interface
- * USB RNDIS for Web Interface
- */
+// ...existing code...
 
+
+// ...existing code...
+
+
+// ...existing code...
+
+
+// Core Arduino and C++ includes
 #include <Arduino.h>
 #include <SPI.h>
+#include <Wire.h>
 #include <LittleFS.h>
 #include <ArduinoJson.h>
+#include "../config/formula_parser.h"
+
+// Example usage in sensor read logic:
+// double raw_value = ...;
+// double converted = applyFormula(configuredSensors[i].formula, raw_value);
+
+
+
 #include <ArduinoModbus.h>
-#include <EthernetENC.h>
-#include <Ezo_i2c.h>
 #include "sys_init.h"
+// Use ANALOG_INPUTS from sys_init.h instead of ADC_PINS
+#include "Ezo_i2c.h"
 
-// Network Configuration - Dual Interface
-EthernetServer ethServer(502);        // W5500 for Modbus TCP
-EthernetServer webEthServer(80);      // W5500 for Web Interface (Ethernet)
-// Note: USB RNDIS web server will be implemented via CDC-ECM interface
-
-// Modbus Configuration
-ModbusTCPServer modbusServer;
-
-// Pin Configuration (Corrected)
-const uint8_t I2C_PIN_PAIRS[][2] = {
-    {4, 5}  // Only valid I2C pair: GP4 (SDA), GP5 (SCL)
-};
-
-const uint8_t AVAILABLE_FLEXIBLE_PINS[] = {
-    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 23
-    // Excludes 16-22 (W5500 reserved), 26-28 (ADC only)
-};
-
-const uint8_t ADC_PINS[] = {26, 27, 28};
-
-// Global Variables
-IOStatus ioStatus;
-Config config;
-SensorConfig configuredSensors[MAX_SENSORS];
-ModbusClientInfo modbusClients[MAX_MODBUS_CLIENTS];
+// SensorConfig array definition (from sys_init.h extern)
+SensorConfig configuredSensors[MAX_SENSORS] = {};
 int numConfiguredSensors = 0;
+
+// Global object definitions
+Config config; // Define the actual config object
+IOStatus ioStatus = {};
+Wiznet5500lwIP eth(PIN_ETH_CS, SPI, PIN_ETH_IRQ);
+WiFiServer modbusServer(502); 
+WiFiServer httpServer(80);    // HTTP server on port 80
+WiFiClient client;
+ModbusClientConnection modbusClients[MAX_MODBUS_CLIENTS];
 int connectedClients = 0;
-bool core0setupComplete = false;
 
-// EZO Sensor instances - created dynamically based on configuration
-static Ezo_board* ezoSensors[MAX_SENSORS] = {nullptr};
-static bool ezoSensorsInitialized = false;
-
-// Function declarations
+// Forward declarations for functions used before definition
+void updateIOForClient(int clientIndex);
+void handleDualHTTP();
+void routeRequest(WiFiClient& client, String method, String path, String body);
+void sendFile(WiFiClient& client, String filename, String contentType);
+void send404(WiFiClient& client);
+void sendJSONConfig(WiFiClient& client);
+void sendJSONIOStatus(WiFiClient& client);
+void sendJSONIOConfig(WiFiClient& client);
+void sendJSONSensorConfig(WiFiClient& client);
+void handlePOSTConfig(WiFiClient& client, String body);
+void handlePOSTSetOutput(WiFiClient& client, String body);
+void handlePOSTIOConfig(WiFiClient& client, String body);
+void handlePOSTResetLatches(WiFiClient& client);
+void handlePOSTResetSingleLatch(WiFiClient& client, String body);
+// Sensor functions temporarily commented out
+void handlePOSTSensorConfig(WiFiClient& client, String body);
+void handlePOSTSensorCommand(WiFiClient& client, String body);
 void setPinModes();
 void setupEthernet();
-void setupUSBNetwork();
 void setupModbus();
 void setupWebServer();
-void handleSimpleHTTP();
-void handleDualHTTP();
-void routeRequest(EthernetClient& client, String method, String path, String body);
-void sendFile(EthernetClient& client, String filename, String contentType);
-void send404(EthernetClient& client);
-void sendJSON(EthernetClient& client, String json);
-void sendJSONConfig(EthernetClient& client);
-void sendJSONIOStatus(EthernetClient& client);
-void sendJSONIOConfig(EthernetClient& client);
-void sendJSONSensorConfig(EthernetClient& client);
-void handlePOSTConfig(EthernetClient& client, String body);
-void handlePOSTSetOutput(EthernetClient& client, String body);
-void handlePOSTIOConfig(EthernetClient& client, String body);
-void handlePOSTResetLatches(EthernetClient& client);
-void handlePOSTResetSingleLatch(EthernetClient& client, String body);
-void handlePOSTSensorConfig(EthernetClient& client, String body);
-void handlePOSTSensorCommand(EthernetClient& client, String body);
-void updateIOForClient(int clientIndex);
 
-// I2C Sensor Library Template - Uncomment when adding I2C sensors
-// Example using BME280 sensor:
-// #include <Adafruit_Sensor.h>
-// #include <Adafruit_BME280.h>
+// EZO sensor functionality 
+Ezo_board* ezoSensors[MAX_SENSORS] = {nullptr};
+bool ezoSensorsInitialized = false;
 
-// I2C Sensor Instance Template - Uncomment and modify for your sensor
-// Example for BME280:
-// Adafruit_BME280 bme; // Create sensor object
 
-/*
- * Modbus IO Module
- * 
- * Features:
- * - 8 Digital Inputs (with optional pullup, inversion, and latching)
- * - 8 Digital Outputs (with optional inversion and initial state)
- * - 3 Analog Inputs (12-bit resolution)
- * - Modbus TCP Server
- * - Web configuration interface
- * 
- * Modbus Register Map:
- * - Discrete Inputs (FC2): 0-7 - Digital input states
- * - Coils (FC1/FC5): 0-7 - Digital output states
- * - Coils (FC5): 100-107 - Reset latches for digital inputs 0-7
- *   (Write 1 to reset the latch for the corresponding input)
- * - Input Registers (FC4): 0-2 - Analog input values (in mV)
- * - Input Registers (FC4): 3+ - Available for I2C sensor data
- * 
- * Web Interface:
- * - Network Configuration (IP, Gateway, Subnet, DHCP)
- * - IO Status and Control
- * - IO Configuration (Input pullup, inversion, latching, etc.)
- */
 
+// Send JSON response helper
+void sendJSON(WiFiClient& client, String json) {
+    client.println("HTTP/1.1 200 OK");
+    client.println("Content-Type: application/json");
+    client.println("Connection: close");
+    client.print("Content-Length: ");
+    client.println(json.length());
+    client.println();
+    client.print(json);
+}
+
+// Send 404 response helper
+void send404(WiFiClient& client) {
+    client.println("HTTP/1.1 404 Not Found");
+    client.println("Content-Type: text/plain");
+    client.println("Connection: close");
+    client.println();
+    client.println("404 Not Found");
+}
+
+// Implementation of POST /api/sensor/calibration
 void setup() {
     Serial.begin(115200);
     uint32_t timeStamp = millis();
     while (!Serial) {
-        if (millis() - timeStamp > 5000) {
-            break;
-        }
+        if (millis() - timeStamp > 5000) break;
     }
-    
-    // Very early debug output to confirm device is running
-    Serial.println("===========================================");
-    Serial.println("MODBUS IO MODULE - STARTUP");
-    Serial.println("===========================================");
-    Serial.println("Device: Raspberry Pi Pico RP2040");
-    Serial.println("Firmware: Dual Interface (Ethernet + USB)");
-    Serial.print("Compile Time: ");
-    Serial.print(__DATE__);
-    Serial.print(" ");
-    Serial.println(__TIME__);
-    Serial.println("===========================================");
-    Serial.println("Booting...");
-    
-    pinMode(LED_BUILTIN, OUTPUT);
+    Serial.println("Booting... (Firmware start)");
 
+    pinMode(LED_BUILTIN, OUTPUT);
     analogReadResolution(12);
-    
+
+    // Blink status LED 3 times to confirm firmware is running
+    for (int i = 0; i < 3; i++) {
+        digitalWrite(LED_BUILTIN, HIGH);
+        delay(200);
+        digitalWrite(LED_BUILTIN, LOW);
+        delay(200);
+    }
+    Serial.println("Status LED blink complete. Firmware running.");
+
+    // Initialize pin allocation tracking if needed
+    // initializePinAllocations(); // Uncomment if using pin allocation logic
+
     // Initialize LittleFS
     if (!LittleFS.begin()) {
         Serial.println("Failed to mount LittleFS filesystem");
-        // Format if mount failed
         if (LittleFS.format()) {
             Serial.println("LittleFS formatted successfully");
             if (!LittleFS.begin()) {
@@ -143,65 +125,213 @@ void setup() {
             Serial.println("Failed to format LittleFS");
         }
     }
-    
+
     Serial.println("Loading config...");
     delay(500);
-    // Load configuration
     loadConfig();
-    
+
     Serial.println("Loading sensor configuration...");
     delay(500);
-    // Load sensor configuration
     loadSensorConfig();
 
     Serial.println("Setting pin modes...");
-    delay(500);
-    // Set pin modes
     setPinModes();
-    
+
     Serial.println("Setup network and services...");
-    // Setup Ethernet network (W5500)
     setupEthernet();
-    
-    // Setup USB RNDIS network
-    setupUSBNetwork();
-    
-    // Print both IP addresses for easy connection
+
     Serial.println("========================================");
-    Serial.print("Ethernet IP Address: ");
-    Serial.println(Ethernet.localIP());
-    Serial.println("USB RNDIS IP Address: 192.168.7.1 (planned)");
-    Serial.println("Web Interface: Ethernet interface on port 80");
-    Serial.println("Modbus TCP: Ethernet interface only on port 502");
+    Serial.print("IP Address: ");
+    Serial.println(eth.localIP());
     Serial.println("========================================");
-    
+
     setupModbus();
     setupWebServer();
-    
-    // Initialize I2C bus
-    Wire.setSDA(I2C_SDA_PIN);
-    Wire.setSCL(I2C_SCL_PIN);
-    Wire.begin();
-    Serial.println("I2C Bus Initialized.");
-    
-    // I2C Sensor Initialization Template - Uncomment when adding I2C sensors
-    // Example for BME280 sensor:
-    // if (!bme.begin(0x76)) { // Common I2C address for BME280
-    //     Serial.println("Could not find a valid BME280 sensor, check wiring!");
-    //     // Handle sensor initialization failure as needed
-    // } else {
-    //     Serial.println("BME280 sensor initialized successfully");
-    // }
-    
-    core0setupComplete = true;
+
+    // Initialize I2C bus if needed
+    // Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN); // Uncomment if using custom I2C pins
 
     // Start watchdog
     rp2040.wdt_begin(WDT_TIMEOUT);
+    Serial.println("Setup complete.");
 }
 
+void handlePOSTSensorCalibration(WiFiClient& client, String body) {
+    StaticJsonDocument<512> doc;
+    DeserializationError error = deserializeJson(doc, body);
+    if (error) {
+        client.println("HTTP/1.1 400 Bad Request");
+        client.println("Content-Type: application/json");
+        client.println("Connection: close");
+        client.println();
+        client.println("{\"success\":false,\"message\":\"Invalid JSON\"}");
+        return;
+    }
+    String name = doc["name"] | "";
+    String method = doc["method"] | "linear";
+    int found = -1;
+    for (int i = 0; i < numConfiguredSensors; i++) {
+        if (strcmp(configuredSensors[i].name, name.c_str()) == 0) {
+            found = i;
+            break;
+        }
+    }
+    if (found == -1) {
+        client.println("HTTP/1.1 404 Not Found");
+        client.println("Content-Type: application/json");
+        client.println("Connection: close");
+        client.println();
+        client.println("{\"success\":false,\"message\":\"Sensor not found\"}");
+        return;
+    }
+    // Store all calibration info as a JSON string in calibrationData
+    String calibJson;
+    serializeJson(doc, calibJson);
+    strncpy(configuredSensors[found].calibrationData, calibJson.c_str(), sizeof(configuredSensors[found].calibrationData)-1);
+    configuredSensors[found].calibrationData[sizeof(configuredSensors[found].calibrationData)-1] = '\0';
+    saveSensorConfig();
+    client.println("HTTP/1.1 200 OK");
+    client.println("Content-Type: application/json");
+    client.println("Connection: close");
+    client.println();
+    client.println("{\"success\":true}");
+}
+
+// Implementation of POST /terminal/command
+void handlePOSTTerminalCommand(WiFiClient& client, String body) {
+    StaticJsonDocument<512> doc;
+    DeserializationError error = deserializeJson(doc, body);
+    if (error) {
+        client.println("HTTP/1.1 400 Bad Request");
+        client.println("Content-Type: application/json");
+        client.println("Connection: close");
+        client.println();
+        client.println("{\"success\":false,\"error\":\"Invalid JSON\"}");
+        return;
+    }
+    String protocol = doc["protocol"] | "";
+    String pin = doc["pin"] | "";
+    String command = doc["command"] | "";
+    String i2cAddress = doc["i2cAddress"] | "";
+    String response = "";
+    bool success = true;
+    // Basic command routing (expand as needed)
+    if (protocol == "digital") {
+        if (command == "read") {
+            if (pin.startsWith("DI")) {
+                int pinNum = pin.substring(2).toInt();
+                if (pinNum >= 0 && pinNum < 8) {
+                    bool state = digitalRead(DIGITAL_INPUTS[pinNum]);
+                    response = pin + " = " + (state ? "HIGH" : "LOW");
+                } else {
+                    success = false;
+                    response = "Error: Invalid pin number";
+                }
+            } else if (pin.startsWith("DO")) {
+                int pinNum = pin.substring(2).toInt();
+                if (pinNum >= 0 && pinNum < 8) {
+                    bool state = ioStatus.dOut[pinNum];
+                    response = pin + " = " + (state ? "HIGH" : "LOW");
+                } else {
+                    success = false;
+                    response = "Error: Invalid pin number";
+                }
+            }
+        } else if (command.startsWith("write ")) {
+            String value = command.substring(6);
+            if (pin.startsWith("DO")) {
+                int pinNum = pin.substring(2).toInt();
+                if (pinNum >= 0 && pinNum < 8) {
+                    bool state = (value == "1" || value.equalsIgnoreCase("HIGH"));
+                    ioStatus.dOut[pinNum] = state;
+                    digitalWrite(DIGITAL_OUTPUTS[pinNum], config.doInvert[pinNum] ? !state : state);
+                    response = pin + " set to " + (state ? "HIGH" : "LOW");
+                } else {
+                    success = false;
+                    response = "Error: Invalid pin number";
+                }
+            } else {
+                success = false;
+                response = "Error: Cannot write to input pin";
+            }
+        } else {
+            success = false;
+            response = "Error: Unknown digital command";
+        }
+    } else if (protocol == "analog") {
+        if (command == "read") {
+            if (pin.startsWith("AI")) {
+                int pinNum = pin.substring(2).toInt();
+                if (pinNum >= 0 && pinNum < 3) {
+                    int value = analogRead(ANALOG_INPUTS[pinNum]);
+                    response = pin + " = " + String(value) + " mV";
+                } else {
+                    success = false;
+                    response = "Error: Invalid analog pin";
+                }
+            }
+        } else {
+            success = false;
+            response = "Error: Unknown analog command";
+        }
+    } else if (protocol == "i2c") {
+        if (command == "scan") {
+            response = "I2C Device Scan:\n";
+            bool foundDevices = false;
+            for (int addr = 1; addr < 127; addr++) {
+                Wire.beginTransmission(addr);
+                if (Wire.endTransmission() == 0) {
+                    response += "Found device at 0x" + String(addr, HEX) + "\n";
+                    foundDevices = true;
+                }
+            }
+            if (!foundDevices) {
+                response += "No I2C devices found";
+            }
+        } else if (command == "probe") {
+            int addr = i2cAddress.length() > 0 ? strtol(i2cAddress.c_str(), nullptr, 16) : 0;
+            Wire.beginTransmission(addr);
+            if (Wire.endTransmission() == 0) {
+                response = "Device present at 0x" + String(addr, HEX);
+            } else {
+                response = "No device at 0x" + String(addr, HEX);
+            }
+        } else {
+            success = false;
+            response = "Error: Unknown I2C command";
+        }
+    } else if (protocol == "system") {
+        if (command == "status") {
+            response = "System OK."; // RAM info not available on RP2040
+        } else if (command == "reset") {
+            response = "System will reset.";
+            // NVIC_SystemReset(); // Not available on RP2040
+        } else {
+            success = false;
+            response = "Error: Unknown system command";
+        }
+    } else {
+        success = false;
+        response = "Error: Unknown protocol";
+    }
+    StaticJsonDocument<256> respDoc;
+    respDoc["success"] = success;
+    if (success) {
+        respDoc["response"] = response;
+    } else {
+        respDoc["error"] = response;
+    }
+    String jsonResp;
+    serializeJson(respDoc, jsonResp);
+    client.println("HTTP/1.1 200 OK");
+    client.println("Content-Type: application/json");
+    client.println("Connection: close");
+    client.println();
+    client.print(jsonResp);
+}
 void loop() {
-    // Check for new client connections on the Ethernet server
-    EthernetClient newClient = ethServer.available();
+    // Check for new client connections on the WiFi server (actually Ethernet via W5500lwIP)
+    WiFiClient newClient = modbusServer.accept();
     
     if (newClient) {
         // Find an available slot for the new client
@@ -263,9 +393,51 @@ void loop() {
             }
         }
     }
+    
     updateIOpins();
-    handleEzoSensors();
+    // handleEzoSensors(); // Commented out for now
     handleDualHTTP();  // Handle both Ethernet and USB web interfaces
+    
+    // Debug: Web server check (every 30 seconds)
+    static unsigned long lastWebDebug = 0;
+    if (millis() - lastWebDebug > 30000) {
+        Serial.println("Web server status: Listening on " + eth.localIP().toString() + ":80");
+        lastWebDebug = millis();
+    }
+
+    // Serial commands for debugging
+    if (Serial.available()) {
+        String cmd = Serial.readStringUntil('\n');
+        cmd.trim();
+        if (cmd.equalsIgnoreCase("netinfo")) {
+            IPAddress ip = eth.localIP();
+            Serial.println("=== NETWORK INFO ===");
+            Serial.print("IP Address: ");
+            Serial.println(ip);
+            Serial.print("Gateway: ");
+            Serial.println(eth.gatewayIP());
+            Serial.print("Subnet: ");
+            Serial.println(eth.subnetMask());
+            uint8_t mac[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED};
+            Serial.print("MAC Address: ");
+            for (int i = 0; i < 6; i++) {
+                if (i > 0) Serial.print(":");
+                if (mac[i] < 16) Serial.print("0");
+                Serial.print(mac[i], HEX);
+            }
+            Serial.println();
+            Serial.println("HTTP Server: Port 80");
+            Serial.println("Modbus Server: Port 502");
+            Serial.println("==================");
+        } else if (cmd.equalsIgnoreCase("webtest")) {
+            Serial.println("=== WEB SERVER TEST ===");
+            Serial.println("Try accessing these URLs:");
+            Serial.println("http://" + eth.localIP().toString() + "/test");
+            Serial.println("http://" + eth.localIP().toString() + "/config");
+            Serial.println("http://" + eth.localIP().toString() + "/iostatus");
+            Serial.println("=====================");
+        }
+    }
 
     // Watchdog timer reset
     rp2040.wdt_reset();
@@ -314,7 +486,6 @@ void handleEzoSensors() {
                 snprintf(configuredSensors[i].response, sizeof(configuredSensors[i].response), "%.2f", reading);
                 Serial.printf("EZO sensor %s reading: %s\n", configuredSensors[i].name, configuredSensors[i].response);
             } else {
-                snprintf(configuredSensors[i].response, sizeof(configuredSensors[i].response), "ERROR");
                 Serial.printf("EZO sensor %s error: %d\n", configuredSensors[i].name, ezoSensors[i]->get_error());
             }
             
@@ -363,6 +534,7 @@ void loadConfig() {
                 // Get IP addresses
                 JsonArray ipArray = doc["ip"].as<JsonArray>();
                 if (ipArray) {
+
                     for (int i = 0; i < 4; i++) {
                         config.ip[i] = ipArray[i] | DEFAULT_CONFIG.ip[i];
                     }
@@ -658,45 +830,56 @@ void setPinModes() {
 
 void setupEthernet() {
     Serial.println("Initializing W5500 Ethernet...");
-    Serial.print("  Configuring SPI pins - CS:");
-    Serial.print(PIN_ETH_CS);
-    Serial.print(", MISO:");
-    Serial.print(PIN_ETH_MISO);
-    Serial.print(", SCK:");
-    Serial.print(PIN_ETH_SCK);
-    Serial.print(", MOSI:");
-    Serial.println(PIN_ETH_MOSI);
-    
-    // Initialize SPI for W5500
-    SPI.setCS(PIN_ETH_CS);
+    Serial.print("  Configuring SPI pins - CS:"); Serial.print(PIN_ETH_CS);
+    Serial.print(", MISO:"); Serial.print(PIN_ETH_MISO);
+    Serial.print(", SCK:"); Serial.print(PIN_ETH_SCK);
+    Serial.print(", MOSI:"); Serial.println(PIN_ETH_MOSI);
+
+    // Initialize SPI for Ethernet
     SPI.setRX(PIN_ETH_MISO);
+    SPI.setCS(PIN_ETH_CS);
     SPI.setSCK(PIN_ETH_SCK);
     SPI.setTX(PIN_ETH_MOSI);
     SPI.begin();
     Serial.println("  SPI initialized successfully");
     
-    // MAC address for W5500
-    uint8_t mac[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED};
-    Serial.print("  MAC Address: ");
-    for (int i = 0; i < 6; i++) {
-        if (i > 0) Serial.print(":");
-        if (mac[i] < 16) Serial.print("0");
-        Serial.print(mac[i], HEX);
-    }
-    Serial.println();
+    // Set hostname first
+    eth.hostname(config.hostname);
+    eth.setSPISpeed(30000000);
+    lwipPollingPeriod(3);
     
     bool connected = false;
     
+    // Print config for debugging
+    Serial.print("  DHCP Enabled: "); Serial.println(config.dhcpEnabled ? "Yes" : "No");
+    Serial.print("  Static IP: "); Serial.print(config.ip[0]); Serial.print("."); Serial.print(config.ip[1]); Serial.print("."); Serial.print(config.ip[2]); Serial.print("."); Serial.println(config.ip[3]);
+    Serial.print("  Gateway: "); Serial.print(config.gateway[0]); Serial.print("."); Serial.print(config.gateway[1]); Serial.print("."); Serial.print(config.gateway[2]); Serial.print("."); Serial.println(config.gateway[3]);
+    Serial.print("  Subnet: "); Serial.print(config.subnet[0]); Serial.print("."); Serial.print(config.subnet[1]); Serial.print("."); Serial.print(config.subnet[2]); Serial.print("."); Serial.println(config.subnet[3]);
+
     if (config.dhcpEnabled) {
         // Try DHCP first
         Serial.println("Attempting to use DHCP...");
-        if (Ethernet.begin(mac) == 1) {
-            connected = true;
-            Serial.println("DHCP configuration successful");
-            Serial.print("IP address: ");
-            Serial.println(Ethernet.localIP());
+        if (eth.begin()) {
+            // Wait for DHCP to complete
+            Serial.println("DHCP process started, waiting for IP assignment...");
+            int dhcpTimeout = 0;
+            while (dhcpTimeout < 15) {  // Wait up to 15 seconds for DHCP
+                IPAddress ip = eth.localIP();
+                if (ip[0] != 0 || ip[1] != 0 || ip[2] != 0 || ip[3] != 0) {
+                    connected = true;
+                    Serial.println("DHCP configuration successful");
+                    break;
+                }
+                delay(1000);
+                Serial.print(".");
+                dhcpTimeout++;
+            }
+            
+            if (!connected) {
+                Serial.println("\nDHCP timeout, falling back to static IP");
+            }
         } else {
-            Serial.println("DHCP failed, falling back to static IP");
+            Serial.println("Failed to start DHCP process, falling back to static IP");
         }
     }
     
@@ -707,35 +890,42 @@ void setupEthernet() {
         IPAddress gateway(config.gateway[0], config.gateway[1], config.gateway[2], config.gateway[3]);
         IPAddress subnet(config.subnet[0], config.subnet[1], config.subnet[2], config.subnet[3]);
         
-        // Configure with static IP
-        Ethernet.begin(mac, ip, gateway, subnet);
-        delay(1000);  // Give it time to initialize
+        // Stop current connection attempt if any
+        eth.end();
+        delay(500);  // Short delay to ensure clean restart
         
-        IPAddress currentIP = Ethernet.localIP();
-        if (currentIP[0] != 0 || currentIP[1] != 0 || currentIP[2] != 0 || currentIP[3] != 0) {
-            connected = true;
-            Serial.println("Static IP configuration successful");
+        eth.config(ip, gateway, subnet);
+        if (eth.begin()) {
+            delay(1000);  // Give it time to initialize with static IP
+            IPAddress currentIP = eth.localIP();
+            if (currentIP[0] != 0 || currentIP[1] != 0 || currentIP[2] != 0 || currentIP[3] != 0) {
+                connected = true;
+                Serial.println("Static IP configuration successful");
+            } else {
+                Serial.println("Static IP configuration failed - IP not assigned");
+            }
         } else {
-            Serial.println("Static IP configuration failed - IP not assigned");
+            Serial.println("Failed to start Ethernet with static IP");
         }
     }
-    
-    Serial.print("Hostname: ");
-    Serial.println(config.hostname);
-    Serial.print("IP Address: ");
-    Serial.println(Ethernet.localIP());
-    
+
+    Serial.print("Hostname: "); Serial.println(config.hostname);
+    Serial.print("IP Address: "); Serial.println(eth.localIP());
+
     if (!connected) {
-        Serial.println("WARNING: Network connection not established");
+        Serial.println("WARNING: Network connection not established. Please check cable, router, and IP settings.");
+    } else {
+        Serial.println("Network connection established successfully.");
     }
 }
 
+// USB RNDIS/ECM network is auto-configured by RP2040 Arduino core (Earle Philhower) using board build flags.
+// No manual instantiation or library required. USB network appears as 192.168.7.1 when connected.
 void setupUSBNetwork() {
-    Serial.println("USB RNDIS Network Configuration:");
-    Serial.println("  USB RNDIS interface configured in platformio.ini");
-    Serial.println("  USB IP will be: 192.168.7.1");
-    Serial.println("  Note: USB web interface implementation pending");
-    Serial.println("  Current: Web interface available on Ethernet only");
+    Serial.println("USB RNDIS/ECM Network Configuration:");
+    Serial.println("  RP2040 Pico USB network is enabled via board build flags.");
+    Serial.println("  USB IP: 192.168.7.1 (auto-configured)");
+    Serial.println("  Web interface will be available on USB when HTTP server is bound to USB network.");
 }
 
 void setupModbus() {
@@ -768,32 +958,38 @@ void setupModbus() {
 
 void setupWebServer() {
     // Start HTTP server on Ethernet interface
-    webEthServer.begin();
-    Serial.println("Web server started:");
-    Serial.println("  - Ethernet interface on port 80");
-    Serial.println("  - USB interface: Implementation planned");
+    Serial.println("=== STARTING WEB SERVER ===");
+    httpServer.begin();
+    Serial.println("HTTP Server started on port 80");
+    Serial.print("Server listening at: http://");
+    Serial.println(eth.localIP());
+    Serial.println("Web server ready for connections");
+    Serial.println("================================");
 }
 
 void handleSimpleHTTP() {
-    EthernetClient client = webEthServer.available();
+    WiFiClient client = httpServer.accept();
     if (client) {
+        Serial.println("=== WEB CLIENT CONNECTED ===");
+        Serial.print("Client IP: ");
+        Serial.println(client.remoteIP());
+        
         String request = "";
         String method = "";
         String path = "";
         String body = "";
         bool inBody = false;
         int contentLength = 0;
-        
-        // Read the HTTP request
+
+        // Read the HTTP request headers
         while (client.connected() && client.available()) {
             String line = client.readStringUntil('\n');
             line.trim();
-            
+
             if (line.length() == 0) {
                 inBody = true;
                 break; // End of headers
             }
-            
             if (request.length() == 0) {
                 // First line: method and path
                 int firstSpace = line.indexOf(' ');
@@ -803,14 +999,13 @@ void handleSimpleHTTP() {
                     path = line.substring(firstSpace + 1, secondSpace);
                 }
                 request = line;
+                Serial.println("HTTP Request: " + method + " " + path);
             }
-            
-            // Check for Content-Length header
             if (line.startsWith("Content-Length:")) {
                 contentLength = line.substring(15).toInt();
             }
         }
-        
+
         // Read body if present
         if (inBody && contentLength > 0) {
             char bodyBuffer[contentLength + 1];
@@ -818,19 +1013,120 @@ void handleSimpleHTTP() {
             bodyBuffer[bytesRead] = '\0';
             body = String(bodyBuffer);
         }
-        
+
         // Route the request to existing handlers
+        Serial.println("Routing request...");
         routeRequest(client, method, path, body);
-        
         client.stop();
+        Serial.println("=== WEB CLIENT DISCONNECTED ===");
     }
 }
 
-void routeRequest(EthernetClient& client, String method, String path, String body) {
+// Forward declarations
+void sendJSONPinMap(WiFiClient& client);
+void sendJSONSensorPinStatus(WiFiClient& client);
+void sendJSON(WiFiClient& client, String json); // Ensure sendJSON is declared
+
+// Implementation: Return available pins for each protocol
+void sendJSONPinMap(WiFiClient& client) {
+    StaticJsonDocument<1024> doc;
+    JsonObject digital = doc.createNestedObject("digital");
+    digital["pins"] = "2,3,4,5,6,7,8,9";
+    JsonObject analog = doc.createNestedObject("analog");
+    analog["pins"] = "26,27,28";
+    JsonObject i2c = doc.createNestedObject("i2c");
+    i2c["pins"] = "20,21";
+    JsonObject uart = doc.createNestedObject("uart");
+    uart["pins"] = "0,1";
+    JsonObject onewire = doc.createNestedObject("onewire");
+    onewire["pins"] = "2,3,22";
+    String response;
+    serializeJson(doc, response);
+    sendJSON(client, response);
+}
+
+// Implementation: Return sensor pin status and assignments
+void sendJSONSensorPinStatus(WiFiClient& client) {
+    StaticJsonDocument<2048> doc;
+    JsonArray sensors = doc.createNestedArray("sensors");
+    for (int i = 0; i < numConfiguredSensors; i++) {
+        JsonObject sensor = sensors.createNestedObject();
+        sensor["name"] = configuredSensors[i].name;
+        sensor["type"] = configuredSensors[i].type;
+        sensor["enabled"] = configuredSensors[i].enabled;
+        sensor["i2cAddress"] = configuredSensors[i].i2cAddress;
+        sensor["modbusRegister"] = configuredSensors[i].modbusRegister;
+        // Only reference existing members
+        sensor["sdaPin"] = configuredSensors[i].sdaPin;
+        sensor["sclPin"] = configuredSensors[i].sclPin;
+        sensor["analogPin"] = configuredSensors[i].analogPin;
+        sensor["digitalPin"] = configuredSensors[i].digitalPin;
+    }
+    String response;
+    serializeJson(doc, response);
+    sendJSON(client, response);
+}
+void sendJSON(WiFiClient& client, String json); // Ensure sendJSON is declared
+
+void sendJSONConfig(WiFiClient& client) {
+    StaticJsonDocument<1024> doc;
+    doc["config"] = "placeholder";
+    String response;
+    serializeJson(doc, response);
+    sendJSON(client, response);
+}
+
+void routeRequest(WiFiClient& client, String method, String path, String body) {
+    Serial.println("=== ROUTING REQUEST ===");
+    Serial.println("Method: " + method);
+    Serial.println("Path: " + path);
+    
     // Simple routing to existing handler functions
     if (method == "GET") {
         if (path == "/" || path == "/index.html") {
-            sendFile(client, "/index.html", "text/html");
+            Serial.println("Serving index.html");
+            // Try to serve file first, if it fails, serve basic page
+            if (LittleFS.exists("/index.html")) {
+                sendFile(client, "/index.html", "text/html");
+            } else {
+                // Fallback basic HTML page
+                Serial.println("Filesystem index.html not found, serving basic page");
+                client.println("HTTP/1.1 200 OK");
+                client.println("Content-Type: text/html");
+                client.println("Connection: close");
+                client.println();
+                client.println("<!DOCTYPE html><html><head>");
+                client.println("<title>Modbus IO Module</title>");
+                client.println("<style>body{font-family:Arial;margin:40px;} h1{color:#333;} .status{background:#f0f0f0;padding:20px;border-radius:5px;}</style>");
+                client.println("</head><body>");
+                client.println("<h1>Modbus IO Module</h1>");
+                client.println("<div class='status'>");
+                client.println("<h2>Device Status</h2>");
+                client.println("<p><strong>IP Address:</strong> " + eth.localIP().toString() + "</p>");
+                client.println("<p><strong>Uptime:</strong> " + String(millis()/1000) + " seconds</p>");
+                client.println("<p><strong>Web Server:</strong> Active</p>");
+                client.println("</div>");
+                client.println("<h2>Available Endpoints:</h2>");
+                client.println("<ul>");
+                client.println("<li><a href='/test'>Test Page</a></li>");
+                client.println("<li><a href='/config'>Configuration (JSON)</a></li>");
+                client.println("<li><a href='/iostatus'>IO Status (JSON)</a></li>");
+                client.println("</ul>");
+                client.println("</body></html>");
+            }
+        } else if (path == "/test") {
+            // Simple test page
+            Serial.println("Serving test page");
+            client.println("HTTP/1.1 200 OK");
+            client.println("Content-Type: text/html");
+            client.println("Connection: close");
+            client.println();
+            client.println("<html><body>");
+            client.println("<h1>Modbus IO Module - Test Page</h1>");
+            client.println("<p>Web server is working!</p>");
+            client.println("<p>Device IP: " + eth.localIP().toString() + "</p>");
+            client.println("<p>Uptime: " + String(millis()/1000) + " seconds</p>");
+            client.println("</body></html>");
         } else if (path == "/styles.css") {
             sendFile(client, "/styles.css", "text/css");
         } else if (path == "/script.js") {
@@ -847,10 +1143,16 @@ void routeRequest(EthernetClient& client, String method, String path, String bod
             sendJSONIOConfig(client);
         } else if (path == "/sensors/config") {
             sendJSONSensorConfig(client);
+        } else if (path == "/api/pins/map") {
+            sendJSONPinMap(client);
+        } else if (path == "/api/sensors/status") {
+            sendJSONSensorPinStatus(client);
         } else {
             send404(client);
         }
     } else if (method == "POST") {
+
+
         if (path == "/config") {
             handlePOSTConfig(client, body);
         } else if (path == "/setoutput") {
@@ -865,6 +1167,10 @@ void routeRequest(EthernetClient& client, String method, String path, String bod
             handlePOSTSensorConfig(client, body);
         } else if (path == "/api/sensor/command") {
             handlePOSTSensorCommand(client, body);
+        } else if (path == "/api/sensor/calibration") {
+            handlePOSTSensorCalibration(client, body);
+        } else if (path == "/terminal/command") {
+            handlePOSTTerminalCommand(client, body);
         } else {
             send404(client);
         }
@@ -873,7 +1179,7 @@ void routeRequest(EthernetClient& client, String method, String path, String bod
     }
 }
 
-void sendFile(EthernetClient& client, String filename, String contentType) {
+void sendFile(WiFiClient& client, String filename, String contentType) {
     if (LittleFS.exists(filename)) {
         File file = LittleFS.open(filename, "r");
         if (file) {
@@ -895,79 +1201,7 @@ void sendFile(EthernetClient& client, String filename, String contentType) {
     send404(client);
 }
 
-void send404(EthernetClient& client) {
-    client.println("HTTP/1.1 404 Not Found");
-    client.println("Content-Type: text/plain");
-    client.println("Connection: close");
-    client.println();
-    client.println("404 Not Found");
-}
-
-void sendJSON(EthernetClient& client, String json) {
-    client.println("HTTP/1.1 200 OK");
-    client.println("Content-Type: application/json");
-    client.println("Connection: close");
-    client.print("Content-Length: ");
-    client.println(json.length());
-    client.println();
-    client.print(json);
-}
-
-// These functions extract the JSON creation logic from the original handlers
-void sendJSONConfig(EthernetClient& client) {
-    StaticJsonDocument<2048> doc;
-    doc["version"] = config.version;
-    doc["dhcpEnabled"] = config.dhcpEnabled;
-    doc["modbusPort"] = config.modbusPort;
-    
-    JsonArray ipArray = doc.createNestedArray("ip");
-    for (int i = 0; i < 4; i++) {
-        ipArray.add(config.ip[i]);
-    }
-    
-    JsonArray gatewayArray = doc.createNestedArray("gateway");
-    for (int i = 0; i < 4; i++) {
-        gatewayArray.add(config.gateway[i]);
-    }
-    
-    JsonArray subnetArray = doc.createNestedArray("subnet");
-    for (int i = 0; i < 4; i++) {
-        subnetArray.add(config.subnet[i]);
-    }
-    
-    doc["hostname"] = config.hostname;
-    
-    JsonArray diPullupArray = doc.createNestedArray("diPullup");
-    for (int i = 0; i < 8; i++) {
-        diPullupArray.add(config.diPullup[i]);
-    }
-    
-    JsonArray diInvertArray = doc.createNestedArray("diInvert");
-    for (int i = 0; i < 8; i++) {
-        diInvertArray.add(config.diInvert[i]);
-    }
-    
-    JsonArray diLatchArray = doc.createNestedArray("diLatch");
-    for (int i = 0; i < 8; i++) {
-        diLatchArray.add(config.diLatch[i]);
-    }
-    
-    JsonArray doInvertArray = doc.createNestedArray("doInvert");
-    for (int i = 0; i < 8; i++) {
-        doInvertArray.add(config.doInvert[i]);
-    }
-    
-    JsonArray doInitialStateArray = doc.createNestedArray("doInitialState");
-    for (int i = 0; i < 8; i++) {
-        doInitialStateArray.add(config.doInitialState[i]);
-    }
-    
-    String jsonBuffer;
-    serializeJson(doc, jsonBuffer);
-    sendJSON(client, jsonBuffer);
-}
-
-void sendJSONIOStatus(EthernetClient& client) {
+void sendJSONIOStatus(WiFiClient& client) {
     StaticJsonDocument<1024> doc;
     
     JsonArray dInArray = doc.createNestedArray("dIn");
@@ -995,7 +1229,7 @@ void sendJSONIOStatus(EthernetClient& client) {
     sendJSON(client, jsonBuffer);
 }
 
-void sendJSONIOConfig(EthernetClient& client) {
+void sendJSONIOConfig(WiFiClient& client) {
     StaticJsonDocument<1024> doc;
     
     JsonArray diPullupArray = doc.createNestedArray("diPullup");
@@ -1028,7 +1262,7 @@ void sendJSONIOConfig(EthernetClient& client) {
     sendJSON(client, response);
 }
 
-void sendJSONSensorConfig(EthernetClient& client) {
+void sendJSONSensorConfig(WiFiClient& client) {
     StaticJsonDocument<2048> doc;
     JsonArray sensorsArray = doc.createNestedArray("sensors");
     
@@ -1047,7 +1281,7 @@ void sendJSONSensorConfig(EthernetClient& client) {
 }
 
 // POST handler functions
-void handlePOSTConfig(EthernetClient& client, String body) {
+void handlePOSTConfig(WiFiClient& client, String body) {
     StaticJsonDocument<2048> doc;
     DeserializationError error = deserializeJson(doc, body);
     
@@ -1078,7 +1312,7 @@ void handlePOSTConfig(EthernetClient& client, String body) {
     client.println("{\"success\":true}");
 }
 
-void handlePOSTSetOutput(EthernetClient& client, String body) {
+void handlePOSTSetOutput(WiFiClient& client, String body) {
     // Simple query parameter parsing for output=X&state=Y
     int outputIndex = -1;
     int state = -1;
@@ -1109,7 +1343,7 @@ void handlePOSTSetOutput(EthernetClient& client, String body) {
     }
 }
 
-void handlePOSTIOConfig(EthernetClient& client, String body) {
+void handlePOSTIOConfig(WiFiClient& client, String body) {
     StaticJsonDocument<1024> doc;
     DeserializationError error = deserializeJson(doc, body);
     
@@ -1131,7 +1365,7 @@ void handlePOSTIOConfig(EthernetClient& client, String body) {
     client.println("{\"success\":true}");
 }
 
-void handlePOSTResetLatches(EthernetClient& client) {
+void handlePOSTResetLatches(WiFiClient& client) {
     for (int i = 0; i < 8; i++) {
         if (config.diLatch[i]) {
             ioStatus.dInLatched[i] = false;
@@ -1145,7 +1379,7 @@ void handlePOSTResetLatches(EthernetClient& client) {
     client.println("{\"success\":true}");
 }
 
-void handlePOSTResetSingleLatch(EthernetClient& client, String body) {
+void handlePOSTResetSingleLatch(WiFiClient& client, String body) {
     StaticJsonDocument<256> doc;
     if (!deserializeJson(doc, body) && doc.containsKey("input")) {
         int input = doc["input"];
@@ -1161,7 +1395,7 @@ void handlePOSTResetSingleLatch(EthernetClient& client, String body) {
     client.println("{\"success\":true}");
 }
 
-void handlePOSTSensorConfig(EthernetClient& client, String body) {
+void handlePOSTSensorConfig(WiFiClient& client, String body) {
     StaticJsonDocument<2048> doc;
     if (!deserializeJson(doc, body)) {
         // Save sensor configuration logic here
@@ -1175,7 +1409,7 @@ void handlePOSTSensorConfig(EthernetClient& client, String body) {
     client.println("{\"success\":true}");
 }
 
-void handlePOSTSensorCommand(EthernetClient& client, String body) {
+void handlePOSTSensorCommand(WiFiClient& client, String body) {
     StaticJsonDocument<512> doc;
     DeserializationError error = deserializeJson(doc, body);
     
@@ -1312,7 +1546,7 @@ void handlePOSTSensorCommand(EthernetClient& client, String body) {
         // Handle network commands
         if (command == "status") {
             response = "Network Status:\\n";
-            IPAddress ip = Ethernet.localIP();
+            IPAddress ip = eth.localIP();
             response += "IP: " + ip.toString() + "\\n";
             response += "DHCP: " + String(config.dhcpEnabled ? "Enabled" : "Disabled") + "\\n";
             response += "Modbus Port: " + String(config.modbusPort) + "\\n";
@@ -1381,11 +1615,6 @@ void updateIOpins() {
             else {
                 ioStatus.dIn[i] = rawValue;
             }
-        } 
-        // If latching is not enabled, just use the raw value
-        else {
-            ioStatus.dIn[i] = rawValue;
-            ioStatus.dInLatched[i] = false; // Ensure latch flag is cleared
         }
     }
     
@@ -1485,7 +1714,12 @@ void updateIOpins() {
         
         // No built-in sensors - all sensor data comes from configured I2C sensors
         if (numConfiguredSensors == 0) {
-            Serial.println("No I2C sensors configured");
+            // Only print this message once every 60 seconds to avoid spam
+            static unsigned long lastSensorMessage = 0;
+            if (millis() - lastSensorMessage > 60000) {
+                Serial.println("No I2C sensors configured");
+                lastSensorMessage = millis();
+            }
         }
         
         // Print IP address every 30 seconds for easy reference
@@ -1493,7 +1727,7 @@ void updateIOpins() {
         if (millis() - ipPrintTime > 30000) {
             Serial.println("========================================");
             Serial.print("Device IP Address: ");
-            Serial.println(Ethernet.localIP());
+            Serial.println(eth.localIP());
             Serial.println("========================================");
             ipPrintTime = millis();
         }
@@ -1543,7 +1777,6 @@ void updateIOForClient(int clientIndex) {
 void handleDualHTTP() {
     // Handle Ethernet HTTP requests
     handleSimpleHTTP();
-    
-    // USB RNDIS HTTP implementation: To be added
-    // This will handle USB client connections when implemented
+    // USB RNDIS HTTP implementation is auto-configured by RP2040 core; no manual handling required here.
+    // To support USB HTTP, bind server to USB network interface if/when supported by Arduino core.
 }

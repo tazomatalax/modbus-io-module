@@ -1018,6 +1018,9 @@ function renderSensorTable() {
         return;
     }
     
+    // Use /iostatus data for raw/calibrated values
+    let ioStatus = window.currentIOStatus || {};
+    let sensorsStatus = ioStatus.sensors || [];
     tableBody.innerHTML = sensorConfigData.map((sensor, index) => {
         const i2cAddress = sensor.type.startsWith('SIM_') ? 
             (sensor.i2cAddress === 0 ? 'Simulated' : `0x${sensor.i2cAddress.toString(16).toUpperCase().padStart(2, '0')}`) :
@@ -1027,7 +1030,12 @@ function renderSensorTable() {
         const hasCalibration = sensor.calibration && (sensor.calibration.offset !== undefined || sensor.calibration.scale !== undefined);
         const calibrationText = hasCalibration ? 'Yes' : 'No';
         const calibrationClass = hasCalibration ? 'calibration-enabled' : 'calibration-disabled';
-        
+        // Dataflow display
+        let rawValue = sensorsStatus[index] && sensorsStatus[index].rawValue !== undefined ? sensorsStatus[index].rawValue : 'N/A';
+        let rawUnit = sensorsStatus[index] && sensorsStatus[index].rawUnit ? sensorsStatus[index].rawUnit : '';
+        let calibratedValue = sensorsStatus[index] && sensorsStatus[index].calibratedValue !== undefined ? sensorsStatus[index].calibratedValue : 'N/A';
+        let calibratedUnit = sensorsStatus[index] && sensorsStatus[index].unit ? sensorsStatus[index].unit : '';
+        let formula = sensor.calibration && sensor.calibration.formula ? sensor.calibration.formula : '';
         return `
             <tr>
                 <td>${sensor.name}</td>
@@ -1042,6 +1050,9 @@ function renderSensorTable() {
                         <button class="delete-btn" onclick="deleteSensor(${index})" title="Delete sensor">Delete</button>
                     </div>
                 </td>
+                <td>${rawValue} ${rawUnit}</td>
+                <td><input type="text" value="${formula}" onchange="updateSensorFormula(${index}, this.value)"></td>
+                <td>${calibratedValue} ${calibratedUnit}</td>
             </tr>
         `;
     }).join('');
@@ -1098,11 +1109,21 @@ function showAddSensorModal() {
 
     // Setup sensor type change listener
     document.getElementById('sensor-type').addEventListener('change', updateSensorFormFields);
-    
-    // Initialize form fields visibility
-    updateSensorFormFields();
 
-    document.getElementById('sensor-modal-overlay').classList.add('show');
+    // Fetch pin map and sensor status for dynamic pin assignment
+    Promise.all([
+        fetch('/api/pins/map').then(r => r.json()),
+        fetch('/api/sensors/status').then(r => r.json())
+    ]).then(([pinMap, sensorStatus]) => {
+        window.boardPins = pinMap;
+        window.sensorPinStatus = sensorStatus;
+        updateSensorFormFields();
+        document.getElementById('sensor-modal-overlay').classList.add('show');
+    }).catch(err => {
+        console.error('Error loading pin map/status:', err);
+        updateSensorFormFields();
+        document.getElementById('sensor-modal-overlay').classList.add('show');
+    });
 }
 
 // Update protocol-specific configuration fields
@@ -1146,71 +1167,68 @@ function updateSensorProtocolFields() {
 
 // Load available pins for the selected protocol
 function loadAvailablePins(protocol) {
-    fetch(`/available-pins?protocol=${encodeURIComponent(protocol)}`)
-        .then(response => response.json())
-        .then(data => {
-            if (protocol === 'I2C') {
-                const pinsSelect = document.getElementById('sensor-i2c-pins');
-                pinsSelect.innerHTML = '<option value="">Select I2C pins...</option>';
-                // Only show valid I2C pair GP4/GP5
-                const option = document.createElement('option');
-                option.value = '4,5';
-                option.textContent = 'SDA: GP4, SCL: GP5';
-                pinsSelect.appendChild(option);
-            } else if (protocol === 'UART') {
-                const pinsSelect = document.getElementById('sensor-uart-pins');
-                pinsSelect.innerHTML = '<option value="">Select UART pins...</option>';
-                
-                if (data.pinPairs) {
-                    data.pinPairs.forEach(pair => {
-                        const option = document.createElement('option');
-                        option.value = `${pair.tx},${pair.rx}`;
-                        option.textContent = pair.label;
-                        pinsSelect.appendChild(option);
-                    });
-                }
-            } else if (protocol === 'Analog Voltage') {
-                const pinsSelect = document.getElementById('sensor-analog-pin');
-                pinsSelect.innerHTML = '<option value="">Select analog pin...</option>';
-                
-                if (data.pins) {
-                    data.pins.forEach(pin => {
-                        const option = document.createElement('option');
-                        option.value = pin.pin;
-                        option.textContent = pin.label;
-                        pinsSelect.appendChild(option);
-                    });
-                }
-            } else if (protocol === 'One-Wire') {
-                const pinsSelect = document.getElementById('sensor-onewire-pin');
-                pinsSelect.innerHTML = '<option value="">Select One-Wire pin...</option>';
-                
-                if (data.pins) {
-                    data.pins.forEach(pin => {
-                        const option = document.createElement('option');
-                        option.value = pin.pin;
-                        option.textContent = pin.label;
-                        pinsSelect.appendChild(option);
-                    });
-                }
-            } else if (protocol === 'Digital Counter') {
-                const pinsSelect = document.getElementById('sensor-digital-pin');
-                pinsSelect.innerHTML = '<option value="">Select digital pin...</option>';
-                
-                if (data.pins) {
-                    data.pins.forEach(pin => {
-                        const option = document.createElement('option');
-                        option.value = pin.pin;
-                        option.textContent = pin.label;
-                        pinsSelect.appendChild(option);
-                    });
-                }
-            }
-        })
-        .catch(error => {
-            console.error('Error loading available pins:', error);
-            showToast('Error loading available pins', 'error');
+    // Use boardPins and sensorPinStatus to filter available pins
+    let availablePins = [];
+    if (!window.boardPins) return;
+    if (!window.sensorPinStatus) window.sensorPinStatus = [];
+    // Get all pins for protocol
+    if (protocol === 'I2C') {
+        // I2C pairs
+        const usedPairs = window.sensorPinStatus.filter(s => s.protocol === 'I2C').map(s => s.pins.join(','));
+        availablePins = window.boardPins.I2C.filter(pair => !usedPairs.includes(pair.join(',')));
+        const pinsSelect = document.getElementById('sensor-i2c-pins');
+        pinsSelect.innerHTML = '<option value="">Select I2C pins...</option>';
+        availablePins.forEach(pair => {
+            const option = document.createElement('option');
+            option.value = pair.join(',');
+            option.textContent = `SDA: GP${pair[0]}, SCL: GP${pair[1]}`;
+            pinsSelect.appendChild(option);
         });
+    } else if (protocol === 'UART') {
+        const usedPairs = window.sensorPinStatus.filter(s => s.protocol === 'UART').map(s => s.pins.join(','));
+        availablePins = window.boardPins.UART.filter(pair => !usedPairs.includes(pair.join(',')));
+        const pinsSelect = document.getElementById('sensor-uart-pins');
+        pinsSelect.innerHTML = '<option value="">Select UART pins...</option>';
+        availablePins.forEach(pair => {
+            const option = document.createElement('option');
+            option.value = pair.join(',');
+            option.textContent = `TX: GP${pair[0]}, RX: GP${pair[1]}`;
+            pinsSelect.appendChild(option);
+        });
+    } else if (protocol === 'Analog Voltage') {
+        const usedPins = window.sensorPinStatus.filter(s => s.protocol === 'Analog Voltage').map(s => s.pins).flat();
+        availablePins = window.boardPins.ANALOG.filter(pin => !usedPins.includes(pin));
+        const pinsSelect = document.getElementById('sensor-analog-pin');
+        pinsSelect.innerHTML = '<option value="">Select analog pin...</option>';
+        availablePins.forEach(pin => {
+            const option = document.createElement('option');
+            option.value = pin;
+            option.textContent = `GP${pin}`;
+            pinsSelect.appendChild(option);
+        });
+    } else if (protocol === 'One-Wire') {
+        const usedPins = window.sensorPinStatus.filter(s => s.protocol === 'One-Wire').map(s => s.pins).flat();
+        availablePins = window.boardPins.ONEWIRE.filter(pin => !usedPins.includes(pin));
+        const pinsSelect = document.getElementById('sensor-onewire-pin');
+        pinsSelect.innerHTML = '<option value="">Select One-Wire pin...</option>';
+        availablePins.forEach(pin => {
+            const option = document.createElement('option');
+            option.value = pin;
+            option.textContent = `GP${pin}`;
+            pinsSelect.appendChild(option);
+        });
+    } else if (protocol === 'Digital Counter') {
+        const usedPins = window.sensorPinStatus.filter(s => s.protocol === 'Digital Counter').map(s => s.pins).flat();
+        availablePins = window.boardPins.DIGITAL.filter(pin => !usedPins.includes(pin));
+        const pinsSelect = document.getElementById('sensor-digital-pin');
+        pinsSelect.innerHTML = '<option value="">Select digital pin...</option>';
+        availablePins.forEach(pin => {
+            const option = document.createElement('option');
+            option.value = pin;
+            option.textContent = `GP${pin}`;
+            pinsSelect.appendChild(option);
+        });
+    }
 }
 
 // Update sensor type options based on selected protocol
