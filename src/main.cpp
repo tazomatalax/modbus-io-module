@@ -7,13 +7,13 @@
 // ...existing code...
 
 
-// Core Arduino and C++ includes
 #include <Arduino.h>
 #include <SPI.h>
 #include <Wire.h>
-#include <LittleFS.h>
 #include <ArduinoJson.h>
 #include "../config/formula_parser.h"
+
+
 
 // Example usage in sensor read logic:
 // double raw_value = ...;
@@ -113,18 +113,7 @@ void setup() {
     // Initialize pin allocation tracking if needed
     // initializePinAllocations(); // Uncomment if using pin allocation logic
 
-    // Initialize LittleFS
-    if (!LittleFS.begin()) {
-        Serial.println("Failed to mount LittleFS filesystem");
-        if (LittleFS.format()) {
-            Serial.println("LittleFS formatted successfully");
-            if (!LittleFS.begin()) {
-                Serial.println("Failed to mount LittleFS after formatting");
-            }
-        } else {
-            Serial.println("Failed to format LittleFS");
-        }
-    }
+
 
     Serial.println("Loading config...");
     delay(500);
@@ -156,6 +145,7 @@ void setup() {
     Serial.println("Setup complete.");
 }
 
+// Implementation of POST /api/sensor/calibration
 void handlePOSTSensorCalibration(WiFiClient& client, String body) {
     StaticJsonDocument<512> doc;
     DeserializationError error = deserializeJson(doc, body);
@@ -164,7 +154,7 @@ void handlePOSTSensorCalibration(WiFiClient& client, String body) {
         client.println("Content-Type: application/json");
         client.println("Connection: close");
         client.println();
-        client.println("{\"success\":false,\"message\":\"Invalid JSON\"}");
+        client.println("{\"success\":false,\"error\":\"Invalid JSON\"}");
         return;
     }
     String name = doc["name"] | "";
@@ -501,196 +491,16 @@ void handleEzoSensors() {
 }
 
 void loadConfig() {
-    // Read config from LittleFS
-    if (LittleFS.exists(CONFIG_FILE)) {
-        File configFile = LittleFS.open(CONFIG_FILE, "r");
-        if (configFile) {
-            // Create a JSON document to store the configuration
-            StaticJsonDocument<2048> doc;
-            
-            // Deserialize the JSON document
-            DeserializationError error = deserializeJson(doc, configFile);
-            configFile.close();
-            
-            if (!error) {
-                // Extract configuration values
-                config.version = doc["version"] | CONFIG_VERSION;
-                config.dhcpEnabled = doc["dhcpEnabled"] | DEFAULT_CONFIG.dhcpEnabled;
-                
-                // Check if the modbusPort value exists in the config and extract it
-                if (doc.containsKey("modbusPort")) {
-                    config.modbusPort = doc["modbusPort"].as<uint16_t>();
-                    Serial.print("Found modbusPort in config file: ");
-                    Serial.println(config.modbusPort);
-                } else {
-                    config.modbusPort = DEFAULT_CONFIG.modbusPort;
-                    Serial.print("modbusPort not found in config, using default: ");
-                    Serial.println(config.modbusPort);
-                }
-                
-                Serial.print("Loaded Modbus port from config: ");
-                Serial.println(config.modbusPort);
-                
-                // Get IP addresses
-                JsonArray ipArray = doc["ip"].as<JsonArray>();
-                if (ipArray) {
-
-                    for (int i = 0; i < 4; i++) {
-                        config.ip[i] = ipArray[i] | DEFAULT_CONFIG.ip[i];
-                    }
-                } else {
-                    memcpy(config.ip, DEFAULT_CONFIG.ip, 4);
-                }
-                
-                JsonArray gatewayArray = doc["gateway"].as<JsonArray>();
-                if (gatewayArray) {
-                    for (int i = 0; i < 4; i++) {
-                        config.gateway[i] = gatewayArray[i] | DEFAULT_CONFIG.gateway[i];
-                    }
-                } else {
-                    memcpy(config.gateway, DEFAULT_CONFIG.gateway, 4);
-                }
-                
-                JsonArray subnetArray = doc["subnet"].as<JsonArray>();
-                if (subnetArray) {
-                    for (int i = 0; i < 4; i++) {
-                        config.subnet[i] = subnetArray[i] | DEFAULT_CONFIG.subnet[i];
-                    }
-                } else {
-                    memcpy(config.subnet, DEFAULT_CONFIG.subnet, 4);
-                }
-                
-                // Get hostname
-                const char* hostname = doc["hostname"] | DEFAULT_CONFIG.hostname;
-                strncpy(config.hostname, hostname, HOSTNAME_MAX_LENGTH - 1);
-                config.hostname[HOSTNAME_MAX_LENGTH - 1] = '\0';  // Ensure null termination
-                
-                // Get digital input configurations
-                JsonArray diPullupArray = doc["diPullup"].as<JsonArray>();
-                if (diPullupArray) {
-                    for (int i = 0; i < 8; i++) {
-                        config.diPullup[i] = diPullupArray[i] | DEFAULT_CONFIG.diPullup[i];
-                    }
-                } else {
-                    memcpy(config.diPullup, DEFAULT_CONFIG.diPullup, 8);
-                }
-                
-                JsonArray diInvertArray = doc["diInvert"].as<JsonArray>();
-                if (diInvertArray) {
-                    for (int i = 0; i < 8; i++) {
-                        config.diInvert[i] = diInvertArray[i] | DEFAULT_CONFIG.diInvert[i];
-                    }
-                } else {
-                    memcpy(config.diInvert, DEFAULT_CONFIG.diInvert, 8);
-                }
-                
-                JsonArray diLatchArray = doc["diLatch"].as<JsonArray>();
-                if (diLatchArray) {
-                    for (int i = 0; i < 8; i++) {
-                        config.diLatch[i] = diLatchArray[i] | DEFAULT_CONFIG.diLatch[i];
-                    }
-                } else {
-                    memcpy(config.diLatch, DEFAULT_CONFIG.diLatch, 8);
-                }
-                
-                // Get digital output configurations
-                JsonArray doInvertArray = doc["doInvert"].as<JsonArray>();
-                if (doInvertArray) {
-                    for (int i = 0; i < 8; i++) {
-                        config.doInvert[i] = doInvertArray[i] | DEFAULT_CONFIG.doInvert[i];
-                    }
-                } else {
-                    memcpy(config.doInvert, DEFAULT_CONFIG.doInvert, 8);
-                }
-                
-                JsonArray doInitialStateArray = doc["doInitialState"].as<JsonArray>();
-                if (doInitialStateArray) {
-                    for (int i = 0; i < 8; i++) {
-                        config.doInitialState[i] = doInitialStateArray[i] | DEFAULT_CONFIG.doInitialState[i];
-                    }
-                } else {
-                    memcpy(config.doInitialState, DEFAULT_CONFIG.doInitialState, 8);
-                }
-                
-                Serial.println("Configuration loaded from file");
-                return;
-            } else {
-                Serial.print("Failed to parse config file: ");
-                Serial.println(error.c_str());
-            }
-        } else {
-            Serial.println("Failed to open config file for reading");
-        }
-    } else {
-        Serial.println("Config file does not exist, using defaults");
-    }
-    
-    // If we get here, use default config
+    // Use hardcoded defaults for config (RAM only)
     config = DEFAULT_CONFIG;
-    saveConfig();
+    config.modbusPort = 502;
+    // If your Config struct has a deviceName field, set it here. Otherwise, remove this line.
+    // All old JSON/file logic removed.
+    return;
 }
 
 void saveConfig() {
-    Serial.println("Saving configuration to LittleFS...");
-    
-    // Create a JSON document to store the configuration
-    StaticJsonDocument<2048> doc;
-    
-    // Store configuration values
-    doc["version"] = config.version;
-    doc["dhcpEnabled"] = config.dhcpEnabled;
-    doc["modbusPort"] = config.modbusPort;
-    
-    // Store IP addresses as arrays
-    JsonArray ipArray = doc.createNestedArray("ip");
-    JsonArray gatewayArray = doc.createNestedArray("gateway");
-    JsonArray subnetArray = doc.createNestedArray("subnet");
-    
-    for (int i = 0; i < 4; i++) {
-        ipArray.add(config.ip[i]);
-        gatewayArray.add(config.gateway[i]);
-        subnetArray.add(config.subnet[i]);
-    }
-    
-    // Store hostname
-    doc["hostname"] = config.hostname;
-    
-    // Store digital input configurations
-    JsonArray diPullupArray = doc.createNestedArray("diPullup");
-    JsonArray diInvertArray = doc.createNestedArray("diInvert");
-    JsonArray diLatchArray = doc.createNestedArray("diLatch");
-    
-    for (int i = 0; i < 8; i++) {
-        diPullupArray.add(config.diPullup[i]);
-        diInvertArray.add(config.diInvert[i]);
-        diLatchArray.add(config.diLatch[i]);
-    }
-    
-    // Store digital output configurations
-    JsonArray doInvertArray = doc.createNestedArray("doInvert");
-    JsonArray doInitialStateArray = doc.createNestedArray("doInitialState");
-    
-    for (int i = 0; i < 8; i++) {
-        doInvertArray.add(config.doInvert[i]);
-        doInitialStateArray.add(config.doInitialState[i]);
-    }
-    
-    // Open file for writing
-    File configFile = LittleFS.open(CONFIG_FILE, "w");
-    if (!configFile) {
-        Serial.println("Failed to open config file for writing");
-        return;
-    }
-    
-    // Serialize JSON to file
-    if (serializeJson(doc, configFile) == 0) {
-        Serial.println("Failed to write config to file");
-    } else {
-        Serial.println("Configuration saved successfully");
-    }
-    
-    // Close the file
-    configFile.close();
+    Serial.println("Config save (RAM only, not persisted)");
 }
 
 void loadSensorConfig() {
@@ -700,73 +510,6 @@ void loadSensorConfig() {
     numConfiguredSensors = 0;
     memset(configuredSensors, 0, sizeof(configuredSensors));
     
-    // Check if sensors.json exists
-    if (!LittleFS.exists(SENSORS_FILE)) {
-        Serial.println("Sensors config file does not exist, using empty configuration");
-        return;
-    }
-    
-    // Open sensors.json for reading
-    File sensorsFile = LittleFS.open(SENSORS_FILE, "r");
-    if (!sensorsFile) {
-        Serial.println("Failed to open sensors config file for reading");
-        return;
-    }
-    
-    // Create JSON document to parse the file
-    StaticJsonDocument<1024> doc;
-    DeserializationError error = deserializeJson(doc, sensorsFile);
-    sensorsFile.close();
-    
-    if (error) {
-        Serial.print("Failed to parse sensors config file: ");
-        Serial.println(error.c_str());
-        return;
-    }
-    
-    // Parse sensors array
-    if (doc.containsKey("sensors") && doc["sensors"].is<JsonArray>()) {
-        JsonArray sensorsArray = doc["sensors"].as<JsonArray>();
-        int index = 0;
-        
-        for (JsonObject sensor : sensorsArray) {
-            if (index >= MAX_SENSORS) {
-                Serial.println("Warning: Maximum number of sensors exceeded, ignoring remaining sensors");
-                break;
-            }
-            
-            // Parse sensor configuration
-            configuredSensors[index].enabled = sensor["enabled"] | false;
-            
-            const char* name = sensor["name"] | "";
-            strncpy(configuredSensors[index].name, name, sizeof(configuredSensors[index].name) - 1);
-            configuredSensors[index].name[sizeof(configuredSensors[index].name) - 1] = '\0';
-            
-            const char* type = sensor["type"] | "";
-            strncpy(configuredSensors[index].type, type, sizeof(configuredSensors[index].type) - 1);
-            configuredSensors[index].type[sizeof(configuredSensors[index].type) - 1] = '\0';
-            
-            configuredSensors[index].i2cAddress = sensor["i2cAddress"] | 0;
-            configuredSensors[index].modbusRegister = sensor["modbusRegister"] | 0;
-            
-            // Debug output
-            Serial.printf("Loaded sensor %d: %s (%s) at I2C 0x%02X, Modbus register %d, enabled: %s\n",
-                index,
-                configuredSensors[index].name,
-                configuredSensors[index].type,
-                configuredSensors[index].i2cAddress,
-                configuredSensors[index].modbusRegister,
-                configuredSensors[index].enabled ? "true" : "false"
-            );
-            
-            index++;
-        }
-        
-        numConfiguredSensors = index;
-        Serial.printf("Loaded %d sensor configurations\n", numConfiguredSensors);
-    } else {
-        Serial.println("No sensors array found in configuration file");
-    }
 }
 
 void saveSensorConfig() {
@@ -787,21 +530,8 @@ void saveSensorConfig() {
     }
     
     // Open file for writing
-    File sensorsFile = LittleFS.open(SENSORS_FILE, "w");
-    if (!sensorsFile) {
-        Serial.println("Failed to open sensors config file for writing");
-        return;
-    }
-    
-    // Serialize JSON to file
-    if (serializeJson(doc, sensorsFile) == 0) {
-        Serial.println("Failed to write sensors config to file");
-    } else {
-        Serial.println("Sensor configuration saved successfully");
-    }
-    
-    // Close the file
-    sensorsFile.close();
+    // No-op: sensors config is RAM-only, not persisted
+    Serial.println("Sensors config save (RAM only, not persisted)");
 }
 
 // Reset all latched inputs
@@ -1084,36 +814,8 @@ void routeRequest(WiFiClient& client, String method, String path, String body) {
     // Simple routing to existing handler functions
     if (method == "GET") {
         if (path == "/" || path == "/index.html") {
-            Serial.println("Serving index.html");
-            // Try to serve file first, if it fails, serve basic page
-            if (LittleFS.exists("/index.html")) {
-                sendFile(client, "/index.html", "text/html");
-            } else {
-                // Fallback basic HTML page
-                Serial.println("Filesystem index.html not found, serving basic page");
-                client.println("HTTP/1.1 200 OK");
-                client.println("Content-Type: text/html");
-                client.println("Connection: close");
-                client.println();
-                client.println("<!DOCTYPE html><html><head>");
-                client.println("<title>Modbus IO Module</title>");
-                client.println("<style>body{font-family:Arial;margin:40px;} h1{color:#333;} .status{background:#f0f0f0;padding:20px;border-radius:5px;}</style>");
-                client.println("</head><body>");
-                client.println("<h1>Modbus IO Module</h1>");
-                client.println("<div class='status'>");
-                client.println("<h2>Device Status</h2>");
-                client.println("<p><strong>IP Address:</strong> " + eth.localIP().toString() + "</p>");
-                client.println("<p><strong>Uptime:</strong> " + String(millis()/1000) + " seconds</p>");
-                client.println("<p><strong>Web Server:</strong> Active</p>");
-                client.println("</div>");
-                client.println("<h2>Available Endpoints:</h2>");
-                client.println("<ul>");
-                client.println("<li><a href='/test'>Test Page</a></li>");
-                client.println("<li><a href='/config'>Configuration (JSON)</a></li>");
-                client.println("<li><a href='/iostatus'>IO Status (JSON)</a></li>");
-                client.println("</ul>");
-                client.println("</body></html>");
-            }
+            Serial.println("Serving embedded index.html");
+            sendFile(client, "/index.html", "text/html");
         } else if (path == "/test") {
             // Simple test page
             Serial.println("Serving test page");
@@ -1179,26 +881,9 @@ void routeRequest(WiFiClient& client, String method, String path, String body) {
     }
 }
 
+// Delegate file serving to sys_init.h helper
 void sendFile(WiFiClient& client, String filename, String contentType) {
-    if (LittleFS.exists(filename)) {
-        File file = LittleFS.open(filename, "r");
-        if (file) {
-            client.println("HTTP/1.1 200 OK");
-            client.print("Content-Type: ");
-            client.println(contentType);
-            client.println("Connection: close");
-            client.print("Content-Length: ");
-            client.println(file.size());
-            client.println();
-            
-            while (file.available()) {
-                client.write(file.read());
-            }
-            file.close();
-            return;
-        }
-    }
-    send404(client);
+    serveFileFromFS(client, filename, contentType);
 }
 
 void sendJSONIOStatus(WiFiClient& client) {
@@ -1397,11 +1082,80 @@ void handlePOSTResetSingleLatch(WiFiClient& client, String body) {
 
 void handlePOSTSensorConfig(WiFiClient& client, String body) {
     StaticJsonDocument<2048> doc;
-    if (!deserializeJson(doc, body)) {
-        // Save sensor configuration logic here
-        saveSensorConfig();
+    DeserializationError error = deserializeJson(doc, body);
+    if (error) {
+        client.println("HTTP/1.1 400 Bad Request");
+        client.println("Content-Type: application/json");
+        client.println("Connection: close");
+        client.println();
+        client.println("{\"success\":false,\"error\":\"Invalid JSON\"}");
+        return;
     }
-    
+
+    // Example: expects an array of sensors in doc["sensors"]
+    if (!doc.containsKey("sensors") || !doc["sensors"].is<JsonArray>()) {
+        client.println("HTTP/1.1 400 Bad Request");
+        client.println("Content-Type: application/json");
+        client.println("Connection: close");
+        client.println();
+        client.println("{\"success\":false,\"error\":\"Missing sensors array\"}");
+        return;
+    }
+
+    JsonArray sensorsArray = doc["sensors"].as<JsonArray>();
+    // Temporary array to check for pin conflicts
+    struct PinUsage { int pin; const char* type; } usedPins[32];
+    int usedCount = 0;
+
+    // Helper: fill defaults for known sensor types
+    auto fillDefaults = [](JsonObject& sensor) {
+        const char* type = sensor["type"] | "";
+        if (strcmp(type, "BME280") == 0) {
+            sensor["i2cAddress"] = 0x76;
+            sensor["modbusRegister"] = 3;
+        } else if (strcmp(type, "EZO_PH") == 0) {
+            sensor["i2cAddress"] = 0x63;
+            sensor["modbusRegister"] = 4;
+        } // Add more known types as needed
+    };
+
+    // Check for pin conflicts and fill defaults
+    for (JsonObject sensor : sensorsArray) {
+        fillDefaults(sensor);
+        // Example: check I2C address conflict
+        int i2cAddr = sensor["i2cAddress"] | -1;
+        if (i2cAddr > 0) {
+            for (int i = 0; i < usedCount; ++i) {
+                if (usedPins[i].pin == i2cAddr && strcmp(usedPins[i].type, "I2C") == 0) {
+                    client.println("HTTP/1.1 400 Bad Request");
+                    client.println("Content-Type: application/json");
+                    client.println("Connection: close");
+                    client.println();
+                    client.println("{\"success\":false,\"error\":\"I2C address conflict\"}");
+                    return;
+                }
+            }
+            usedPins[usedCount++] = {i2cAddr, "I2C"};
+        }
+        // TODO: check analog/digital pin conflicts similarly
+    }
+
+    // If no conflicts, update config
+    numConfiguredSensors = 0;
+    for (JsonObject sensor : sensorsArray) {
+        if (numConfiguredSensors >= MAX_SENSORS) break;
+        configuredSensors[numConfiguredSensors].enabled = sensor["enabled"] | false;
+        const char* name = sensor["name"] | "";
+        strncpy(configuredSensors[numConfiguredSensors].name, name, sizeof(configuredSensors[numConfiguredSensors].name) - 1);
+        configuredSensors[numConfiguredSensors].name[sizeof(configuredSensors[numConfiguredSensors].name) - 1] = '\0';
+        const char* type = sensor["type"] | "";
+        strncpy(configuredSensors[numConfiguredSensors].type, type, sizeof(configuredSensors[numConfiguredSensors].type) - 1);
+        configuredSensors[numConfiguredSensors].type[sizeof(configuredSensors[numConfiguredSensors].type) - 1] = '\0';
+        configuredSensors[numConfiguredSensors].i2cAddress = sensor["i2cAddress"] | 0;
+        configuredSensors[numConfiguredSensors].modbusRegister = sensor["modbusRegister"] | 0;
+        numConfiguredSensors++;
+    }
+    saveSensorConfig();
     client.println("HTTP/1.1 200 OK");
     client.println("Content-Type: application/json");
     client.println("Connection: close");

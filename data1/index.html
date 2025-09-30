@@ -176,7 +176,7 @@
             </div>
             <div class="card-body">
                 <div class="sensor-config-controls">
-                    <button onclick="showAddSensorModal()">Add Sensor</button>
+                    <button onclick="initiateSensorPopup()">Add Sensor</button>
                     <button onclick="saveSensorConfig()">Save & Reboot</button>
                 </div>
                 
@@ -228,7 +228,6 @@
                         <option value="uart">UART</option>
                         <option value="network">Network</option>
                         <option value="system">System</option>
-                    </select>
                 </div>
                 
                 <div class="control-group" id="pin-selector">
@@ -749,144 +748,5 @@
     </div>
     
     <script src="script.js"></script>
-    <!--
-    <script>
-        // Embedded test script to bypass file serving issues
-        console.log("Embedded script loaded!");
-        alert("Embedded script loaded!");
-        
-        // Wait for page to load, then override saveSensor
-        document.addEventListener('DOMContentLoaded', function() {
-            console.log("DOM loaded, overriding saveSensor");
-            
-            window.originalSaveSensor = window.saveSensor;
-            
-            window.saveSensor = function() {
-                alert("Embedded saveSensor called!");
-                console.log("Embedded saveSensor function executed");
-                
-                // Get all form values properly
-                const name = document.getElementById('sensor-name').value.trim();
-                const protocol = document.getElementById('sensor-protocol').value;
-                const type = document.getElementById('sensor-type').value;
-                const enabled = document.getElementById('sensor-enabled').checked;
-                const modbusRegister = parseInt(document.getElementById('sensor-modbus-register').value);
-                
-                if (!name || !protocol || !type || isNaN(modbusRegister)) {
-                    alert("Please fill in all required fields");
-                    return;
-                }
-                
-                // Get I2C address if I2C protocol
-                let i2cAddress = 0;
-                if (protocol === 'I2C') {
-                    const i2cAddressStr = document.getElementById('sensor-i2c-address').value.trim();
-                    if (!i2cAddressStr) {
-                        alert("I2C address is required for I2C sensors");
-                        return;
-                    }
-                    i2cAddress = parseInt(i2cAddressStr.replace('0x', ''), 16);
-                }
-                
-                // Capture pin assignments based on protocol
-                let pinAssignments = {};
-                
-                switch (protocol) {
-                    case 'I2C':
-                        const i2cPinPair = document.getElementById('sensor-i2c-pins').value;
-                        if (i2cPinPair) {
-                            const [sdaPin, sclPin] = i2cPinPair.split(',').map(p => parseInt(p));
-                            pinAssignments.sdaPin = sdaPin;
-                            pinAssignments.sclPin = sclPin;
-                        }
-                        break;
-                        
-                    case 'UART':
-                        const uartPinPair = document.getElementById('sensor-uart-pins').value;
-                        if (uartPinPair) {
-                            const [txPin, rxPin] = uartPinPair.split(',').map(p => parseInt(p));
-                            pinAssignments.txPin = txPin;
-                            pinAssignments.rxPin = rxPin;
-                        }
-                        break;
-                        
-                    case 'Analog Voltage':
-                        const analogPin = document.getElementById('sensor-analog-pin').value;
-                        if (analogPin) {
-                            pinAssignments.analogPin = parseInt(analogPin);
-                        }
-                        break;
-                        
-                    case 'One-Wire':
-                        const oneWirePin = document.getElementById('sensor-onewire-pin').value;
-                        if (oneWirePin) {
-                            pinAssignments.digitalPin = parseInt(oneWirePin);
-                        }
-                        break;
-                        
-                    case 'Digital Counter':
-                        const digitalPin = document.getElementById('sensor-digital-pin').value;
-                        if (digitalPin) {
-                            pinAssignments.digitalPin = parseInt(digitalPin);
-                        }
-                        break;
-                }
-                
-                // Get calibration data
-                const selectedCalibrationMethod = document.querySelector('input[name="sensor-calibration-method"]:checked');
-                let calibration = { offset: 0, scale: 1, expression: '', polynomialStr: '' };
-                
-                if (selectedCalibrationMethod) {
-                    switch (selectedCalibrationMethod.value) {
-                        case 'linear':
-                            const offset = parseFloat(document.getElementById('sensor-calibration-offset').value) || 0;
-                            const scale = parseFloat(document.getElementById('sensor-calibration-scale').value) || 1;
-                            calibration = { offset: offset, scale: scale, expression: '', polynomialStr: '' };
-                            break;
-                    }
-                }
-                
-                // Create complete sensor object
-                const sensor = {
-                    enabled: enabled,
-                    name: name,
-                    protocol: protocol,
-                    type: type,
-                    i2cAddress: i2cAddress,
-                    modbusRegister: modbusRegister,
-                    calibration: calibration,
-                    ...pinAssignments
-                };
-                
-                console.log("Complete sensor object:", sensor);
-                alert("Sensor object created with pins: " + JSON.stringify(pinAssignments));
-                
-                if (typeof sensorConfigData === 'undefined') {
-                    window.sensorConfigData = [];
-                }
-                sensorConfigData.push(sensor);
-                alert("Sensor added! Array length: " + sensorConfigData.length);
-                
-                // Try to render table
-                if (typeof renderSensorTable === 'function') {
-                    renderSensorTable();
-                    alert("Table rendered");
-                } else {
-                    alert("renderSensorTable not found");
-                }
-                
-                // Try to hide modal  
-                if (typeof hideSensorModal === 'function') {
-                    hideSensorModal();
-                    alert("Modal hidden");
-                } else {
-                    alert("hideSensorModal not found");
-                }
-            };
-            
-            console.log("saveSensor override complete");
-        });
-    </script>
-    -->
 </body>
 </html>

@@ -38,6 +38,24 @@ functionality to watch data transmission on selected pins and ports is available
 ### 4. Code Linkage Checklist
 -The different sections of the web ui need to dynamically update according to the sensors configured as do the pin assignments in the firmware. 
 
----
+---### 
+The current frontend logic matches the intended workflow:
+
+Clicking "Add Sensor" opens the modal and does not push anything to the firmware.
+Filling out the modal and clicking "Add" adds the sensor to the local sensorConfigData array and updates the table in the UI only.
+The firmware is not updated until the user clicks "Save & Reboot", which calls saveSensorConfig(). This function POSTs the entire sensor array to /sensors/config on the firmware.
+The pin assignment dropdowns are populated by calling /available-pins?protocol=... when the protocol is selected, which is correct.
+
+Summary of the process:
+
+"Add Sensor" → opens modal, no firmware call.
+Fill out modal, click "Add" → updates local array and table, no firmware call.
+"Save & Reboot" → POSTs all sensor config to firmware.
+If you are seeing any firmware calls before "Save & Reboot", or if the UI is not behaving as described, there may be a bug in the event handling or a stray call to saveSensorConfig().
+
+If you want to further improve or debug:
+
+Make sure no other code is calling saveSensorConfig() except the "Save & Reboot" button.
+Confirm that the pin dropdowns are always populated from /available-pins and not from stale or hardcoded data.
 
 This document is the authoritative improvement plan for linking the sensor config UI, dataflow display, and firmware/terminal logic. All future work should reference and update this plan as features are implemented or changed.

@@ -6,6 +6,8 @@
     <title>Modbus TCP IO Module Configuration</title>
     <link rel="stylesheet" href="styles.css">
     <link rel="icon" href="favicon.ico" type="image/x-icon">
+    <!-- Add Chart.js library -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
     <div class="container">
@@ -16,22 +18,6 @@
                     <div class="device-info-item">
                         <span class="device-type" id="device-type">Loading...</span>
                         <span class="firmware-version" id="firmware-version">Loading...</span>
-                    </div>
-                    <div class="status-item">
-                        <span class="status-indicator" id="modbus-status"></span>
-                        <span id="modbus-status-text">Loading...</span>
-                    </div>
-                </div>
-            </div>
-            
-            <div class="device-details">
-                <div class="device-detail-column">
-                    <div class="device-detail">
-                        <div class="device-detail-label">IP Address</div>
-                        <div class="device-detail-value" id="current-ip">Loading...</div>
-                    </div>
-                    <div class="device-detail">
-                        <div class="device-detail-label">Hostname</div>
                         <div class="device-detail-value" id="current-hostname">Loading...</div>
                     </div>
                 </div>
@@ -381,13 +367,6 @@
                                     <option value="115200">115200</option>
                                 </select>
                             </div>
-                            <div class="form-group">
-                                <label for="sensor-uart-pins">UART Pins</label>
-                                <select id="sensor-uart-pins">
-                                    <option value="0,1">UART0 (TX:0, RX:1)</option>
-                                    <option value="4,5">UART1 (TX:4, RX:5)</option>
-                                </select>
-                            </div>
                         </div>
                     </div>
                     
@@ -447,12 +426,6 @@
                                     <option value="both">Both Edges</option>
                                 </select>
                             </div>
-                        </div>
-                    </div>
-                    
-                    <!-- One-Wire Configuration -->
-                    <div id="onewire-config" class="protocol-config" style="display: none;">
-                        <div class="form-row">
                             <div class="form-group">
                                 <label for="sensor-onewire-pin">One-Wire Pin</label>
                                 <select id="sensor-onewire-pin" required>
@@ -749,7 +722,6 @@
     </div>
     
     <script src="script.js"></script>
-    <!--
     <script>
         // Embedded test script to bypass file serving issues
         console.log("Embedded script loaded!");
@@ -887,6 +859,5 @@
             console.log("saveSensor override complete");
         });
     </script>
-    -->
 </body>
 </html>

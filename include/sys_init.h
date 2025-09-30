@@ -154,6 +154,52 @@ void resetLatches();
 void initializeEzoSensors();
 void handleEzoSensors();
 
+// File serving helper for main.cpp
+void serveFileFromFS(WiFiClient& client, const String& filename, const String& contentType) {
+    Serial.print("[serveFileFromFS] Requested filename: ");
+    Serial.println(filename);
+    Serial.print("[serveFileFromFS] Content-Type: ");
+    Serial.println(contentType);
+    if (!LittleFS.begin()) {
+        Serial.println("[serveFileFromFS] LittleFS mount failed");
+        client.println("HTTP/1.1 500 Internal Server Error");
+        client.println("Content-Type: text/plain");
+        client.println("Connection: close");
+        client.println();
+        client.println("Filesystem mount failed");
+        return;
+    }
+    String fname = filename;
+    if (!fname.startsWith("/")) fname = "/" + fname;
+    Serial.print("[serveFileFromFS] Opening file: ");
+    Serial.println(fname);
+    File file = LittleFS.open(fname, "r");
+    if (!file) {
+        Serial.print("[serveFileFromFS] File not found: ");
+        Serial.println(fname);
+        client.println("HTTP/1.1 404 Not Found");
+        client.println("Content-Type: text/plain");
+        client.println("Connection: close");
+        client.println();
+        client.println("404 Not Found");
+        return;
+    } else {
+        Serial.print("[serveFileFromFS] File opened successfully: ");
+        Serial.println(fname);
+    }
+    client.println("HTTP/1.1 200 OK");
+    client.print("Content-Type: ");
+    client.println(contentType);
+    client.println("Connection: close");
+    client.print("Content-Length: ");
+    client.println(file.size());
+    client.println();
+    while (file.available()) {
+        client.write(file.read());
+    }
+    file.close();
+}
+
 extern Config config;
 extern IOStatus ioStatus;
 extern SensorConfig configuredSensors[MAX_SENSORS];
