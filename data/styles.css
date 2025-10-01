@@ -2172,3 +2172,46 @@ button:hover {
     margin: 0 2px;
     font-weight: bold;
 }
+
+/* Data Parsing Configuration Styles */
+.parsing-config {
+    background: #f8f9fa;
+    border: 1px solid #e9ecef;
+    border-radius: 6px;
+    padding: 15px;
+    margin-top: 10px;
+}
+
+.parsing-config .form-row {
+    margin-bottom: 10px;
+}
+
+.parsing-config .form-help {
+    font-size: 0.85em;
+    color: #6c757d;
+    margin-top: 5px;
+}
+
+.parsing-config textarea {
+    resize: vertical;
+    min-height: 60px;
+    font-family: 'Courier New', monospace;
+}
+
+.parsing-config input[type="text"],
+.parsing-config input[type="number"],
+.parsing-config textarea {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    font-size: 14px;
+}
+
+.parsing-config input[type="text"]:focus,
+.parsing-config input[type="number"]:focus,
+.parsing-config textarea:focus {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 2px rgba(33, 150, 243, 0.2);
+}

@@ -96,6 +96,9 @@ struct SensorConfig {
     int analogPin;
     int oneWirePin;
     int digitalPin;
+    // Data parsing configuration
+    char parsingMethod[16];   // raw, custom_bits, bit_field, status_register, json_path, csv_column
+    char parsingConfig[128];  // JSON string for parsing configuration
     // EZO sensor state tracking
     bool cmdPending;
     unsigned long lastCmdSent;

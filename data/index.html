@@ -476,6 +476,80 @@
                     </label>
                 </div>
                 
+                <div class="form-section" id="data-parsing-section" style="display: none;">
+                    <h4>Data Parsing Configuration</h4>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="sensor-data-parsing">Parsing Method</label>
+                            <select id="sensor-data-parsing">
+                                <option value="raw">Raw Value (no parsing)</option>
+                                <option value="custom_bits">Custom Bit Extraction</option>
+                                <option value="bit_field">Bit Field (range)</option>
+                                <option value="status_register">Status Register</option>
+                                <option value="json_path">JSON Path</option>
+                                <option value="csv_column">CSV Column</option>
+                            </select>
+                            <small class="form-help">How to extract data from sensor response</small>
+                        </div>
+                    </div>
+                    
+                    <div id="custom-bits-config" class="parsing-config" style="display: none;">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="sensor-bit-positions">Bit Positions</label>
+                                <input type="text" id="sensor-bit-positions" placeholder="0,1,7 or 0-3,7">
+                                <small class="form-help">Comma-separated bit numbers or ranges (e.g., "0,1,7" or "0-3,7")</small>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div id="bit-field-config" class="parsing-config" style="display: none;">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="sensor-bit-start">Start Bit</label>
+                                <input type="number" id="sensor-bit-start" min="0" max="31" placeholder="0">
+                            </div>
+                            <div class="form-group">
+                                <label for="sensor-bit-length">Bit Length</label>
+                                <input type="number" id="sensor-bit-length" min="1" max="32" placeholder="8">
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div id="status-register-config" class="parsing-config" style="display: none;">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="sensor-status-bits">Status Bit Mapping</label>
+                                <textarea id="sensor-status-bits" rows="3" placeholder="bit0: temperature_ok&#10;bit1: humidity_ok&#10;bit7: error_flag"></textarea>
+                                <small class="form-help">One mapping per line: bit0: description</small>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div id="json-path-config" class="parsing-config" style="display: none;">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="sensor-json-path">JSON Path</label>
+                                <input type="text" id="sensor-json-path" placeholder="temperature.value or sensors[0].temp">
+                                <small class="form-help">Path to extract value from JSON response</small>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div id="csv-column-config" class="parsing-config" style="display: none;">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="sensor-csv-column">Column Number</label>
+                                <input type="number" id="sensor-csv-column" min="0" placeholder="0">
+                            </div>
+                            <div class="form-group">
+                                <label for="sensor-csv-delimiter">Delimiter</label>
+                                <input type="text" id="sensor-csv-delimiter" placeholder="," maxlength="1" value=",">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
                 <div class="form-section">
                     <h4>Calibration Settings</h4>
                     <div class="sensor-calibration-method-selector">

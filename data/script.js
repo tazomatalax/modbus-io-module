@@ -1,3 +1,99 @@
+// Simple toast notification function
+window.showToast = function showToast(message, type = 'info', persistent = false, duration = 3000) {
+    let toastContainer = document.getElementById('toast-container');
+    if (!toastContainer) {
+        toastContainer = document.createElement('div');
+        toastContainer.id = 'toast-container';
+        document.body.appendChild(toastContainer);
+    }
+    
+    let toast = document.createElement('div');
+    toast.className = 'toast ' + (type || 'info');
+    toast.textContent = message;
+    
+    if (!persistent) {
+        toast.onclick = () => toast.remove();
+        setTimeout(() => { if (toast.parentNode) toast.remove(); }, duration);
+    }
+    
+    toastContainer.appendChild(toast);
+    setTimeout(() => { toast.classList.add('show'); }, 10);
+    
+    return toast; // Return toast element for manual removal
+};
+
+// Pin definitions for W5500 Pico (update as needed)
+const ALL_PINS = {
+    'I2C': [{ label: 'SDA: GP4, SCL: GP5', pins: [4, 5] }],
+    'UART': [
+        { label: 'TX: GP0, RX: GP1', pins: [0, 1] },
+        { label: 'TX: GP8, RX: GP9', pins: [8, 9] }
+    ],
+    'Analog Voltage': [
+        { label: 'ADC0: GP26', pins: [26] },
+        { label: 'ADC1: GP27', pins: [27] },
+        { label: 'ADC2: GP28', pins: [28] }
+    ],
+    'One-Wire': [
+        { label: 'GP2', pins: [2] },
+        { label: 'GP3', pins: [3] },
+        { label: 'GP22', pins: [22] }
+    ],
+    'Digital Counter': [
+        { label: 'GP6', pins: [6] },
+        { label: 'GP7', pins: [7] },
+        { label: 'GP10', pins: [10] },
+        { label: 'GP11', pins: [11] }
+    ]
+};
+
+// Data parsing configurations for different sensor protocols
+const DATA_PARSING_OPTIONS = {
+    'I2C': {
+        methods: ['raw_bytes', 'int16_be', 'int16_le', 'float32_be', 'float32_le', 'custom_bits'],
+        description: 'How to interpret I2C response data'
+    },
+    'UART': {
+        methods: ['ascii_string', 'binary_data', 'modbus_rtu', 'custom_protocol'],
+        description: 'How to parse UART/RS485 data packets'
+    },
+    'One-Wire': {
+        methods: ['temperature_c', 'temperature_f', 'raw_data'],
+        description: 'How to interpret One-Wire sensor data'
+    },
+    'Digital Counter': {
+        methods: ['bit_field', 'counter_value', 'status_register'],
+        description: 'How to extract data from digital signals'
+    }
+};
+
+// Helper to get used pins (except for bus protocols)
+function getUsedPins(protocol) {
+    let used = [];
+    window.sensorConfigData.forEach(sensor => {
+        if (!sensor.enabled) return;
+        
+        // For bus protocols, don't exclude shared pins
+        if (protocol === 'I2C' && sensor.protocol === 'I2C') {
+            // I2C can share pins, so don't mark as used for other I2C sensors
+            return;
+        }
+        if (protocol === 'One-Wire' && sensor.protocol === 'One-Wire') {
+            // One-Wire can share pins, so don't mark as used for other One-Wire sensors  
+            return;
+        }
+        
+        // Collect all used pins from this sensor
+        if (sensor.sdaPin !== undefined && sensor.sdaPin >= 0) used.push(sensor.sdaPin);
+        if (sensor.sclPin !== undefined && sensor.sclPin >= 0) used.push(sensor.sclPin);
+        if (sensor.uartTxPin !== undefined && sensor.uartTxPin >= 0) used.push(sensor.uartTxPin);
+        if (sensor.uartRxPin !== undefined && sensor.uartRxPin >= 0) used.push(sensor.uartRxPin);
+        if (sensor.analogPin !== undefined && sensor.analogPin >= 0) used.push(sensor.analogPin);
+        if (sensor.oneWirePin !== undefined && sensor.oneWirePin >= 0) used.push(sensor.oneWirePin);
+        if (sensor.digitalPin !== undefined && sensor.digitalPin >= 0) used.push(sensor.digitalPin);
+    });
+    return used;
+}
 // Global variables for configuration state
 let ioConfigState = {
     di_pullup: [false, false, false, false, false, false, false, false],
@@ -9,6 +105,8 @@ let ioConfigState = {
 
 
 // Global variables for sensor management
+let currentIOStatus = null;
+
 // Function to update the sensor table body
 window.updateSensorTableBody = function updateSensorTableBody() {
     const tableBody = document.getElementById('sensor-table-body');
@@ -100,6 +198,9 @@ window.showAddSensorModal = function showAddSensorModal() {
     // Setup sensor type change listener
     document.getElementById('sensor-type').addEventListener('change', updateSensorFormFields);
     
+    // Setup data parsing change listener
+    document.getElementById('sensor-data-parsing').addEventListener('change', updateDataParsingFields);
+    
     // Initialize form fields visibility
     updateSensorFormFields();
 
@@ -161,72 +262,65 @@ window.updateSensorProtocolFields = function updateSensorProtocolFields() {
 };
 
 // Load available pins for the selected protocol
+// Load available pins for the selected protocol
 window.loadAvailablePins = function loadAvailablePins(protocol) {
-    fetch(`/available-pins?protocol=${encodeURIComponent(protocol)}`)
-        .then(response => response.json())
-        .then(data => {
-            if (protocol === 'I2C') {
-                const pinsSelect = document.getElementById('sensor-i2c-pins');
-                pinsSelect.innerHTML = '<option value="">Select I2C pins...</option>';
-                // Only show valid I2C pair GP4/GP5
-                const option = document.createElement('option');
-                option.value = '4,5';
-                option.textContent = 'SDA: GP4, SCL: GP5';
-                pinsSelect.appendChild(option);
-            } else if (protocol === 'UART') {
-                const pinsSelect = document.getElementById('sensor-uart-pins');
-                pinsSelect.innerHTML = '<option value="">Select UART pins...</option>';
-                
-                if (data.pinPairs) {
-                    data.pinPairs.forEach(pair => {
-                        const option = document.createElement('option');
-                        option.value = `${pair.tx},${pair.rx}`;
-                        option.textContent = pair.label;
-                        pinsSelect.appendChild(option);
-                    });
-                }
-            } else if (protocol === 'Analog Voltage') {
-                const pinsSelect = document.getElementById('sensor-analog-pin');
-                pinsSelect.innerHTML = '<option value="">Select analog pin...</option>';
-                
-                if (data.pins) {
-                    data.pins.forEach(pin => {
-                        const option = document.createElement('option');
-                        option.value = pin.pin;
-                        option.textContent = pin.label;
-                        pinsSelect.appendChild(option);
-                    });
-                }
-            } else if (protocol === 'One-Wire') {
-                const pinsSelect = document.getElementById('sensor-onewire-pin');
-                pinsSelect.innerHTML = '<option value="">Select One-Wire pin...</option>';
-                
-                if (data.pins) {
-                    data.pins.forEach(pin => {
-                        const option = document.createElement('option');
-                        option.value = pin.pin;
-                        option.textContent = pin.label;
-                        pinsSelect.appendChild(option);
-                    });
-                }
-            } else if (protocol === 'Digital Counter') {
-                const pinsSelect = document.getElementById('sensor-digital-pin');
-                pinsSelect.innerHTML = '<option value="">Select digital pin...</option>';
-                
-                if (data.pins) {
-                    data.pins.forEach(pin => {
-                        const option = document.createElement('option');
-                        option.value = pin.pin;
-                        option.textContent = pin.label;
-                        pinsSelect.appendChild(option);
-                    });
-                }
-            }
-        })
-        .catch(error => {
-            console.error('Error loading available pins:', error);
-            showToast('Error loading available pins', 'error');
+    // Use static pin map and current sensor config
+    let available = [];
+    let used = getUsedPins(protocol);
+    if (protocol === 'I2C' || protocol === 'One-Wire') {
+        // Bus protocols: always show all bus pins
+        available = ALL_PINS[protocol];
+    } else {
+        // Remove used pins
+        available = ALL_PINS[protocol].filter(pair => !pair.pins.some(pin => used.includes(pin)));
+    }
+
+    if (protocol === 'I2C') {
+        const pinsSelect = document.getElementById('sensor-i2c-pins');
+        pinsSelect.innerHTML = '<option value="">Select I2C pins...</option>';
+        available.forEach(pair => {
+            const option = document.createElement('option');
+            option.value = pair.pins.join(',');
+            option.textContent = pair.label;
+            pinsSelect.appendChild(option);
         });
+    } else if (protocol === 'UART') {
+        const pinsSelect = document.getElementById('sensor-uart-pins');
+        pinsSelect.innerHTML = '<option value="">Select UART pins...</option>';
+        available.forEach(pair => {
+            const option = document.createElement('option');
+            option.value = pair.pins.join(',');
+            option.textContent = pair.label;
+            pinsSelect.appendChild(option);
+        });
+    } else if (protocol === 'Analog Voltage') {
+        const pinsSelect = document.getElementById('sensor-analog-pin');
+        pinsSelect.innerHTML = '<option value="">Select analog pin...</option>';
+        available.forEach(pair => {
+            const option = document.createElement('option');
+            option.value = pair.pins[0];
+            option.textContent = pair.label;
+            pinsSelect.appendChild(option);
+        });
+    } else if (protocol === 'One-Wire') {
+        const pinsSelect = document.getElementById('sensor-onewire-pin');
+        pinsSelect.innerHTML = '<option value="">Select One-Wire pin...</option>';
+        available.forEach(pair => {
+            const option = document.createElement('option');
+            option.value = pair.pins[0];
+            option.textContent = pair.label;
+            pinsSelect.appendChild(option);
+        });
+    } else if (protocol === 'Digital Counter') {
+        const pinsSelect = document.getElementById('sensor-digital-pin');
+        pinsSelect.innerHTML = '<option value="">Select digital pin...</option>';
+        available.forEach(pair => {
+            const option = document.createElement('option');
+            option.value = pair.pins[0];
+            option.textContent = pair.label;
+            pinsSelect.appendChild(option);
+        });
+    }
 };
 
 // Update sensor type options based on selected protocol
@@ -377,11 +471,43 @@ window.updateSensorFormFields = function updateSensorFormFields() {
         i2cAddressField.required = false;
     }
     
+    // Show/hide data parsing section based on protocol
+    const dataParsingSection = document.getElementById('data-parsing-section');
+    if (protocol === 'I2C' || protocol === 'UART' || protocol === 'Digital Counter') {
+        dataParsingSection.style.display = 'block';
+    } else {
+        dataParsingSection.style.display = 'none';
+    }
+    
     // Set default modbus register if not already set
     const modbusRegField = document.getElementById('sensor-modbus-register');
     if (!modbusRegField.value) {
         const nextRegister = getNextAvailableRegister();
         modbusRegField.value = nextRegister;
+    }
+}
+
+// Handle data parsing method selection
+window.updateDataParsingFields = function updateDataParsingFields() {
+    const parsingMethod = document.getElementById('sensor-data-parsing').value;
+    
+    // Hide all parsing config sections
+    const configSections = document.querySelectorAll('.parsing-config');
+    configSections.forEach(section => {
+        section.style.display = 'none';
+    });
+    
+    // Show relevant config section
+    const configMap = {
+        'custom_bits': 'custom-bits-config',
+        'bit_field': 'bit-field-config', 
+        'status_register': 'status-register-config',
+        'json_path': 'json-path-config',
+        'csv_column': 'csv-column-config'
+    };
+    
+    if (configMap[parsingMethod]) {
+        document.getElementById(configMap[parsingMethod]).style.display = 'block';
     }
 }
 
@@ -465,6 +591,55 @@ window.editSensor = function editSensor(index) {
         document.getElementById('sensor-calibration-polynomial').value = '';
         document.getElementById('sensor-calibration-expression').value = '';
         showSensorCalibrationMethod('linear');
+    }
+
+    // Load data parsing configuration
+    if (sensor.dataParsing) {
+        document.getElementById('sensor-data-parsing').value = sensor.dataParsing.method || 'raw';
+        updateDataParsingFields();
+        
+        // Load specific parsing configuration
+        switch (sensor.dataParsing.method) {
+            case 'custom_bits':
+                if (sensor.dataParsing.bitPositions) {
+                    document.getElementById('sensor-bit-positions').value = sensor.dataParsing.bitPositions;
+                }
+                break;
+                
+            case 'bit_field':
+                if (sensor.dataParsing.bitStart !== undefined) {
+                    document.getElementById('sensor-bit-start').value = sensor.dataParsing.bitStart;
+                }
+                if (sensor.dataParsing.bitLength !== undefined) {
+                    document.getElementById('sensor-bit-length').value = sensor.dataParsing.bitLength;
+                }
+                break;
+                
+            case 'status_register':
+                if (sensor.dataParsing.statusBits) {
+                    document.getElementById('sensor-status-bits').value = sensor.dataParsing.statusBits;
+                }
+                break;
+                
+            case 'json_path':
+                if (sensor.dataParsing.jsonPath) {
+                    document.getElementById('sensor-json-path').value = sensor.dataParsing.jsonPath;
+                }
+                break;
+                
+            case 'csv_column':
+                if (sensor.dataParsing.csvColumn !== undefined) {
+                    document.getElementById('sensor-csv-column').value = sensor.dataParsing.csvColumn;
+                }
+                if (sensor.dataParsing.csvDelimiter) {
+                    document.getElementById('sensor-csv-delimiter').value = sensor.dataParsing.csvDelimiter;
+                }
+                break;
+        }
+    } else {
+        // Default to raw parsing
+        document.getElementById('sensor-data-parsing').value = 'raw';
+        updateDataParsingFields();
     }
 
     document.getElementById('sensor-modal-overlay').classList.add('show');
@@ -731,8 +906,8 @@ window.saveSensor = function saveSensor() {
             const uartPinPair = document.getElementById('sensor-uart-pins').value;
             if (uartPinPair) {
                 const [txPin, rxPin] = uartPinPair.split(',').map(p => parseInt(p));
-                pinAssignments.txPin = txPin;
-                pinAssignments.rxPin = rxPin;
+                pinAssignments.uartTxPin = txPin;
+                pinAssignments.uartRxPin = rxPin;
             }
             break;
             
@@ -746,7 +921,7 @@ window.saveSensor = function saveSensor() {
         case 'One-Wire':
             const oneWirePin = document.getElementById('sensor-onewire-pin').value;
             if (oneWirePin) {
-                pinAssignments.digitalPin = parseInt(oneWirePin);
+                pinAssignments.oneWirePin = parseInt(oneWirePin);
             }
             break;
             
@@ -756,6 +931,58 @@ window.saveSensor = function saveSensor() {
                 pinAssignments.digitalPin = parseInt(digitalPin);
             }
             break;
+    }
+
+    // Collect data parsing configuration
+    let dataParsing = null;
+    const dataParsingSection = document.getElementById('data-parsing-section');
+    if (dataParsingSection.style.display !== 'none') {
+        const parsingMethod = document.getElementById('sensor-data-parsing').value;
+        
+        if (parsingMethod !== 'raw') {
+            dataParsing = { method: parsingMethod };
+            
+            switch (parsingMethod) {
+                case 'custom_bits':
+                    const bitPositions = document.getElementById('sensor-bit-positions').value.trim();
+                    if (bitPositions) {
+                        dataParsing.bitPositions = bitPositions;
+                    }
+                    break;
+                    
+                case 'bit_field':
+                    const bitStart = document.getElementById('sensor-bit-start').value;
+                    const bitLength = document.getElementById('sensor-bit-length').value;
+                    if (bitStart !== '' && bitLength !== '') {
+                        dataParsing.bitStart = parseInt(bitStart);
+                        dataParsing.bitLength = parseInt(bitLength);
+                    }
+                    break;
+                    
+                case 'status_register':
+                    const statusBits = document.getElementById('sensor-status-bits').value.trim();
+                    if (statusBits) {
+                        dataParsing.statusBits = statusBits;
+                    }
+                    break;
+                    
+                case 'json_path':
+                    const jsonPath = document.getElementById('sensor-json-path').value.trim();
+                    if (jsonPath) {
+                        dataParsing.jsonPath = jsonPath;
+                    }
+                    break;
+                    
+                case 'csv_column':
+                    const csvColumn = document.getElementById('sensor-csv-column').value;
+                    const csvDelimiter = document.getElementById('sensor-csv-delimiter').value;
+                    if (csvColumn !== '') {
+                        dataParsing.csvColumn = parseInt(csvColumn);
+                        dataParsing.csvDelimiter = csvDelimiter || ',';
+                    }
+                    break;
+            }
+        }
     }
 
     const sensor = {
@@ -768,6 +995,11 @@ window.saveSensor = function saveSensor() {
         calibration: calibration,
         ...pinAssignments
     };
+    
+    // Add data parsing config if it exists
+    if (dataParsing) {
+        sensor.dataParsing = dataParsing;
+    }
     
     if (editingSensorIndex === -1) {
         // Adding new sensor
@@ -787,7 +1019,7 @@ window.saveSensor = function saveSensor() {
     }
     
     console.log('About to render table...');
-    renderSensorTable();
+    updateSensorTableBody();
     console.log('Table rendered, hiding modal...');
     hideSensorModal();
 }
@@ -1040,7 +1272,7 @@ window.saveCalibration = function saveCalibration() {
         sensorConfigData[editingSensorIndex].calibration = calibration;
         
         // Update UI
-        renderSensorTable();
+        updateSensorTableBody();
         hideCalibrationModal();
         
         showToast(`Calibration updated successfully (${selectedMethod})`, 'success');
@@ -1076,10 +1308,48 @@ window.deleteSensor = function deleteSensor(index) {
     const sensor = sensorConfigData[index];
     if (confirm(`Are you sure you want to delete sensor "${sensor.name}"?`)) {
         sensorConfigData.splice(index, 1);
-        renderSensorTable();
+        updateSensorTableBody();
         showToast('Sensor deleted successfully', 'success');
     }
 }
+
+// Update IO Status data and refresh displays
+window.updateIOStatus = function updateIOStatus() {
+    fetch('/iostatus')
+        .then(response => response.json())
+        .then(data => {
+            currentIOStatus = data;
+            // Update any UI elements that depend on IO status
+            console.log('IO Status updated:', data);
+        })
+        .catch(error => {
+            console.error('Error fetching IO status:', error);
+            showToast('Failed to fetch IO status', 'error');
+        });
+};
+
+// Load sensor configuration from device
+window.loadSensorConfig = function loadSensorConfig() {
+    fetch('/sensors/config')
+        .then(response => response.json())
+        .then(data => {
+            if (data.sensors && Array.isArray(data.sensors)) {
+                window.sensorConfigData = data.sensors;
+                updateSensorTableBody();
+                console.log('Sensor configuration loaded:', data.sensors);
+            } else {
+                window.sensorConfigData = [];
+                updateSensorTableBody();
+                console.log('No sensor configuration found, initialized empty array');
+            }
+        })
+        .catch(error => {
+            console.error('Error loading sensor configuration:', error);
+            window.sensorConfigData = [];
+            updateSensorTableBody();
+            showToast('Failed to load sensor configuration', 'error');
+        });
+};
 
 // Save sensor configuration to the device
 window.saveSensorConfig = function saveSensorConfig() {
@@ -1571,6 +1841,9 @@ General:
 
 // Initialize terminal on page load
 document.addEventListener('DOMContentLoaded', function() {
+    // Load initial sensor configuration
+    loadSensorConfig();
+    
     updateTerminalInterface();
     
     // Add event listeners for byte extraction controls

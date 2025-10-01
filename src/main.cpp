@@ -896,7 +896,7 @@ void sendFile(WiFiClient& client, String filename, String contentType) {
 }
 
 void sendJSONIOStatus(WiFiClient& client) {
-    StaticJsonDocument<1024> doc;
+    StaticJsonDocument<2048> doc;
     
     JsonArray dInArray = doc.createNestedArray("dIn");
     for (int i = 0; i < 8; i++) {
@@ -916,6 +916,33 @@ void sendJSONIOStatus(WiFiClient& client) {
     JsonArray dInLatchedArray = doc.createNestedArray("dInLatched");
     for (int i = 0; i < 8; i++) {
         dInLatchedArray.add(ioStatus.dInLatched[i]);
+    }
+    
+    // Add sensor data for sensor dataflow
+    JsonArray sensorsArray = doc.createNestedArray("configured_sensors");
+    for (int i = 0; i < numConfiguredSensors; i++) {
+        if (configuredSensors[i].enabled) {
+            JsonObject sensor = sensorsArray.createNestedObject();
+            sensor["name"] = configuredSensors[i].name;
+            sensor["type"] = configuredSensors[i].type;
+            sensor["i2c_address"] = configuredSensors[i].i2cAddress;
+            sensor["modbus_register"] = configuredSensors[i].modbusRegister;
+            
+            // Raw sensor output (placeholder - would be actual sensor reading)
+            sensor["raw_value"] = 0; // TODO: Implement actual sensor reading
+            sensor["raw_i2c_data"] = ""; // Raw I2C data string for parsing
+            
+            // Calibrated output (applying calibration equation)
+            float calibrated = 0; // raw_value * slope + offset
+            sensor["calibrated_value"] = calibrated;
+            
+            // Modbus register value (what gets sent to Modbus)
+            sensor["modbus_value"] = (int)(calibrated * 100); // Example scaling
+            
+            // Include calibration info for dataflow display
+            sensor["calibration_offset"] = configuredSensors[i].calibrationOffset;
+            sensor["calibration_slope"] = configuredSensors[i].calibrationSlope;
+        }
     }
     
     String jsonBuffer;
@@ -956,6 +983,162 @@ void sendJSONIOConfig(WiFiClient& client) {
     sendJSON(client, response);
 }
 
+// Data parsing function - converts raw sensor data based on parsing configuration
+float parseSensorData(const char* rawData, const SensorConfig& sensor) {
+    if (strlen(sensor.parsingMethod) == 0 || strcmp(sensor.parsingMethod, "raw") == 0) {
+        // Raw parsing - convert string to float
+        return atof(rawData);
+    }
+    
+    // Parse the parsing configuration
+    StaticJsonDocument<256> parsingDoc;
+    DeserializationError error = deserializeJson(parsingDoc, sensor.parsingConfig);
+    if (error) {
+        return atof(rawData); // Fallback to raw parsing
+    }
+    
+    JsonObject config = parsingDoc.as<JsonObject>();
+    String method = sensor.parsingMethod;
+    
+    if (method == "custom_bits") {
+        // Extract specific bits from integer data
+        uint32_t rawValue = (uint32_t)atol(rawData);
+        String bitPositions = config["bitPositions"] | "";
+        uint32_t result = 0;
+        
+        // Parse bit positions (e.g., "0,1,7" or "0-3,7")
+        int bitIndex = 0;
+        String positions = bitPositions;
+        while (positions.length() > 0) {
+            int commaIndex = positions.indexOf(',');
+            String part = (commaIndex >= 0) ? positions.substring(0, commaIndex) : positions;
+            
+            if (part.indexOf('-') >= 0) {
+                // Range like "0-3"
+                int dashIndex = part.indexOf('-');
+                int startBit = part.substring(0, dashIndex).toInt();
+                int endBit = part.substring(dashIndex + 1).toInt();
+                for (int bit = startBit; bit <= endBit; bit++) {
+                    if ((rawValue >> bit) & 1) {
+                        result |= (1 << bitIndex);
+                    }
+                    bitIndex++;
+                }
+            } else {
+                // Single bit
+                int bit = part.toInt();
+                if ((rawValue >> bit) & 1) {
+                    result |= (1 << bitIndex);
+                }
+                bitIndex++;
+            }
+            
+            if (commaIndex >= 0) {
+                positions = positions.substring(commaIndex + 1);
+            } else {
+                break;
+            }
+        }
+        return (float)result;
+        
+    } else if (method == "bit_field") {
+        // Extract a range of bits
+        uint32_t rawValue = (uint32_t)atol(rawData);
+        int startBit = config["bitStart"] | 0;
+        int bitLength = config["bitLength"] | 8;
+        
+        uint32_t mask = (1 << bitLength) - 1;
+        uint32_t result = (rawValue >> startBit) & mask;
+        return (float)result;
+        
+    } else if (method == "status_register") {
+        // Return status as bit pattern
+        uint32_t rawValue = (uint32_t)atol(rawData);
+        return (float)rawValue;
+        
+    } else if (method == "json_path") {
+        // Extract value from JSON data
+        StaticJsonDocument<512> jsonDoc;
+        DeserializationError jsonError = deserializeJson(jsonDoc, rawData);
+        if (jsonError) {
+            return 0.0; // Could not parse JSON
+        }
+        
+        String jsonPath = config["jsonPath"] | "";
+        // Simple path parsing (supports "key" or "obj.key" or "array[0].key")
+        JsonVariant value = jsonDoc;
+        
+        // Split path by dots and process each part
+        int lastDot = 0;
+        while (lastDot < jsonPath.length()) {
+            int nextDot = jsonPath.indexOf('.', lastDot);
+            if (nextDot == -1) nextDot = jsonPath.length();
+            
+            String pathPart = jsonPath.substring(lastDot, nextDot);
+            
+            // Check for array indexing
+            int bracketStart = pathPart.indexOf('[');
+            if (bracketStart >= 0) {
+                String arrayName = pathPart.substring(0, bracketStart);
+                int bracketEnd = pathPart.indexOf(']', bracketStart);
+                int arrayIndex = pathPart.substring(bracketStart + 1, bracketEnd).toInt();
+                
+                if (value.containsKey(arrayName) && value[arrayName].is<JsonArray>()) {
+                    JsonArray array = value[arrayName];
+                    if (arrayIndex < array.size()) {
+                        value = array[arrayIndex];
+                    } else {
+                        return 0.0; // Array index out of bounds
+                    }
+                } else {
+                    return 0.0; // Array not found
+                }
+            } else {
+                if (value.containsKey(pathPart)) {
+                    value = value[pathPart];
+                } else {
+                    return 0.0; // Key not found
+                }
+            }
+            
+            lastDot = nextDot + 1;
+        }
+        
+        return value.as<float>();
+        
+    } else if (method == "csv_column") {
+        // Extract specific column from CSV data
+        int columnIndex = config["csvColumn"] | 0;
+        String delimiter = config["csvDelimiter"] | ",";
+        
+        String data = String(rawData);
+        int currentColumn = 0;
+        int startIndex = 0;
+        
+        while (currentColumn < columnIndex && startIndex < data.length()) {
+            int delimiterIndex = data.indexOf(delimiter, startIndex);
+            if (delimiterIndex == -1) {
+                return 0.0; // Column not found
+            }
+            startIndex = delimiterIndex + delimiter.length();
+            currentColumn++;
+        }
+        
+        if (currentColumn == columnIndex) {
+            int endIndex = data.indexOf(delimiter, startIndex);
+            if (endIndex == -1) endIndex = data.length();
+            
+            String columnValue = data.substring(startIndex, endIndex);
+            return atof(columnValue.c_str());
+        }
+        
+        return 0.0; // Column not found
+    }
+    
+    // Unknown method, fallback to raw parsing
+    return atof(rawData);
+}
+
 void sendJSONSensorConfig(WiFiClient& client) {
     StaticJsonDocument<2048> doc;
     JsonArray sensorsArray = doc.createNestedArray("sensors");
@@ -965,8 +1148,45 @@ void sendJSONSensorConfig(WiFiClient& client) {
         sensor["enabled"] = configuredSensors[i].enabled;
         sensor["name"] = configuredSensors[i].name;
         sensor["type"] = configuredSensors[i].type;
+        sensor["protocol"] = configuredSensors[i].protocol;
         sensor["i2cAddress"] = configuredSensors[i].i2cAddress;
+        sensor["modbusRegister"] = configuredSensors[i].modbusRegister;
         sensor["response"] = configuredSensors[i].response;
+        
+        // Include pin assignments
+        sensor["sdaPin"] = configuredSensors[i].sdaPin;
+        sensor["sclPin"] = configuredSensors[i].sclPin;
+        sensor["dataPin"] = configuredSensors[i].dataPin;
+        sensor["uartTxPin"] = configuredSensors[i].uartTxPin;
+        sensor["uartRxPin"] = configuredSensors[i].uartRxPin;
+        sensor["analogPin"] = configuredSensors[i].analogPin;
+        sensor["oneWirePin"] = configuredSensors[i].oneWirePin;
+        sensor["digitalPin"] = configuredSensors[i].digitalPin;
+        
+        // Include calibration data
+        if (configuredSensors[i].calibrationOffset != 0.0 || configuredSensors[i].calibrationSlope != 1.0) {
+            JsonObject calibration = sensor.createNestedObject("calibration");
+            calibration["offset"] = configuredSensors[i].calibrationOffset;
+            calibration["scale"] = configuredSensors[i].calibrationSlope;
+        }
+        
+        // Include data parsing configuration
+        if (strlen(configuredSensors[i].parsingMethod) > 0 && strcmp(configuredSensors[i].parsingMethod, "raw") != 0) {
+            JsonObject dataParsing = sensor.createNestedObject("dataParsing");
+            dataParsing["method"] = configuredSensors[i].parsingMethod;
+            
+            // Parse the stored JSON config string
+            if (strlen(configuredSensors[i].parsingConfig) > 0) {
+                StaticJsonDocument<256> parsingDoc;
+                DeserializationError parsingError = deserializeJson(parsingDoc, configuredSensors[i].parsingConfig);
+                if (!parsingError) {
+                    JsonObject parsingObj = parsingDoc.as<JsonObject>();
+                    for (JsonPair kv : parsingObj) {
+                        dataParsing[kv.key()] = kv.value();
+                    }
+                }
+            }
+        }
     }
     
     String response;
@@ -1153,6 +1373,8 @@ void handlePOSTSensorConfig(WiFiClient& client, String body) {
     numConfiguredSensors = 0;
     for (JsonObject sensor : sensorsArray) {
         if (numConfiguredSensors >= MAX_SENSORS) break;
+        
+        // Basic sensor properties
         configuredSensors[numConfiguredSensors].enabled = sensor["enabled"] | false;
         const char* name = sensor["name"] | "";
         strncpy(configuredSensors[numConfiguredSensors].name, name, sizeof(configuredSensors[numConfiguredSensors].name) - 1);
@@ -1160,8 +1382,53 @@ void handlePOSTSensorConfig(WiFiClient& client, String body) {
         const char* type = sensor["type"] | "";
         strncpy(configuredSensors[numConfiguredSensors].type, type, sizeof(configuredSensors[numConfiguredSensors].type) - 1);
         configuredSensors[numConfiguredSensors].type[sizeof(configuredSensors[numConfiguredSensors].type) - 1] = '\0';
+        const char* protocol = sensor["protocol"] | "";
+        strncpy(configuredSensors[numConfiguredSensors].protocol, protocol, sizeof(configuredSensors[numConfiguredSensors].protocol) - 1);
+        configuredSensors[numConfiguredSensors].protocol[sizeof(configuredSensors[numConfiguredSensors].protocol) - 1] = '\0';
         configuredSensors[numConfiguredSensors].i2cAddress = sensor["i2cAddress"] | 0;
         configuredSensors[numConfiguredSensors].modbusRegister = sensor["modbusRegister"] | 0;
+        
+        // Pin assignments - parse from JSON
+        configuredSensors[numConfiguredSensors].sdaPin = sensor["sdaPin"] | -1;
+        configuredSensors[numConfiguredSensors].sclPin = sensor["sclPin"] | -1;
+        configuredSensors[numConfiguredSensors].dataPin = sensor["dataPin"] | -1;
+        configuredSensors[numConfiguredSensors].uartTxPin = sensor["uartTxPin"] | -1;
+        configuredSensors[numConfiguredSensors].uartRxPin = sensor["uartRxPin"] | -1;
+        configuredSensors[numConfiguredSensors].analogPin = sensor["analogPin"] | -1;
+        configuredSensors[numConfiguredSensors].oneWirePin = sensor["oneWirePin"] | -1;
+        configuredSensors[numConfiguredSensors].digitalPin = sensor["digitalPin"] | -1;
+        
+        // Calibration data
+        configuredSensors[numConfiguredSensors].calibrationOffset = sensor["calibrationOffset"] | 0.0;
+        configuredSensors[numConfiguredSensors].calibrationSlope = sensor["calibrationSlope"] | 1.0;
+        
+        // Data parsing configuration
+        if (sensor.containsKey("dataParsing") && sensor["dataParsing"].is<JsonObject>()) {
+            JsonObject dataParsing = sensor["dataParsing"];
+            const char* method = dataParsing["method"] | "raw";
+            strncpy(configuredSensors[numConfiguredSensors].parsingMethod, method, sizeof(configuredSensors[numConfiguredSensors].parsingMethod) - 1);
+            configuredSensors[numConfiguredSensors].parsingMethod[sizeof(configuredSensors[numConfiguredSensors].parsingMethod) - 1] = '\0';
+            
+            // Serialize the parsing config to JSON string for storage
+            StaticJsonDocument<256> parsingDoc;
+            parsingDoc.set(dataParsing);
+            String parsingConfigStr;
+            serializeJson(parsingDoc, parsingConfigStr);
+            strncpy(configuredSensors[numConfiguredSensors].parsingConfig, parsingConfigStr.c_str(), sizeof(configuredSensors[numConfiguredSensors].parsingConfig) - 1);
+            configuredSensors[numConfiguredSensors].parsingConfig[sizeof(configuredSensors[numConfiguredSensors].parsingConfig) - 1] = '\0';
+        } else {
+            // Default to raw parsing
+            strncpy(configuredSensors[numConfiguredSensors].parsingMethod, "raw", sizeof(configuredSensors[numConfiguredSensors].parsingMethod) - 1);
+            configuredSensors[numConfiguredSensors].parsingMethod[sizeof(configuredSensors[numConfiguredSensors].parsingMethod) - 1] = '\0';
+            configuredSensors[numConfiguredSensors].parsingConfig[0] = '\0';
+        }
+        
+        // Initialize EZO state
+        configuredSensors[numConfiguredSensors].cmdPending = false;
+        configuredSensors[numConfiguredSensors].lastCmdSent = 0;
+        configuredSensors[numConfiguredSensors].response[0] = '\0';
+        configuredSensors[numConfiguredSensors].calibrationData[0] = '\0';
+        
         numConfiguredSensors++;
     }
     saveSensorConfig();

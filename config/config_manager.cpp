@@ -116,30 +116,57 @@ void loadSensorConfig() {
             configuredSensors[index].enabled = sensor["enabled"] | false;
             const char* name = sensor["name"] | "";
             strncpy(configuredSensors[index].name, name, sizeof(configuredSensors[index].name) - 1);
-            configuredSensors[index].name[sizeof(configuredSensors[index].name) - 1] = '\0';
+            configuredSensors[index].name[sizeof(configuredSensors[index].name) - 1] = '\\0';
             const char* sensor_type = sensor["sensor_type"] | "";
             strncpy(configuredSensors[index].sensor_type, sensor_type, sizeof(configuredSensors[index].sensor_type) - 1);
-            configuredSensors[index].sensor_type[sizeof(configuredSensors[index].sensor_type) - 1] = '\0';
+            configuredSensors[index].sensor_type[sizeof(configuredSensors[index].sensor_type) - 1] = '\\0';
             const char* formula = sensor["formula"] | "";
             strncpy(configuredSensors[index].formula, formula, sizeof(configuredSensors[index].formula) - 1);
-            configuredSensors[index].formula[sizeof(configuredSensors[index].formula) - 1] = '\0';
+            configuredSensors[index].formula[sizeof(configuredSensors[index].formula) - 1] = '\\0';
             const char* units = sensor["units"] | "";
             strncpy(configuredSensors[index].units, units, sizeof(configuredSensors[index].units) - 1);
-            configuredSensors[index].units[sizeof(configuredSensors[index].units) - 1] = '\0';
+            configuredSensors[index].units[sizeof(configuredSensors[index].units) - 1] = '\\0';
             const char* type = sensor["type"] | "";
             strncpy(configuredSensors[index].type, type, sizeof(configuredSensors[index].type) - 1);
-            configuredSensors[index].type[sizeof(configuredSensors[index].type) - 1] = '\0';
+            configuredSensors[index].type[sizeof(configuredSensors[index].type) - 1] = '\\0';
+            const char* protocol = sensor["protocol"] | "";
+            strncpy(configuredSensors[index].protocol, protocol, sizeof(configuredSensors[index].protocol) - 1);
+            configuredSensors[index].protocol[sizeof(configuredSensors[index].protocol) - 1] = '\\0';
             configuredSensors[index].i2cAddress = sensor["i2cAddress"] | 0;
             configuredSensors[index].modbusRegister = sensor["modbusRegister"] | 0;
             configuredSensors[index].updateInterval = sensor["updateInterval"] | 1000;
             const char* calibrationData = sensor["calibrationData"] | "";
             strncpy(configuredSensors[index].calibrationData, calibrationData, sizeof(configuredSensors[index].calibrationData) - 1);
-            configuredSensors[index].calibrationData[sizeof(configuredSensors[index].calibrationData) - 1] = '\0';
+            configuredSensors[index].calibrationData[sizeof(configuredSensors[index].calibrationData) - 1] = '\\0';
             const char* response = sensor["response"] | "";
             strncpy(configuredSensors[index].response, response, sizeof(configuredSensors[index].response) - 1);
-            configuredSensors[index].response[sizeof(configuredSensors[index].response) - 1] = '\0';
+            configuredSensors[index].response[sizeof(configuredSensors[index].response) - 1] = '\\0';
             configuredSensors[index].cmdPending = sensor["cmdPending"] | false;
             configuredSensors[index].lastCmdSent = sensor["lastCmdSent"] | 0;
+            
+            // Load pin assignments
+            configuredSensors[index].sdaPin = sensor["sdaPin"] | -1;
+            configuredSensors[index].sclPin = sensor["sclPin"] | -1;
+            configuredSensors[index].dataPin = sensor["dataPin"] | -1;
+            configuredSensors[index].uartTxPin = sensor["uartTxPin"] | -1;
+            configuredSensors[index].uartRxPin = sensor["uartRxPin"] | -1;
+            configuredSensors[index].analogPin = sensor["analogPin"] | -1;
+            configuredSensors[index].oneWirePin = sensor["oneWirePin"] | -1;
+            configuredSensors[index].digitalPin = sensor["digitalPin"] | -1;
+            
+            // Load calibration parameters
+            configuredSensors[index].calibrationOffset = sensor["calibrationOffset"] | 0.0;
+            configuredSensors[index].calibrationSlope = sensor["calibrationSlope"] | 1.0;
+            
+            // Load data parsing configuration
+            const char* parsingMethod = sensor["parsingMethod"] | "raw";
+            strncpy(configuredSensors[index].parsingMethod, parsingMethod, sizeof(configuredSensors[index].parsingMethod) - 1);
+            configuredSensors[index].parsingMethod[sizeof(configuredSensors[index].parsingMethod) - 1] = '\0';
+            
+            const char* parsingConfig = sensor["parsingConfig"] | "";
+            strncpy(configuredSensors[index].parsingConfig, parsingConfig, sizeof(configuredSensors[index].parsingConfig) - 1);
+            configuredSensors[index].parsingConfig[sizeof(configuredSensors[index].parsingConfig) - 1] = '\0';
+            
             index++;
         }
         numConfiguredSensors = index;
@@ -157,6 +184,7 @@ void saveSensorConfig() {
         sensor["formula"] = configuredSensors[i].formula;
         sensor["units"] = configuredSensors[i].units;
         sensor["type"] = configuredSensors[i].type;
+        sensor["protocol"] = configuredSensors[i].protocol;
         sensor["i2cAddress"] = configuredSensors[i].i2cAddress;
         sensor["modbusRegister"] = configuredSensors[i].modbusRegister;
         sensor["updateInterval"] = configuredSensors[i].updateInterval;
@@ -164,6 +192,24 @@ void saveSensorConfig() {
         sensor["response"] = configuredSensors[i].response;
         sensor["cmdPending"] = configuredSensors[i].cmdPending;
         sensor["lastCmdSent"] = configuredSensors[i].lastCmdSent;
+        
+        // Save pin assignments
+        sensor["sdaPin"] = configuredSensors[i].sdaPin;
+        sensor["sclPin"] = configuredSensors[i].sclPin;
+        sensor["dataPin"] = configuredSensors[i].dataPin;
+        sensor["uartTxPin"] = configuredSensors[i].uartTxPin;
+        sensor["uartRxPin"] = configuredSensors[i].uartRxPin;
+        sensor["analogPin"] = configuredSensors[i].analogPin;
+        sensor["oneWirePin"] = configuredSensors[i].oneWirePin;
+        sensor["digitalPin"] = configuredSensors[i].digitalPin;
+        
+        // Save calibration parameters
+        sensor["calibrationOffset"] = configuredSensors[i].calibrationOffset;
+        sensor["calibrationSlope"] = configuredSensors[i].calibrationSlope;
+        
+        // Save data parsing configuration
+        sensor["parsingMethod"] = configuredSensors[i].parsingMethod;
+        sensor["parsingConfig"] = configuredSensors[i].parsingConfig;
     }
     File sensorsFile = LittleFS.open(SENSORS_FILE, "w");
     if (sensorsFile) {
