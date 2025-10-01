@@ -194,8 +194,11 @@ void serveFileFromFS(WiFiClient& client, const String& filename, const String& c
     client.print("Content-Length: ");
     client.println(file.size());
     client.println();
-    while (file.available()) {
-        client.write(file.read());
+    const size_t bufSize = 1024;
+    uint8_t buf[bufSize];
+    size_t bytesRead;
+    while ((bytesRead = file.read(buf, bufSize)) > 0) {
+        client.write(buf, bytesRead);
     }
     file.close();
 }
