@@ -11,6 +11,7 @@
 #include <SPI.h>
 #include <Wire.h>
 #include <ArduinoJson.h>
+#include <LittleFS.h>
 #include "../config/formula_parser.h"
 
 
@@ -118,6 +119,14 @@ void setup() {
     Serial.println("Loading config...");
     delay(500);
     loadConfig();
+
+    // Initialize LittleFS for web file serving
+    Serial.println("Initializing filesystem...");
+    if (!LittleFS.begin()) {
+        Serial.println("LittleFS mount failed!");
+    } else {
+        Serial.println("LittleFS mounted successfully");
+    }
 
     Serial.println("Loading sensor configuration...");
     delay(500);

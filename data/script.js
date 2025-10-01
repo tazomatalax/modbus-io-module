@@ -76,6 +76,7 @@ window.updateRegisterSummary = function updateRegisterSummary() {
         }
         availableRegisterElement.textContent = `${nextAvailable}+`;
     }
+};
 
 // Show the add sensor modal (define in global scope)
 window.showAddSensorModal = function showAddSensorModal() {
@@ -157,6 +158,7 @@ window.updateSensorProtocolFields = function updateSensorProtocolFields() {
     
     // Also update sensor type options based on protocol
     updateSensorTypeOptions();
+};
 
 // Load available pins for the selected protocol
 window.loadAvailablePins = function loadAvailablePins(protocol) {
@@ -225,7 +227,7 @@ window.loadAvailablePins = function loadAvailablePins(protocol) {
             console.error('Error loading available pins:', error);
             showToast('Error loading available pins', 'error');
         });
-
+};
 
 // Update sensor type options based on selected protocol
 window.updateSensorTypeOptions = function updateSensorTypeOptions() {
