@@ -303,24 +303,168 @@ void updateSensorReadings() {
                         Serial.printf("I2C write to register failed with error %d\n", error);
                     }
                 } else {
+                    readSuccess = false;
+                    snprintf(configuredSensors[i].rawDataString, sizeof(configuredSensors[i].rawDataString), 
+                             "I2C:NO_RESPONSE");
                     Serial.printf("I2C device at 0x%02X not responding (error %d)\n", 
                                   configuredSensors[i].i2cAddress, error);
                 }
             }
         } else if (protocol == "one-wire") {
-            // Placeholder for One-Wire sensors (DS18B20, etc.)
-            // For now, generate a simulated temperature reading
-            rawValue = 20.0 + (sin(millis() / 10000.0) * 5.0); // Simulated temperature 15-25°C
-            readSuccess = true;
-            snprintf(configuredSensors[i].rawDataString, sizeof(configuredSensors[i].rawDataString), 
-                     "OneWire:%.2f", rawValue);
+            // Real One-Wire sensor handling with automatic commands
+            int owPin = configuredSensors[i].oneWirePin;
+            unsigned long currentTime = millis();
+            
+            // Check if we need to send a command (for auto mode)
+            bool needCommand = false;
+            if (configuredSensors[i].oneWireAutoMode && 
+                configuredSensors[i].oneWireInterval > 0) {
+                
+                unsigned long intervalMs = configuredSensors[i].oneWireInterval * 1000;
+                if (currentTime - configuredSensors[i].lastOneWireCmd >= intervalMs) {
+                    needCommand = true;
+                }
+            }
+            
+            // Send command if needed
+            if (needCommand) {
+                // Parse command (default to 0x44 for temperature conversion)
+                uint8_t cmd = 0x44; // Default Convert T
+                if (strlen(configuredSensors[i].oneWireCommand) > 0) {
+                    cmd = strtol(configuredSensors[i].oneWireCommand, nullptr, 16);
+                }
+                
+                Serial.printf("OneWire GP%d: Sending command 0x%02X (auto mode)\\n", owPin, cmd);
+                
+                // Send reset + command
+                pinMode(owPin, OUTPUT);
+                digitalWrite(owPin, LOW);
+                delayMicroseconds(480);
+                pinMode(owPin, INPUT_PULLUP);
+                delayMicroseconds(70);
+                bool presence = !digitalRead(owPin);
+                delayMicroseconds(410);
+                
+                if (presence) {
+                    Serial.printf("OneWire GP%d: Device presence detected, sending command\\n", owPin);
+                    // Send SKIP ROM (0xCC) + Command
+                    uint8_t commands[] = {0xCC, cmd};
+                    for (int cmdIdx = 0; cmdIdx < 2; cmdIdx++) {
+                        for (int bit = 0; bit < 8; bit++) {
+                            pinMode(owPin, OUTPUT);
+                            digitalWrite(owPin, LOW);
+                            if (commands[cmdIdx] & (1 << bit)) {
+                                delayMicroseconds(6);
+                                pinMode(owPin, INPUT_PULLUP);
+                                delayMicroseconds(64);
+                            } else {
+                                delayMicroseconds(60);
+                                pinMode(owPin, INPUT_PULLUP);
+                                delayMicroseconds(10);
+                            }
+                        }
+                    }
+                    configuredSensors[i].lastOneWireCmd = currentTime;
+                    Serial.printf("OneWire GP%d: Command 0x%02X sent successfully\\n", owPin, cmd);
+                } else {
+                    Serial.printf("OneWire GP%d: No device presence detected during command\\n", owPin);
+                }
+            }
+            
+            // Read data if enough time has passed since last command
+            int conversionTime = configuredSensors[i].oneWireConversionTime;
+            if (conversionTime <= 0) conversionTime = 750; // Default 750ms for DS18B20
+            
+            if (currentTime - configuredSensors[i].lastOneWireCmd >= conversionTime) {
+                // Read scratchpad data
+                pinMode(owPin, OUTPUT);
+                digitalWrite(owPin, LOW);
+                delayMicroseconds(480);
+                pinMode(owPin, INPUT_PULLUP);
+                delayMicroseconds(70);
+                bool presence = !digitalRead(owPin);
+                delayMicroseconds(410);
+                
+                if (presence) {
+                    // Send SKIP ROM (0xCC) + READ SCRATCHPAD (0xBE)
+                    uint8_t commands[] = {0xCC, 0xBE};
+                    for (int cmdIdx = 0; cmdIdx < 2; cmdIdx++) {
+                        for (int bit = 0; bit < 8; bit++) {
+                            pinMode(owPin, OUTPUT);
+                            digitalWrite(owPin, LOW);
+                            if (commands[cmdIdx] & (1 << bit)) {
+                                delayMicroseconds(6);
+                                pinMode(owPin, INPUT_PULLUP);
+                                delayMicroseconds(64);
+                            } else {
+                                delayMicroseconds(60);
+                                pinMode(owPin, INPUT_PULLUP);
+                                delayMicroseconds(10);
+                            }
+                        }
+                    }
+                    
+                    // Read 9 bytes of scratchpad
+                    uint8_t data[9];
+                    bool readOk = true;
+                    for (int byte = 0; byte < 9; byte++) {
+                        data[byte] = 0;
+                        for (int bit = 0; bit < 8; bit++) {
+                            pinMode(owPin, OUTPUT);
+                            digitalWrite(owPin, LOW);
+                            delayMicroseconds(3);
+                            pinMode(owPin, INPUT_PULLUP);
+                            delayMicroseconds(10);
+                            if (digitalRead(owPin)) {
+                                data[byte] |= (1 << bit);
+                            }
+                            delayMicroseconds(53);
+                        }
+                    }
+                    
+                    // Parse temperature from DS18B20 format
+                    if (data[4] == 0xFF || data[4] == 0x00) { // Valid config register
+                        int16_t temp_raw = (data[1] << 8) | data[0];
+                        rawValue = temp_raw / 16.0;
+                        readSuccess = true;
+                        
+                        // Store raw data string with all bytes
+                        String dataStr = "OW:";
+                        for (int j = 0; j < 9; j++) {
+                            dataStr += String(data[j], HEX) + " ";
+                        }
+                        strncpy(configuredSensors[i].rawDataString, dataStr.c_str(), 
+                                sizeof(configuredSensors[i].rawDataString) - 1);
+                        
+                        Serial.printf("OneWire GP%d: Temperature %.2f°C\n", owPin, rawValue);
+                    } else {
+                        // Read failed - show error status
+                        readSuccess = false;
+                        snprintf(configuredSensors[i].rawDataString, sizeof(configuredSensors[i].rawDataString), 
+                                 "OneWire:READ_FAILED");
+                        Serial.printf("OneWire GP%d: Read failed - invalid config register\n", owPin);
+                    }
+                } else {
+                    // No device present - show error status
+                    readSuccess = false;
+                    snprintf(configuredSensors[i].rawDataString, sizeof(configuredSensors[i].rawDataString), 
+                             "OneWire:NO_DEVICE");
+                    Serial.printf("OneWire GP%d: No device presence detected\n", owPin);
+                }
+            } else {
+                // Still waiting for conversion - show wait status
+                readSuccess = false;
+                snprintf(configuredSensors[i].rawDataString, sizeof(configuredSensors[i].rawDataString), 
+                         "OneWire:CONVERTING");
+                Serial.printf("OneWire GP%d: Waiting for conversion (%lu ms remaining)\n", 
+                              owPin, conversionTime - (currentTime - configuredSensors[i].lastOneWireCmd));
+            }
         } else if (protocol == "uart") {
-            // Placeholder for UART sensors
-            // For now, use a simulated value
-            rawValue = 100.0 + (cos(millis() / 8000.0) * 20.0); // Simulated value
-            readSuccess = true;
+            // Real UART sensor communication - not implemented yet
+            readSuccess = false;
             snprintf(configuredSensors[i].rawDataString, sizeof(configuredSensors[i].rawDataString), 
-                     "UART:%.2f", rawValue);
+                     "UART:NOT_IMPLEMENTED");
+            Serial.printf("UART sensor protocol not yet implemented\n");
         }
         
         if (readSuccess) {
@@ -662,9 +806,311 @@ void handlePOSTTerminalCommand(WiFiClient& client, String body) {
             success = false;
             response = "Error: Unknown network command. Use 'status', 'clients', 'link', or 'stats'";
         }
+    } else if (protocol == "onewire") {
+        // Extract pin number from pin string (e.g., "GP28" -> 28)
+        int owPin = -1;
+        if (pin.startsWith("GP")) {
+            owPin = pin.substring(2).toInt();
+        } else if (pin.length() > 0) {
+            // Try to extract from sensor name if it's a configured sensor
+            for (int i = 0; i < numConfiguredSensors; i++) {
+                if (String(configuredSensors[i].name) == pin) {
+                    owPin = configuredSensors[i].oneWirePin;
+                    break;
+                }
+            }
+        }
+        
+        if (owPin < 0 || owPin > 28) {
+            success = false;
+            response = "Error: Invalid One-Wire pin. Use GP0-GP28 format";
+        } else if (command == "scan" || command == "search") {
+            // Basic One-Wire presence detection
+            pinMode(owPin, OUTPUT);
+            digitalWrite(owPin, LOW);
+            delayMicroseconds(480); // Reset pulse
+            pinMode(owPin, INPUT_PULLUP);
+            delayMicroseconds(70);
+            bool presence = !digitalRead(owPin); // Presence pulse is low
+            delayMicroseconds(410);
+            
+            if (presence) {
+                response = "One-Wire device detected on GP" + String(owPin) + "\\n";
+                response += "Use 'read' to get temperature data\\n";
+                response += "Note: Full ROM search requires OneWire library";
+            } else {
+                response = "No One-Wire devices found on GP" + String(owPin);
+            }
+        } else if (command == "read") {
+            // Raw One-Wire data read - no libraries needed!
+            response = "One-Wire Raw Read from GP" + String(owPin) + ":\\n";
+            
+            // Send reset pulse
+            pinMode(owPin, OUTPUT);
+            digitalWrite(owPin, LOW);
+            delayMicroseconds(480);
+            pinMode(owPin, INPUT_PULLUP);
+            delayMicroseconds(70);
+            bool presence = !digitalRead(owPin);
+            delayMicroseconds(410);
+            
+            if (!presence) {
+                response += "Error: No device presence detected";
+            } else {
+                // Send SKIP ROM (0xCC) + READ SCRATCHPAD (0xBE)
+                uint8_t commands[] = {0xCC, 0xBE};
+                for (int cmd = 0; cmd < 2; cmd++) {
+                    for (int bit = 0; bit < 8; bit++) {
+                        pinMode(owPin, OUTPUT);
+                        digitalWrite(owPin, LOW);
+                        if (commands[cmd] & (1 << bit)) {
+                            delayMicroseconds(6);
+                            pinMode(owPin, INPUT_PULLUP);
+                            delayMicroseconds(64);
+                        } else {
+                            delayMicroseconds(60);
+                            pinMode(owPin, INPUT_PULLUP);
+                            delayMicroseconds(10);
+                        }
+                    }
+                }
+                
+                // Read 9 bytes of scratchpad data
+                uint8_t data[9];
+                for (int byte = 0; byte < 9; byte++) {
+                    data[byte] = 0;
+                    for (int bit = 0; bit < 8; bit++) {
+                        pinMode(owPin, OUTPUT);
+                        digitalWrite(owPin, LOW);
+                        delayMicroseconds(3);
+                        pinMode(owPin, INPUT_PULLUP);
+                        delayMicroseconds(10);
+                        if (digitalRead(owPin)) {
+                            data[byte] |= (1 << bit);
+                        }
+                        delayMicroseconds(53);
+                    }
+                }
+                
+                // Display raw data
+                response += "Raw Data: ";
+                for (int i = 0; i < 9; i++) {
+                    response += "0x" + String(data[i], HEX) + " ";
+                }
+                
+                // Parse temperature if it looks like DS18B20 data
+                if (data[4] == 0xFF || data[4] == 0x00) { // Valid config register
+                    int16_t temp_raw = (data[1] << 8) | data[0];
+                    float temperature = temp_raw / 16.0;
+                    response += "\\nParsed Temperature: " + String(temperature, 2) + "°C";
+                    response += "\\nNote: Raw parsing - verify against device datasheet";
+                } else {
+                    response += "\\nUse 'convert' first, then 'read' after 750ms delay";
+                }
+            }
+        } else if (command == "convert") {
+            // Send temperature conversion command
+            pinMode(owPin, OUTPUT);
+            digitalWrite(owPin, LOW);
+            delayMicroseconds(480);
+            pinMode(owPin, INPUT_PULLUP);
+            delayMicroseconds(70);
+            bool presence = !digitalRead(owPin);
+            delayMicroseconds(410);
+            
+            if (!presence) {
+                response = "Error: No device presence detected on GP" + String(owPin);
+            } else {
+                // Send SKIP ROM (0xCC) + CONVERT T (0x44)
+                uint8_t commands[] = {0xCC, 0x44};
+                for (int cmd = 0; cmd < 2; cmd++) {
+                    for (int bit = 0; bit < 8; bit++) {
+                        pinMode(owPin, OUTPUT);
+                        digitalWrite(owPin, LOW);
+                        if (commands[cmd] & (1 << bit)) {
+                            delayMicroseconds(6);
+                            pinMode(owPin, INPUT_PULLUP);
+                            delayMicroseconds(64);
+                        } else {
+                            delayMicroseconds(60);
+                            pinMode(owPin, INPUT_PULLUP);
+                            delayMicroseconds(10);
+                        }
+                    }
+                }
+                response = "Temperature conversion started on GP" + String(owPin) + "\\n";
+                response += "Wait 750ms, then use 'read' to get data\\n";
+                response += "Device is converting temperature...";
+            }
+        } else if (command == "power") {
+            // Check if device is using parasitic power
+            response = "Power mode check for GP" + String(owPin) + ":\\n";
+            response += "Use external 4.7kΩ pullup resistor for reliable operation";
+        } else if (command == "reset") {
+            // Send reset pulse
+            pinMode(owPin, OUTPUT);
+            digitalWrite(owPin, LOW);
+            delayMicroseconds(480);
+            pinMode(owPin, INPUT_PULLUP);
+            delayMicroseconds(70);
+            bool presence = !digitalRead(owPin);
+            delayMicroseconds(410);
+            
+            response = "Reset pulse sent to GP" + String(owPin) + "\\n";
+            response += presence ? "Device presence detected" : "No device response";
+        } else if (command == "rom") {
+            // Read ROM command - get device ID without libraries
+            pinMode(owPin, OUTPUT);
+            digitalWrite(owPin, LOW);
+            delayMicroseconds(480);
+            pinMode(owPin, INPUT_PULLUP);
+            delayMicroseconds(70);
+            bool presence = !digitalRead(owPin);
+            delayMicroseconds(410);
+            
+            if (!presence) {
+                response = "Error: No device presence detected on GP" + String(owPin);
+            } else {
+                // Send READ ROM (0x33) - only works with single device
+                uint8_t read_rom_cmd = 0x33;
+                for (int bit = 0; bit < 8; bit++) {
+                    pinMode(owPin, OUTPUT);
+                    digitalWrite(owPin, LOW);
+                    if (read_rom_cmd & (1 << bit)) {
+                        delayMicroseconds(6);
+                        pinMode(owPin, INPUT_PULLUP);
+                        delayMicroseconds(64);
+                    } else {
+                        delayMicroseconds(60);
+                        pinMode(owPin, INPUT_PULLUP);
+                        delayMicroseconds(10);
+                    }
+                }
+                
+                // Read 8 bytes of ROM data
+                uint8_t rom[8];
+                for (int byte = 0; byte < 8; byte++) {
+                    rom[byte] = 0;
+                    for (int bit = 0; bit < 8; bit++) {
+                        pinMode(owPin, OUTPUT);
+                        digitalWrite(owPin, LOW);
+                        delayMicroseconds(3);
+                        pinMode(owPin, INPUT_PULLUP);
+                        delayMicroseconds(10);
+                        if (digitalRead(owPin)) {
+                            rom[byte] |= (1 << bit);
+                        }
+                        delayMicroseconds(53);
+                    }
+                }
+                
+                response = "ROM Data from GP" + String(owPin) + ":\\n";
+                response += "Family Code: 0x" + String(rom[0], HEX) + "\\n";
+                response += "Serial: ";
+                for (int i = 1; i < 7; i++) {
+                    response += String(rom[i], HEX) + " ";
+                }
+                response += "\\nCRC: 0x" + String(rom[7], HEX) + "\\n";
+                
+                // Identify common device types
+                switch(rom[0]) {
+                    case 0x28: response += "Device Type: DS18B20 Temperature Sensor"; break;
+                    case 0x10: response += "Device Type: DS18S20 Temperature Sensor"; break;
+                    case 0x22: response += "Device Type: DS1822 Temperature Sensor"; break;
+                    case 0x26: response += "Device Type: DS2438 Battery Monitor"; break;
+                    default: response += "Device Type: Unknown (0x" + String(rom[0], HEX) + ")"; break;
+                }
+            }
+        } else if (command == "cmd") {
+            // Send custom command - ultimate flexibility!
+            // Extract parameters from command (e.g., "cmd 0x44" -> params = "0x44")
+            String params = "";
+            int spaceIndex = command.indexOf(' ');
+            if (spaceIndex > 0 && command.length() > spaceIndex + 1) {
+                params = command.substring(spaceIndex + 1);
+            }
+            
+            if (params.length() == 0) {
+                success = false;
+                response = "Error: Specify hex command. Example: 'cmd 0x44' or 'cmd 0xCC,0x44'";
+            } else {
+                pinMode(owPin, OUTPUT);
+                digitalWrite(owPin, LOW);
+                delayMicroseconds(480);
+                pinMode(owPin, INPUT_PULLUP);
+                delayMicroseconds(70);
+                bool presence = !digitalRead(owPin);
+                delayMicroseconds(410);
+                
+                if (!presence) {
+                    response = "Error: No device presence detected on GP" + String(owPin);
+                } else {
+                    response = "Sending custom command(s) to GP" + String(owPin) + ":\\n";
+                    
+                    // Parse comma-separated hex commands
+                    int startPos = 0;
+                    while (startPos < params.length()) {
+                        int commaPos = params.indexOf(',', startPos);
+                        if (commaPos == -1) commaPos = params.length();
+                        
+                        String cmdStr = params.substring(startPos, commaPos);
+                        cmdStr.trim();
+                        
+                        uint8_t cmd = 0;
+                        if (cmdStr.startsWith("0x") || cmdStr.startsWith("0X")) {
+                            cmd = strtol(cmdStr.c_str(), nullptr, 16);
+                        } else {
+                            cmd = cmdStr.toInt();
+                        }
+                        
+                        response += "Sending: 0x" + String(cmd, HEX) + " ";
+                        
+                        // Send the command
+                        for (int bit = 0; bit < 8; bit++) {
+                            pinMode(owPin, OUTPUT);
+                            digitalWrite(owPin, LOW);
+                            if (cmd & (1 << bit)) {
+                                delayMicroseconds(6);
+                                pinMode(owPin, INPUT_PULLUP);
+                                delayMicroseconds(64);
+                            } else {
+                                delayMicroseconds(60);
+                                pinMode(owPin, INPUT_PULLUP);
+                                delayMicroseconds(10);
+                            }
+                        }
+                        
+                        startPos = commaPos + 1;
+                    }
+                    response += "\\nCommands sent successfully";
+                }
+            }
+        } else if (command == "info") {
+            response = "One-Wire Information for GP" + String(owPin) + ":\\n";
+            response += "Protocol: Dallas 1-Wire\\n";
+            response += "Common devices: DS18B20, DS18S20, DS1822\\n";
+            response += "Requires: 4.7kΩ pullup resistor\\n";
+            response += "Voltage: 3.3V or 5V\\n";
+            response += "Speed: 15.4 kbps (standard), 125 kbps (overdrive)\\n\\n";
+            response += "Available Commands:\\n";
+            response += "• scan/search - Detect device presence\\n";
+            response += "• convert - Start temperature conversion\\n";
+            response += "• read - Read scratchpad data (raw bytes)\\n";
+            response += "• rom - Read device ROM ID\\n";
+            response += "• cmd <hex> - Send custom command\\n";
+            response += "• reset - Send reset pulse\\n";
+            response += "• power - Check power mode";
+        } else if (command == "crc") {
+            response = "CRC check functionality requires OneWire library\\n";
+            response += "Install: OneWire by Jim Studt, Tom Pollard\\n";
+            response += "Also: DallasTemperature by Miles Burton";
+        } else {
+            success = false;
+            response = "Error: Unknown One-Wire command. Use 'scan', 'read', 'convert', 'rom', 'cmd', 'reset', 'power', 'info', or 'crc'";
+        }
     } else {
         success = false;
-        response = "Error: Unknown protocol. Use 'digital', 'analog', 'i2c', 'system', or 'network'";
+        response = "Error: Unknown protocol. Use 'digital', 'analog', 'i2c', 'uart', 'onewire', 'system', or 'network'";
     }
     
     StaticJsonDocument<1024> respDoc;
@@ -1538,6 +1984,18 @@ void sendJSONSensorConfig(WiFiClient& client) {
         sensor["oneWirePin"] = configuredSensors[i].oneWirePin;
         sensor["digitalPin"] = configuredSensors[i].digitalPin;
         
+        // One-Wire specific configuration
+        if (strlen(configuredSensors[i].oneWireCommand) > 0) {
+            sensor["oneWireCommand"] = configuredSensors[i].oneWireCommand;
+        }
+        if (configuredSensors[i].oneWireInterval > 0) {
+            sensor["oneWireInterval"] = configuredSensors[i].oneWireInterval;
+        }
+        if (configuredSensors[i].oneWireConversionTime > 0) {
+            sensor["oneWireConversionTime"] = configuredSensors[i].oneWireConversionTime;
+        }
+        sensor["oneWireAutoMode"] = configuredSensors[i].oneWireAutoMode;
+        
         // Include calibration data
         if (configuredSensors[i].calibrationOffset != 0.0 || configuredSensors[i].calibrationSlope != 1.0) {
             JsonObject calibration = sensor.createNestedObject("calibration");
@@ -1772,6 +2230,17 @@ void handlePOSTSensorConfig(WiFiClient& client, String body) {
         configuredSensors[numConfiguredSensors].analogPin = sensor["analogPin"] | -1;
         configuredSensors[numConfiguredSensors].oneWirePin = sensor["oneWirePin"] | -1;
         configuredSensors[numConfiguredSensors].digitalPin = sensor["digitalPin"] | -1;
+        
+        // One-Wire specific configuration with defaults
+        const char* owCommand = sensor["oneWireCommand"] | "0x44";
+        strncpy(configuredSensors[numConfiguredSensors].oneWireCommand, owCommand, 
+                sizeof(configuredSensors[numConfiguredSensors].oneWireCommand) - 1);
+        configuredSensors[numConfiguredSensors].oneWireCommand[sizeof(configuredSensors[numConfiguredSensors].oneWireCommand) - 1] = '\0';
+        
+        configuredSensors[numConfiguredSensors].oneWireInterval = sensor["oneWireInterval"] | 5; // Default 5 seconds
+        configuredSensors[numConfiguredSensors].oneWireConversionTime = sensor["oneWireConversionTime"] | 750; // Default 750ms
+        configuredSensors[numConfiguredSensors].oneWireAutoMode = sensor["oneWireAutoMode"] | true; // Default auto mode on
+        configuredSensors[numConfiguredSensors].lastOneWireCmd = 0; // Initialize timing
         
         // Calibration data
         configuredSensors[numConfiguredSensors].calibrationOffset = sensor["calibrationOffset"] | 0.0;

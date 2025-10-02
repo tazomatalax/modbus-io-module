@@ -2359,3 +2359,141 @@ button:hover {
         width: 100%;
     }
 }
+
+/* Engineering Units Display */
+.engineering-units {
+    background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
+    border: 1px solid #2196F3;
+    border-radius: 6px;
+    padding: 8px 12px;
+    margin: 10px 0;
+    font-size: 0.9em;
+    font-weight: 500;
+    color: #1976d2;
+    text-align: center;
+}
+
+/* Multi-Value Sensor Configuration */
+.multi-value-item {
+    background: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    padding: 12px;
+    margin-bottom: 8px;
+    position: relative;
+}
+
+.multi-value-item h5 {
+    margin: 0 0 8px 0;
+    color: #495057;
+    font-size: 0.95em;
+}
+
+.multi-value-row {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.multi-value-row .form-group {
+    flex: 1;
+    margin: 0;
+}
+
+.multi-value-row .form-group:last-child {
+    flex: 0 0 80px;
+}
+
+.multi-value-units {
+    background: #e9ecef;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    padding: 6px 8px;
+    font-size: 0.85em;
+    text-align: center;
+    color: #6c757d;
+}
+
+.multi-value-remove {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    background: #dc3545;
+    color: white;
+    border: none;
+    border-radius: 50%;
+    width: 20px;
+    height: 20px;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+/* Example Data String */
+.example-data-container {
+    margin: 10px 0;
+}
+
+.example-data-container textarea {
+    width: 100%;
+    font-family: 'Courier New', monospace;
+    background: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    padding: 8px;
+    font-size: 0.9em;
+}
+
+/* Multi-value sensor styling */
+.multi-value-badge {
+    background: #28a745;
+    color: white;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 0.8em;
+    margin-left: 8px;
+}
+
+.multi-value-dataflow {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.value-dataflow {
+    border: 1px solid #e0e0e0;
+    border-radius: 4px;
+    padding: 8px;
+    background: #f9f9f9;
+}
+
+.value-label {
+    font-weight: bold;
+    margin-bottom: 5px;
+    color: #333;
+    font-size: 0.9em;
+}
+
+.value-dataflow .dataflow-chain {
+    margin: 0;
+}
+
+.value-dataflow .dataflow-step {
+    font-size: 0.85em;
+}
+
+.value-dataflow .step-value {
+    font-size: 0.85em;
+}
+
+.value-dataflow .calibration-info {
+    font-size: 0.75em;
+}
+
+/* Terminal Send to Config Button */
+.terminal-btn.config-btn {
+    background-color: #17a2b8;
+}
+
+.terminal-btn.config-btn:hover {
+    background-color: #138496;
+}

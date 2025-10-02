@@ -111,6 +111,13 @@ struct SensorConfig {
     int modbusValue;          // Value written to Modbus register
     char rawDataString[128];  // Raw data string for parsing (I2C/UART responses)
     unsigned long lastReadTime; // When last read was performed
+    
+    // One-Wire specific configuration
+    char oneWireCommand[16];  // Hex command to send (e.g., "0x44" for Convert T)
+    int oneWireInterval;      // Interval in seconds between commands (0 = manual only)
+    int oneWireConversionTime; // Time in ms to wait after command before reading
+    unsigned long lastOneWireCmd; // When last command was sent
+    bool oneWireAutoMode;     // Enable automatic periodic commands
 };
 
 // Extern declarations for global variables

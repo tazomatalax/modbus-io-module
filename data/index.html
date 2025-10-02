@@ -225,6 +225,7 @@
                         <option value="analog">Analog I/O</option>
                         <option value="i2c">I2C</option>
                         <option value="uart">UART</option>
+                        <option value="onewire">One-Wire</option>
                         <option value="network">Network</option>
                         <option value="system">System</option>
                     </select>
@@ -252,6 +253,7 @@
                 <div class="terminal-buttons">
                     <button onclick="sendTerminalCommand()" class="terminal-btn send-btn">Send</button>
                     <button onclick="toggleWatch()" class="terminal-btn watch-btn" id="watch-btn">Start Watch</button>
+                    <button onclick="sendDataToConfig()" class="terminal-btn config-btn" id="send-to-config-btn" style="display: none;">Send to Config</button>
                     <button onclick="clearTerminalOutput()" class="terminal-btn clear-btn">Clear</button>
                 </div>
             </div>
@@ -340,6 +342,15 @@
                             <option value="SIM_DIGITAL_COUNTER">Simulated Digital Counter</option>
                         </optgroup>
                     </select>
+                </div>
+                
+                <!-- Multi-Value Sensor Checkbox - Hidden by default, shown for digital protocols -->
+                <div class="form-group" id="multi-value-option" style="display: none;">
+                    <label>
+                        <input type="checkbox" id="sensor-multi-value" onchange="toggleMultiValueConfig()">
+                        Multi-Value Sensor (produces multiple data values)
+                    </label>
+                    <small class="form-help">Check if this sensor provides multiple values (e.g., temperature + humidity)</small>
                 </div>
                 
                 <!-- Protocol-specific configuration fields -->
@@ -459,6 +470,40 @@
                                 </select>
                             </div>
                         </div>
+                        
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="sensor-onewire-auto">Auto Commands</label>
+                                <input type="checkbox" id="sensor-onewire-auto" checked>
+                                <small class="form-help">Automatically send commands at regular intervals</small>
+                            </div>
+                        </div>
+                        
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="sensor-onewire-command">Command (Hex)</label>
+                                <select id="sensor-onewire-command">
+                                    <option value="0x44">0x44 - Convert Temperature (DS18B20)</option>
+                                    <option value="0x48">0x48 - Convert Voltage (DS2438)</option>
+                                    <option value="0x14">0x14 - Read Memory (DS2423)</option>
+                                    <option value="custom">Custom...</option>
+                                </select>
+                                <input type="text" id="sensor-onewire-command-custom" placeholder="0x44" style="display: none; margin-top: 5px;">
+                            </div>
+                            <div class="form-group">
+                                <label for="sensor-onewire-interval">Interval (seconds)</label>
+                                <input type="number" id="sensor-onewire-interval" min="1" max="3600" value="5" placeholder="5">
+                                <small class="form-help">How often to send the command</small>
+                            </div>
+                        </div>
+                        
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="sensor-onewire-conversion-time">Conversion Time (ms)</label>
+                                <input type="number" id="sensor-onewire-conversion-time" min="10" max="5000" value="750" placeholder="750">
+                                <small class="form-help">Wait time after command before reading data</small>
+                            </div>
+                        </div>
                     </div>
                 </div>
                 
@@ -548,6 +593,31 @@
                             </div>
                         </div>
                     </div>
+                </div>
+                
+                <!-- Engineering Units Display -->
+                <div id="engineering-units-display" class="engineering-units" style="display: none;">
+                    Units: Not specified
+                </div>
+                
+                <!-- Example Data String -->
+                <div id="example-data-section" class="form-section" style="display: none;">
+                    <h4>Example Data String</h4>
+                    <div class="example-data-container">
+                        <label for="example-data-string">Raw Data from Sensor:</label>
+                        <textarea id="example-data-string" rows="3" readonly placeholder="Raw data will appear here when available..."></textarea>
+                        <small class="form-help">This shows the actual data string received from the sensor. Use this to configure data parsing.</small>
+                    </div>
+                </div>
+                
+                <!-- Multi-Value Sensor Configuration -->
+                <div id="multi-value-section" class="form-section" style="display: none;">
+                    <h4>Multi-Value Sensor Configuration</h4>
+                    <p class="form-help">Configure each data value from this sensor with its own register and calibration:</p>
+                    <div id="multi-value-fields">
+                        <!-- Dynamic fields will be populated here -->
+                    </div>
+                    <button type="button" onclick="addMultiValueField()" class="btn-secondary">Add Value</button>
                 </div>
                 
                 <div class="form-section">

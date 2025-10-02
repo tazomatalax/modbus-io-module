@@ -22,28 +22,79 @@ window.showToast = function showToast(message, type = 'info', persistent = false
     return toast; // Return toast element for manual removal
 };
 
-// Pin definitions for W5500 Pico (update as needed)
+// Pin definitions for W5500-EVB-PoE-Pico - Based on actual pinout diagram
 const ALL_PINS = {
-    'I2C': [{ label: 'SDA: GP4, SCL: GP5', pins: [4, 5] }],
+    'I2C': [
+        { label: 'I2C0: SDA GP4 (Pin 6), SCL GP5 (Pin 7) - Default', pins: [4, 5] },
+        { label: 'I2C0: SDA GP0 (Pin 1), SCL GP1 (Pin 2)', pins: [0, 1] },
+        { label: 'I2C0: SDA GP2 (Pin 4), SCL GP3 (Pin 5)', pins: [2, 3] },
+        { label: 'I2C0: SDA GP6 (Pin 9), SCL GP7 (Pin 10)', pins: [6, 7] },
+        { label: 'I2C0: SDA GP8 (Pin 11), SCL GP9 (Pin 12)', pins: [8, 9] },
+        { label: 'I2C0: SDA GP10 (Pin 14), SCL GP11 (Pin 15)', pins: [10, 11] },
+        { label: 'I2C0: SDA GP12 (Pin 16), SCL GP13 (Pin 17)', pins: [12, 13] },
+        { label: 'I2C0: SDA GP14 (Pin 19), SCL GP15 (Pin 20)', pins: [14, 15] },
+        { label: 'I2C1: SDA GP26 (Pin 31), SCL GP27 (Pin 32)', pins: [26, 27] }
+    ],
     'UART': [
-        { label: 'TX: GP0, RX: GP1', pins: [0, 1] },
-        { label: 'TX: GP8, RX: GP9', pins: [8, 9] }
+        { label: 'UART0: TX GP0 (Pin 1), RX GP1 (Pin 2) - Default', pins: [0, 1] },
+        { label: 'UART0: TX GP12 (Pin 16), RX GP13 (Pin 17)', pins: [12, 13] },
+        { label: 'UART1: TX GP4 (Pin 6), RX GP5 (Pin 7)', pins: [4, 5] },
+        { label: 'UART1: TX GP8 (Pin 11), RX GP9 (Pin 12)', pins: [8, 9] },
+        { label: 'UART: TX GP2 (Pin 4), RX GP3 (Pin 5)', pins: [2, 3] },
+        { label: 'UART: TX GP6 (Pin 9), RX GP7 (Pin 10)', pins: [6, 7] },
+        { label: 'UART: TX GP10 (Pin 14), RX GP11 (Pin 15)', pins: [10, 11] },
+        { label: 'UART: TX GP14 (Pin 19), RX GP15 (Pin 20)', pins: [14, 15] }
     ],
     'Analog Voltage': [
-        { label: 'ADC0: GP26', pins: [26] },
-        { label: 'ADC1: GP27', pins: [27] },
-        { label: 'ADC2: GP28', pins: [28] }
+        { label: 'ADC0: GP26 (Pin 31) - ADC_VREF nearby', pins: [26] },
+        { label: 'ADC1: GP27 (Pin 32) - AGND nearby', pins: [27] },
+        { label: 'ADC2: GP28 (Pin 34) - Your One-Wire sensor here!', pins: [28] }
     ],
     'One-Wire': [
-        { label: 'GP2', pins: [2] },
-        { label: 'GP3', pins: [3] },
-        { label: 'GP22', pins: [22] }
+        // Available GPIO pins (avoiding W5500 pins GP16-GP21)
+        { label: 'GP0 (Pin 1) - UART0 TX alt', pins: [0] },
+        { label: 'GP1 (Pin 2) - UART0 RX alt', pins: [1] },
+        { label: 'GP2 (Pin 4) - General GPIO', pins: [2] },
+        { label: 'GP3 (Pin 5) - General GPIO', pins: [3] },
+        { label: 'GP4 (Pin 6) - I2C0 SDA alt', pins: [4] },
+        { label: 'GP5 (Pin 7) - I2C0 SCL alt', pins: [5] },
+        { label: 'GP6 (Pin 9) - General GPIO', pins: [6] },
+        { label: 'GP7 (Pin 10) - General GPIO', pins: [7] },
+        { label: 'GP8 (Pin 11) - General GPIO', pins: [8] },
+        { label: 'GP9 (Pin 12) - General GPIO', pins: [9] },
+        { label: 'GP10 (Pin 14) - General GPIO', pins: [10] },
+        { label: 'GP11 (Pin 15) - General GPIO', pins: [11] },
+        { label: 'GP12 (Pin 16) - General GPIO', pins: [12] },
+        { label: 'GP13 (Pin 17) - General GPIO', pins: [13] },
+        { label: 'GP14 (Pin 19) - General GPIO', pins: [14] },
+        { label: 'GP15 (Pin 20) - General GPIO', pins: [15] },
+        { label: 'GP22 (Pin 29) - General GPIO', pins: [22] },
+        { label: 'GP26 (Pin 31) - ADC0 alt', pins: [26] },
+        { label: 'GP27 (Pin 32) - ADC1 alt', pins: [27] },
+        { label: 'GP28 (Pin 34) - ADC2 alt - Your DS18B20 is here!', pins: [28] }
     ],
     'Digital Counter': [
-        { label: 'GP6', pins: [6] },
-        { label: 'GP7', pins: [7] },
-        { label: 'GP10', pins: [10] },
-        { label: 'GP11', pins: [11] }
+        // Same as One-Wire but labeled for digital counting
+        { label: 'GP0 (Pin 1)', pins: [0] },
+        { label: 'GP1 (Pin 2)', pins: [1] },
+        { label: 'GP2 (Pin 4)', pins: [2] },
+        { label: 'GP3 (Pin 5)', pins: [3] },
+        { label: 'GP4 (Pin 6)', pins: [4] },
+        { label: 'GP5 (Pin 7)', pins: [5] },
+        { label: 'GP6 (Pin 9)', pins: [6] },
+        { label: 'GP7 (Pin 10)', pins: [7] },
+        { label: 'GP8 (Pin 11)', pins: [8] },
+        { label: 'GP9 (Pin 12)', pins: [9] },
+        { label: 'GP10 (Pin 14)', pins: [10] },
+        { label: 'GP11 (Pin 15)', pins: [11] },
+        { label: 'GP12 (Pin 16)', pins: [12] },
+        { label: 'GP13 (Pin 17)', pins: [13] },
+        { label: 'GP14 (Pin 19)', pins: [14] },
+        { label: 'GP15 (Pin 20)', pins: [15] },
+        { label: 'GP22 (Pin 29)', pins: [22] },
+        { label: 'GP26 (Pin 31)', pins: [26] },
+        { label: 'GP27 (Pin 32)', pins: [27] },
+        { label: 'GP28 (Pin 34) - Your sensor location', pins: [28] }
     ]
 };
 
@@ -183,6 +234,10 @@ window.showAddSensorModal = function showAddSensorModal() {
     document.getElementById('sensor-modal-overlay').querySelector('button[onclick="saveSensor()"]').textContent = 'Add';
     document.getElementById('sensor-form').reset();
     document.getElementById('sensor-enabled').checked = true;
+    
+    // Reset multi-value option
+    document.getElementById('sensor-multi-value').checked = false;
+    toggleMultiValueConfig();
 
     // Setup sensor calibration method listeners
     setupSensorCalibrationMethodListeners();
@@ -211,6 +266,7 @@ window.showAddSensorModal = function showAddSensorModal() {
 window.updateSensorProtocolFields = function updateSensorProtocolFields() {
     const protocolType = document.getElementById('sensor-protocol').value;
     const protocolConfig = document.getElementById('protocol-config');
+    const multiValueOption = document.getElementById('multi-value-option');
     
     // Hide all protocol configs and remove required from their fields
     const allConfigs = document.querySelectorAll('.protocol-config');
@@ -218,6 +274,17 @@ window.updateSensorProtocolFields = function updateSensorProtocolFields() {
         config.style.display = 'none';
         config.querySelectorAll('input,select').forEach(field => field.required = false);
     });
+
+    // Show/hide multi-value option based on protocol type
+    const digitalProtocols = ['I2C', 'UART', 'One-Wire'];
+    if (digitalProtocols.includes(protocolType)) {
+        multiValueOption.style.display = 'block';
+    } else {
+        multiValueOption.style.display = 'none';
+        // Reset multi-value checkbox when hiding
+        document.getElementById('sensor-multi-value').checked = false;
+        toggleMultiValueConfig();
+    }
 
     // Show appropriate protocol config and add required to visible fields
     if (protocolType === 'I2C') {
@@ -473,7 +540,7 @@ window.updateSensorFormFields = function updateSensorFormFields() {
     
     // Show/hide data parsing section based on protocol
     const dataParsingSection = document.getElementById('data-parsing-section');
-    if (protocol === 'I2C' || protocol === 'UART' || protocol === 'Digital Counter') {
+    if (protocol === 'I2C' || protocol === 'UART' || protocol === 'One-Wire' || protocol === 'Digital Counter') {
         dataParsingSection.style.display = 'block';
     } else {
         dataParsingSection.style.display = 'none';
@@ -486,6 +553,169 @@ window.updateSensorFormFields = function updateSensorFormFields() {
         modbusRegField.value = nextRegister;
     }
 }
+
+// Auto-configure sensor settings based on type
+window.autoConfigureSensorType = function autoConfigureSensorType() {
+    const sensorType = document.getElementById('sensor-type').value;
+    const protocol = document.getElementById('sensor-protocol').value;
+    
+    // Define sensor configurations
+    const sensorConfigs = {
+        'DS18B20': {
+            protocol: 'One-Wire',
+            oneWireCommand: '0x44',
+            oneWireInterval: 5,
+            oneWireConversionTime: 750,
+            oneWireAutoMode: true,
+            units: '°C',
+            calibrationSlope: 1.0,
+            calibrationOffset: 0.0
+        },
+        'DS18S20': {
+            protocol: 'One-Wire',
+            oneWireCommand: '0x44',
+            oneWireInterval: 5,
+            oneWireConversionTime: 750,
+            oneWireAutoMode: true,
+            units: '°C',
+            calibrationSlope: 1.0,
+            calibrationOffset: 0.0
+        },
+        'SHT30': {
+            protocol: 'I2C',
+            i2cAddress: '0x44',
+            units: ['°C', '%RH'],
+            multiValue: true,
+            values: [
+                { name: 'Temperature', register: 'auto', units: '°C' },
+                { name: 'Humidity', register: 'auto+1', units: '%RH' }
+            ]
+        },
+        'BME280': {
+            protocol: 'I2C',
+            i2cAddress: '0x76',
+            units: ['°C', '%RH', 'hPa'],
+            multiValue: true,
+            values: [
+                { name: 'Temperature', register: 'auto', units: '°C' },
+                { name: 'Humidity', register: 'auto+1', units: '%RH' },
+                { name: 'Pressure', register: 'auto+2', units: 'hPa' }
+            ]
+        }
+    };
+    
+    const config = sensorConfigs[sensorType];
+    if (!config) return; // No auto-config for this sensor type
+    
+    // Apply protocol if different
+    if (config.protocol !== protocol) {
+        document.getElementById('sensor-protocol').value = config.protocol;
+        updateSensorProtocolFields();
+    }
+    
+    // Apply One-Wire specific settings
+    if (config.protocol === 'One-Wire') {
+        setTimeout(() => { // Wait for protocol fields to load
+            if (document.getElementById('sensor-onewire-command')) {
+                if (config.oneWireCommand === '0x44') {
+                    document.getElementById('sensor-onewire-command').value = '0x44';
+                } else {
+                    document.getElementById('sensor-onewire-command').value = 'custom';
+                    document.getElementById('sensor-onewire-command-custom').value = config.oneWireCommand;
+                    document.getElementById('sensor-onewire-command-custom').style.display = 'block';
+                }
+                document.getElementById('sensor-onewire-interval').value = config.oneWireInterval;
+                document.getElementById('sensor-onewire-conversion-time').value = config.oneWireConversionTime;
+                document.getElementById('sensor-onewire-auto').checked = config.oneWireAutoMode;
+            }
+        }, 100);
+    }
+    
+    // Apply I2C address
+    if (config.i2cAddress) {
+        setTimeout(() => {
+            const i2cField = document.getElementById('sensor-i2c-address');
+            if (i2cField) {
+                i2cField.value = config.i2cAddress;
+            }
+        }, 100);
+    }
+    
+    // Show engineering units in calibration section
+    if (config.units) {
+        setTimeout(() => {
+            const unitsDisplay = document.getElementById('engineering-units-display');
+            if (unitsDisplay) {
+                if (Array.isArray(config.units)) {
+                    unitsDisplay.textContent = `Units: ${config.units.join(', ')}`;
+                } else {
+                    unitsDisplay.textContent = `Units: ${config.units}`;
+                }
+                unitsDisplay.style.display = 'block';
+            }
+        }, 100);
+    }
+    
+    // Show multi-value configuration if applicable
+    if (config.multiValue) {
+        setTimeout(() => {
+            const multiValueSection = document.getElementById('multi-value-section');
+            if (multiValueSection) {
+                multiValueSection.style.display = 'block';
+                populateMultiValueFields(config.values);
+            }
+        }, 100);
+    }
+    
+    showToast(`Auto-configured ${sensorType} settings`, 'success');
+};
+
+// Populate multi-value fields for sensors like SHT30, BME280
+window.populateMultiValueFields = function populateMultiValueFields(values) {
+    const container = document.getElementById('multi-value-fields');
+    if (!container) return;
+    
+    container.innerHTML = '';
+    
+    values.forEach((value, index) => {
+        const baseRegister = parseInt(document.getElementById('sensor-modbus-register').value) || getNextAvailableRegister();
+        const register = value.register === 'auto' ? baseRegister : 
+                        value.register.includes('+') ? baseRegister + parseInt(value.register.split('+')[1]) : 
+                        parseInt(value.register);
+        
+        const item = document.createElement('div');
+        item.className = 'multi-value-item';
+        item.innerHTML = `
+            <h5>${value.name}</h5>
+            <div class="multi-value-row">
+                <div class="form-group">
+                    <label>Modbus Register</label>
+                    <input type="number" 
+                           id="multi-register-${index}" 
+                           value="${register}" 
+                           min="3" max="65535">
+                </div>
+                <div class="form-group">
+                    <label>Scale Factor</label>
+                    <input type="number" 
+                           id="multi-scale-${index}" 
+                           value="1.0" 
+                           step="0.001" 
+                           min="0.001">
+                </div>
+                <div class="form-group">
+                    <label>Offset</label>
+                    <input type="number" 
+                           id="multi-offset-${index}" 
+                           value="0.0" 
+                           step="0.01">
+                </div>
+                <div class="multi-value-units">${value.units}</div>
+            </div>
+        `;
+        container.appendChild(item);
+    });
+};
 
 // Handle data parsing method selection
 window.updateDataParsingFields = function updateDataParsingFields() {
@@ -546,8 +776,39 @@ window.editSensor = function editSensor(index) {
         document.getElementById('sensor-uart-pins').value = `${sensor.txPin},${sensor.rxPin}`;
     } else if (sensor.protocol === 'Analog Voltage' && sensor.analogPin !== undefined) {
         document.getElementById('sensor-analog-pin').value = sensor.analogPin.toString();
-    } else if (sensor.protocol === 'One-Wire' && sensor.digitalPin !== undefined) {
-        document.getElementById('sensor-onewire-pin').value = sensor.digitalPin.toString();
+    } else if (sensor.protocol === 'One-Wire' && sensor.oneWirePin !== undefined) {
+        document.getElementById('sensor-onewire-pin').value = sensor.oneWirePin.toString();
+        
+        // Load One-Wire specific settings
+        setTimeout(() => {
+            if (sensor.oneWireCommand) {
+                const commandSelect = document.getElementById('sensor-onewire-command');
+                if (commandSelect) {
+                    if (['0x44', '0x48', '0x14'].includes(sensor.oneWireCommand)) {
+                        commandSelect.value = sensor.oneWireCommand;
+                    } else {
+                        commandSelect.value = 'custom';
+                        const customField = document.getElementById('sensor-onewire-command-custom');
+                        if (customField) {
+                            customField.value = sensor.oneWireCommand;
+                            customField.style.display = 'block';
+                        }
+                    }
+                }
+            }
+            if (sensor.oneWireInterval !== undefined) {
+                const intervalField = document.getElementById('sensor-onewire-interval');
+                if (intervalField) intervalField.value = sensor.oneWireInterval;
+            }
+            if (sensor.oneWireConversionTime !== undefined) {
+                const conversionField = document.getElementById('sensor-onewire-conversion-time');
+                if (conversionField) conversionField.value = sensor.oneWireConversionTime;
+            }
+            if (sensor.oneWireAutoMode !== undefined) {
+                const autoField = document.getElementById('sensor-onewire-auto');
+                if (autoField) autoField.checked = sensor.oneWireAutoMode;
+            }
+        }, 100);
     } else if (sensor.protocol === 'Digital Counter' && sensor.digitalPin !== undefined) {
         document.getElementById('sensor-digital-pin').value = sensor.digitalPin.toString();
     }
@@ -640,6 +901,41 @@ window.editSensor = function editSensor(index) {
         // Default to raw parsing
         document.getElementById('sensor-data-parsing').value = 'raw';
         updateDataParsingFields();
+    }
+    
+    // Show example data if available from sensor's raw data string
+    const exampleSection = document.getElementById('example-data-section');
+    const exampleTextarea = document.getElementById('example-data-string');
+    
+    if (sensor.rawDataString && sensor.rawDataString.trim() !== '') {
+        exampleSection.style.display = 'block';
+        exampleTextarea.value = sensor.rawDataString;
+    } else {
+        exampleSection.style.display = 'none';
+        exampleTextarea.value = '';
+    }
+    
+    // Show multi-value section if sensor has multiple values configured
+    if (sensor.multiValues && sensor.multiValues.length > 0) {
+        document.getElementById('sensor-multi-value').checked = true;
+        toggleMultiValueConfig();
+        
+        // Populate existing multi-value fields
+        const container = document.getElementById('multi-value-fields');
+        container.innerHTML = '';
+        
+        sensor.multiValues.forEach((value, index) => {
+            addMultiValueField();
+            document.getElementById(`multi-name-${index}`).value = value.name || `Value ${index + 1}`;
+            document.getElementById(`multi-position-${index}`).value = value.position || '';
+            document.getElementById(`multi-register-${index}`).value = value.register || (sensor.modbusRegister + index);
+            document.getElementById(`multi-scale-${index}`).value = value.scale || 1.0;
+            document.getElementById(`multi-offset-${index}`).value = value.offset || 0.0;
+            document.getElementById(`multi-units-${index}`).value = value.units || '';
+        });
+    } else {
+        document.getElementById('sensor-multi-value').checked = false;
+        toggleMultiValueConfig();
     }
 
     document.getElementById('sensor-modal-overlay').classList.add('show');
@@ -923,6 +1219,19 @@ window.saveSensor = function saveSensor() {
             if (oneWirePin) {
                 pinAssignments.oneWirePin = parseInt(oneWirePin);
             }
+            
+            // Add One-Wire specific configuration
+            const oneWireAuto = document.getElementById('sensor-onewire-auto').checked;
+            const oneWireCommand = document.getElementById('sensor-onewire-command').value === 'custom' 
+                ? document.getElementById('sensor-onewire-command-custom').value 
+                : document.getElementById('sensor-onewire-command').value;
+            const oneWireInterval = parseInt(document.getElementById('sensor-onewire-interval').value) || 5;
+            const oneWireConversionTime = parseInt(document.getElementById('sensor-onewire-conversion-time').value) || 750;
+            
+            pinAssignments.oneWireAutoMode = oneWireAuto;
+            pinAssignments.oneWireCommand = oneWireCommand;
+            pinAssignments.oneWireInterval = oneWireInterval;
+            pinAssignments.oneWireConversionTime = oneWireConversionTime;
             break;
             
         case 'Digital Counter':
@@ -985,6 +1294,32 @@ window.saveSensor = function saveSensor() {
         }
     }
 
+    // Collect multi-value sensor configuration
+    let multiValues = null;
+    if (document.getElementById('sensor-multi-value').checked) {
+        const multiValueFields = document.querySelectorAll('.multi-value-item');
+        if (multiValueFields.length > 0) {
+            multiValues = [];
+            multiValueFields.forEach((field, index) => {
+                const name = document.getElementById(`multi-name-${index}`)?.value?.trim() || `Value ${index + 1}`;
+                const position = document.getElementById(`multi-position-${index}`)?.value?.trim() || '';
+                const register = parseInt(document.getElementById(`multi-register-${index}`)?.value) || (modbusRegister + index);
+                const scale = parseFloat(document.getElementById(`multi-scale-${index}`)?.value) || 1.0;
+                const offset = parseFloat(document.getElementById(`multi-offset-${index}`)?.value) || 0.0;
+                const units = document.getElementById(`multi-units-${index}`)?.value?.trim() || '';
+
+                multiValues.push({
+                    name: name,
+                    position: position,
+                    register: register,
+                    scale: scale,
+                    offset: offset,
+                    units: units
+                });
+            });
+        }
+    }
+
     const sensor = {
         enabled: enabled,
         name: name,
@@ -995,6 +1330,11 @@ window.saveSensor = function saveSensor() {
         calibration: calibration,
         ...pinAssignments
     };
+    
+    // Add multi-value config if it exists
+    if (multiValues && multiValues.length > 0) {
+        sensor.multiValues = multiValues;
+    }
     
     // Add data parsing config if it exists
     if (dataParsing) {
@@ -1397,8 +1737,75 @@ function updateProtocolSensorFlow(protocol, sensors, containerId) {
             rawDataDisplay = `<div class="raw-data-string">Raw Data: ${sensor.raw_i2c_data}</div>`;
         }
         
+        // Check if this is a multi-value sensor
+        const isMultiValue = sensor.multiValues && sensor.multiValues.length > 0;
+        
+        let dataflowHTML = '';
+        
+        if (isMultiValue) {
+            // Multi-value sensor: show each value's dataflow
+            dataflowHTML = `<div class="multi-value-dataflow">`;
+            sensor.multiValues.forEach((valueConfig, index) => {
+                const valueKey = `value_${index}`;
+                const rawValue = sensor[`raw_${valueKey}`] || sensor.raw_value;
+                const calibratedValue = sensor[`calibrated_${valueKey}`] || sensor.calibrated_value;
+                const modbusValue = sensor[`modbus_${valueKey}`] || sensor.modbus_value;
+                
+                dataflowHTML += `
+                    <div class="value-dataflow ${staleData ? 'stale-data' : ''}">
+                        <div class="value-label">${valueConfig.name} ${valueConfig.units ? '(' + valueConfig.units + ')' : ''}</div>
+                        <div class="dataflow-chain">
+                            <div class="dataflow-step raw-step">
+                                <div class="step-label">Raw</div>
+                                <div class="step-value">${rawValue !== undefined ? rawValue.toFixed(2) : 'N/A'}</div>
+                            </div>
+                            <div class="dataflow-arrow">→</div>
+                            <div class="dataflow-step calibrated-step">
+                                <div class="step-label">Calibrated</div>
+                                <div class="step-value">${calibratedValue !== undefined ? calibratedValue.toFixed(2) : 'N/A'}</div>
+                                <div class="calibration-info">
+                                    Offset: ${valueConfig.offset || 0}, 
+                                    Scale: ${valueConfig.scale || 1}
+                                </div>
+                            </div>
+                            <div class="dataflow-arrow">→</div>
+                            <div class="dataflow-step modbus-step">
+                                <div class="step-label">Modbus Reg ${valueConfig.register}</div>
+                                <div class="step-value">${modbusValue !== undefined ? modbusValue : 'N/A'}</div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+            dataflowHTML += `</div>`;
+        } else {
+            // Single-value sensor: show standard dataflow
+            dataflowHTML = `
+                <div class="dataflow-chain ${staleData ? 'stale-data' : ''}">
+                    <div class="dataflow-step raw-step">
+                        <div class="step-label">Raw Value</div>
+                        <div class="step-value">${sensor.raw_value !== undefined ? sensor.raw_value.toFixed(2) : 'N/A'}</div>
+                    </div>
+                    <div class="dataflow-arrow">→</div>
+                    <div class="dataflow-step calibrated-step">
+                        <div class="step-label">Calibrated</div>
+                        <div class="step-value">${sensor.calibrated_value !== undefined ? sensor.calibrated_value.toFixed(2) : 'N/A'}</div>
+                        <div class="calibration-info">
+                            Offset: ${sensor.calibration_offset || 0}, 
+                            Slope: ${sensor.calibration_slope || 1}
+                        </div>
+                    </div>
+                    <div class="dataflow-arrow">→</div>
+                    <div class="dataflow-step modbus-step">
+                        <div class="step-label">Modbus Reg ${sensor.modbus_register}</div>
+                        <div class="step-value">${sensor.modbus_value !== undefined ? sensor.modbus_value : 'N/A'}</div>
+                    </div>
+                </div>
+            `;
+        }
+        
         sensorDiv.innerHTML = `
-            <div class="sensor-name">${sensor.name} (${sensor.type})</div>
+            <div class="sensor-name">${sensor.name} (${sensor.type}) ${isMultiValue ? '<span class="multi-value-badge">Multi-Value</span>' : ''}</div>
             <div class="sensor-details">
                 ${protocol === 'I2C' ? `Address: 0x${sensor.i2c_address.toString(16).toUpperCase().padStart(2, '0')}` : ''}
                 ${sensor.sda_pin !== undefined ? `SDA: GP${sensor.sda_pin}, SCL: GP${sensor.scl_pin}` : ''}
@@ -1408,26 +1815,7 @@ function updateProtocolSensorFlow(protocol, sensors, containerId) {
                 ${sensor.uart_tx_pin !== undefined ? `TX: ${sensor.uart_tx_pin}, RX: ${sensor.uart_rx_pin}` : ''}
             </div>
             ${rawDataDisplay}
-            <div class="dataflow-chain ${staleData ? 'stale-data' : ''}">
-                <div class="dataflow-step raw-step">
-                    <div class="step-label">Raw Value</div>
-                    <div class="step-value">${sensor.raw_value !== undefined ? sensor.raw_value.toFixed(2) : 'N/A'}</div>
-                </div>
-                <div class="dataflow-arrow">→</div>
-                <div class="dataflow-step calibrated-step">
-                    <div class="step-label">Calibrated</div>
-                    <div class="step-value">${sensor.calibrated_value !== undefined ? sensor.calibrated_value.toFixed(2) : 'N/A'}</div>
-                    <div class="calibration-info">
-                        Offset: ${sensor.calibration_offset || 0}, 
-                        Slope: ${sensor.calibration_slope || 1}
-                    </div>
-                </div>
-                <div class="dataflow-arrow">→</div>
-                <div class="dataflow-step modbus-step">
-                    <div class="step-label">Modbus Reg ${sensor.modbus_register}</div>
-                    <div class="step-value">${sensor.modbus_value !== undefined ? sensor.modbus_value : 'N/A'}</div>
-                </div>
-            </div>
+            ${dataflowHTML}
             ${staleData ? '<div class="stale-warning">⚠️ Data may be stale</div>' : ''}
         `;
         
@@ -1694,18 +2082,34 @@ window.updateTerminalInterface = function updateTerminalInterface() {
             
         case 'onewire':
             // Provide common One-Wire pin options
-            pinSelector.innerHTML += '<option value="OW0">One-Wire Pin 2 (GP2)</option>';
-            pinSelector.innerHTML += '<option value="OW1">One-Wire Pin 3 (GP3)</option>';
+            pinSelector.innerHTML += '<option value="GP0">One-Wire GP0 (Pin 1)</option>';
+            pinSelector.innerHTML += '<option value="GP1">One-Wire GP1 (Pin 2)</option>';
+            pinSelector.innerHTML += '<option value="GP2">One-Wire GP2 (Pin 4)</option>';
+            pinSelector.innerHTML += '<option value="GP3">One-Wire GP3 (Pin 5)</option>';
+            pinSelector.innerHTML += '<option value="GP6">One-Wire GP6 (Pin 9)</option>';
+            pinSelector.innerHTML += '<option value="GP7">One-Wire GP7 (Pin 10)</option>';
+            pinSelector.innerHTML += '<option value="GP8">One-Wire GP8 (Pin 11)</option>';
+            pinSelector.innerHTML += '<option value="GP9">One-Wire GP9 (Pin 12)</option>';
+            pinSelector.innerHTML += '<option value="GP10">One-Wire GP10 (Pin 14)</option>';
+            pinSelector.innerHTML += '<option value="GP11">One-Wire GP11 (Pin 15)</option>';
+            pinSelector.innerHTML += '<option value="GP12">One-Wire GP12 (Pin 16)</option>';
+            pinSelector.innerHTML += '<option value="GP13">One-Wire GP13 (Pin 17)</option>';
+            pinSelector.innerHTML += '<option value="GP14">One-Wire GP14 (Pin 19)</option>';
+            pinSelector.innerHTML += '<option value="GP15">One-Wire GP15 (Pin 20)</option>';
+            pinSelector.innerHTML += '<option value="GP22">One-Wire GP22 (Pin 29)</option>';
+            pinSelector.innerHTML += '<option value="GP26">One-Wire GP26 (Pin 31)</option>';
+            pinSelector.innerHTML += '<option value="GP27">One-Wire GP27 (Pin 32)</option>';
+            pinSelector.innerHTML += '<option value="GP28">One-Wire GP28 (Pin 34)</option>';
             
             // Add configured One-Wire sensors
             if (sensorConfigData && sensorConfigData.length > 0) {
                 sensorConfigData.forEach((sensor, index) => {
                     if (sensor.protocol === 'One-Wire' && sensor.enabled) {
-                        pinSelector.innerHTML += `<option value="${sensor.name}">${sensor.name} (Pin ${sensor.oneWirePin || 2})</option>`;
+                        pinSelector.innerHTML += `<option value="${sensor.name}">${sensor.name} (GP${sensor.oneWirePin || 2})</option>`;
                     }
                 });
             }
-            commandInput.placeholder = 'Commands: scan, read, search, reset';
+            commandInput.placeholder = 'Commands: scan, search, read, convert, power, reset, crc, info';
             break;
             
         case 'system':
@@ -1790,6 +2194,21 @@ function sendTerminalCommand() {
     .then(data => {
         if (data.success) {
             addTerminalOutput(data.response || 'Command executed successfully', 'success');
+            
+            // Show "Send to Config" button if response contains sensor data
+            const response = data.response || '';
+            if (response.includes('Raw Data:') || response.includes('OneWire:') || 
+                response.includes('I2C:') || response.includes('Temperature:') ||
+                response.includes('Humidity:') || response.includes('Pressure:')) {
+                
+                const sendToConfigBtn = document.getElementById('send-to-config-btn');
+                sendToConfigBtn.style.display = 'inline-block';
+                
+                // Auto-hide after 30 seconds
+                setTimeout(() => {
+                    sendToConfigBtn.style.display = 'none';
+                }, 30000);
+            }
         } else {
             addTerminalOutput(data.error || 'Command failed', 'error');
         }
@@ -2297,6 +2716,32 @@ document.addEventListener('DOMContentLoaded', function() {
     loadSensorConfig();
     loadIOConfig();
     
+    // Add One-Wire command dropdown handler
+    const oneWireCommandSelect = document.getElementById('sensor-onewire-command');
+    const oneWireCommandCustom = document.getElementById('sensor-onewire-command-custom');
+    
+    if (oneWireCommandSelect && oneWireCommandCustom) {
+        oneWireCommandSelect.addEventListener('change', function() {
+            if (this.value === 'custom') {
+                oneWireCommandCustom.style.display = 'block';
+                oneWireCommandCustom.required = true;
+            } else {
+                oneWireCommandCustom.style.display = 'none';
+                oneWireCommandCustom.required = false;
+            }
+        });
+    }
+    
+    // Add sensor type change listener for auto-configuration
+    const sensorTypeSelect = document.getElementById('sensor-type');
+    if (sensorTypeSelect) {
+        sensorTypeSelect.addEventListener('change', function() {
+            if (this.value) {
+                autoConfigureSensorType();
+            }
+        });
+    }
+    
     // Set up periodic updates for sensor dataflow
     setInterval(function() {
         updateIOStatus(); // Updates sensor dataflow every 3 seconds
@@ -2309,3 +2754,156 @@ document.addEventListener('DOMContentLoaded', function() {
     
     console.log('Periodic updates initialized');
 });
+
+// Toggle multi-value configuration visibility
+window.toggleMultiValueConfig = function toggleMultiValueConfig() {
+    const checkbox = document.getElementById('sensor-multi-value');
+    const section = document.getElementById('multi-value-section');
+    
+    if (checkbox.checked) {
+        section.style.display = 'block';
+        // Add default value field if none exist
+        if (document.getElementById('multi-value-fields').children.length === 0) {
+            addMultiValueField();
+        }
+    } else {
+        section.style.display = 'none';
+    }
+};
+
+// Add a new multi-value field
+window.addMultiValueField = function addMultiValueField() {
+    const container = document.getElementById('multi-value-fields');
+    const index = container.children.length;
+    const baseRegister = parseInt(document.getElementById('sensor-modbus-register').value) || getNextAvailableRegister();
+    
+    const item = document.createElement('div');
+    item.className = 'multi-value-item';
+    item.innerHTML = `
+        <button type="button" class="multi-value-remove" onclick="removeMultiValueField(this)" title="Remove this value">×</button>
+        <h5>Value ${index + 1}</h5>
+        <div class="multi-value-row">
+            <div class="form-group">
+                <label>Name</label>
+                <input type="text" 
+                       id="multi-name-${index}" 
+                       placeholder="e.g., Temperature"
+                       value="Value ${index + 1}">
+            </div>
+            <div class="form-group">
+                <label>Data Position</label>
+                <input type="text" 
+                       id="multi-position-${index}" 
+                       placeholder="e.g., bytes 0-1, bit 5, CSV col 2">
+            </div>
+        </div>
+        <div class="multi-value-row">
+            <div class="form-group">
+                <label>Modbus Register</label>
+                <input type="number" 
+                       id="multi-register-${index}" 
+                       value="${baseRegister + index}" 
+                       min="3" max="65535">
+            </div>
+            <div class="form-group">
+                <label>Scale Factor</label>
+                <input type="number" 
+                       id="multi-scale-${index}" 
+                       value="1.0" 
+                       step="0.001" 
+                       min="0.001">
+            </div>
+            <div class="form-group">
+                <label>Offset</label>
+                <input type="number" 
+                       id="multi-offset-${index}" 
+                       value="0.0" 
+                       step="0.01">
+            </div>
+            <div class="form-group">
+                <label>Units</label>
+                <input type="text" 
+                       id="multi-units-${index}" 
+                       placeholder="°C, %, mV">
+            </div>
+        </div>
+    `;
+    container.appendChild(item);
+};
+
+// Remove a multi-value field
+window.removeMultiValueField = function removeMultiValueField(button) {
+    button.parentElement.remove();
+    
+    // Re-index remaining fields
+    const container = document.getElementById('multi-value-fields');
+    Array.from(container.children).forEach((item, index) => {
+        const h5 = item.querySelector('h5');
+        if (h5) h5.textContent = `Value ${index + 1}`;
+        
+        // Update field IDs and default name
+        const nameField = item.querySelector('input[id^="multi-name-"]');
+        if (nameField && nameField.value.startsWith('Value ')) {
+            nameField.value = `Value ${index + 1}`;
+        }
+    });
+};
+
+// Send terminal data to sensor config
+window.sendDataToConfig = function sendDataToConfig() {
+    const terminalContent = document.getElementById('terminal-content');
+    if (!terminalContent) {
+        showToast('Terminal content not found', 'error');
+        return;
+    }
+    
+    const output = terminalContent.textContent;
+    const lines = output.split('\n');
+    
+    // Find the most recent sensor data line
+    let lastDataLine = '';
+    for (let i = lines.length - 1; i >= 0; i--) {
+        const line = lines[i].trim();
+        if (line.includes('Raw Data:') || line.includes('OneWire:') || line.includes('I2C:') || line.includes('UART:')) {
+            lastDataLine = line;
+            break;
+        }
+    }
+    
+    if (!lastDataLine) {
+        showToast('No sensor data found in terminal output', 'error');
+        return;
+    }
+    
+    // Extract sensor info from terminal command/response
+    const protocol = document.getElementById('terminal-protocol').value;
+    const pin = document.getElementById('terminal-pin').value;
+    
+    // Open sensor modal in edit mode
+    showSensorModal();
+    
+    // Pre-fill protocol and show example data
+    document.getElementById('sensor-protocol').value = protocol;
+    updateSensorProtocolFields();
+    
+    // Show and populate example data section
+    setTimeout(() => {
+        const exampleSection = document.getElementById('example-data-section');
+        const exampleTextarea = document.getElementById('example-data-string');
+        
+        exampleSection.style.display = 'block';
+        exampleTextarea.value = lastDataLine;
+        
+        // Auto-suggest sensor name based on pin
+        const nameField = document.getElementById('sensor-name');
+        if (!nameField.value) {
+            nameField.value = `${protocol}_${pin}`;
+        }
+        
+        // Show data parsing section
+        const dataParsingSection = document.getElementById('data-parsing-section');
+        dataParsingSection.style.display = 'block';
+        
+        showToast('Data imported from terminal - configure parsing below', 'success');
+    }, 100);
+};
