@@ -105,6 +105,12 @@ struct SensorConfig {
     // Response data storage
     char response[64];
     char calibrationData[256];
+    // Current sensor values for dataflow
+    float rawValue;           // Raw sensor reading
+    float calibratedValue;    // After applying calibration
+    int modbusValue;          // Value written to Modbus register
+    char rawDataString[128];  // Raw data string for parsing (I2C/UART responses)
+    unsigned long lastReadTime; // When last read was performed
 };
 
 // Extern declarations for global variables

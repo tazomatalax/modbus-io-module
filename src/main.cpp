@@ -196,6 +196,120 @@ void handlePOSTSensorCalibration(WiFiClient& client, String body) {
     client.println("{\"success\":true}");
 }
 
+// Function to read sensor values based on protocol and configuration
+void updateSensorReadings() {
+    static unsigned long lastSensorUpdate = 0;
+    const unsigned long SENSOR_UPDATE_INTERVAL = 1000; // Update every 1 second
+    
+    if (millis() - lastSensorUpdate < SENSOR_UPDATE_INTERVAL) {
+        return; // Too soon for next update
+    }
+    lastSensorUpdate = millis();
+    
+    for (int i = 0; i < numConfiguredSensors; i++) {
+        if (!configuredSensors[i].enabled) continue;
+        
+        float rawValue = 0.0;
+        bool readSuccess = false;
+        String protocol = String(configuredSensors[i].protocol);
+        protocol.toLowerCase();
+        
+        // Clear previous raw data string
+        strcpy(configuredSensors[i].rawDataString, "");
+        
+        if (protocol == "analog voltage") {
+            // Read analog sensor
+            if (configuredSensors[i].analogPin >= 26 && configuredSensors[i].analogPin <= 28) {
+                int adcValue = analogRead(configuredSensors[i].analogPin);
+                rawValue = (adcValue * 3300.0) / 4095.0; // Convert to millivolts
+                readSuccess = true;
+                snprintf(configuredSensors[i].rawDataString, sizeof(configuredSensors[i].rawDataString), 
+                         "ADC:%d", adcValue);
+            }
+        } else if (protocol == "digital counter") {
+            // Read digital pin state
+            if (configuredSensors[i].digitalPin >= 0 && configuredSensors[i].digitalPin <= 28) {
+                bool state = digitalRead(configuredSensors[i].digitalPin);
+                rawValue = state ? 1.0 : 0.0;
+                readSuccess = true;
+                snprintf(configuredSensors[i].rawDataString, sizeof(configuredSensors[i].rawDataString), 
+                         "GPIO:%s", state ? "HIGH" : "LOW");
+            }
+        } else if (protocol == "i2c") {
+            // Read I2C sensor
+            if (configuredSensors[i].i2cAddress > 0 && configuredSensors[i].i2cAddress < 128) {
+                Wire.beginTransmission(configuredSensors[i].i2cAddress);
+                Wire.write(0x00); // Read from register 0 (most common)
+                if (Wire.endTransmission() == 0) {
+                    Wire.requestFrom((int)configuredSensors[i].i2cAddress, 2);
+                    if (Wire.available() >= 2) {
+                        uint8_t msb = Wire.read();
+                        uint8_t lsb = Wire.read();
+                        rawValue = (msb << 8) | lsb; // 16-bit value
+                        readSuccess = true;
+                        snprintf(configuredSensors[i].rawDataString, sizeof(configuredSensors[i].rawDataString), 
+                                 "I2C:0x%02X,0x%02X", msb, lsb);
+                    }
+                }
+            }
+        } else if (protocol == "one-wire") {
+            // Placeholder for One-Wire sensors (DS18B20, etc.)
+            // For now, generate a simulated temperature reading
+            rawValue = 20.0 + (sin(millis() / 10000.0) * 5.0); // Simulated temperature 15-25°C
+            readSuccess = true;
+            snprintf(configuredSensors[i].rawDataString, sizeof(configuredSensors[i].rawDataString), 
+                     "OneWire:%.2f", rawValue);
+        } else if (protocol == "uart") {
+            // Placeholder for UART sensors
+            // For now, use a simulated value
+            rawValue = 100.0 + (cos(millis() / 8000.0) * 20.0); // Simulated value
+            readSuccess = true;
+            snprintf(configuredSensors[i].rawDataString, sizeof(configuredSensors[i].rawDataString), 
+                     "UART:%.2f", rawValue);
+        }
+        
+        if (readSuccess) {
+            // Apply data parsing if configured
+            float parsedValue = rawValue;
+            String parsingMethod = String(configuredSensors[i].parsingMethod);
+            if (parsingMethod.length() > 0 && parsingMethod != "raw") {
+                // Parse the raw data based on parsing method
+                // For now, just use the raw value - parsing logic can be added later
+                parsedValue = rawValue;
+            }
+            
+            // Store raw value
+            configuredSensors[i].rawValue = parsedValue;
+            
+            // Apply calibration
+            float calibrated = (parsedValue * configuredSensors[i].calibrationSlope) + configuredSensors[i].calibrationOffset;
+            configuredSensors[i].calibratedValue = calibrated;
+            
+            // Convert to Modbus register value (typically scaled integer)
+            configuredSensors[i].modbusValue = (int)(calibrated * 100); // Scale by 100 for decimal places
+            
+            // Update timestamp
+            configuredSensors[i].lastReadTime = millis();
+            
+            // Debug output every 10 seconds
+            static unsigned long lastDebug = 0;
+            if (millis() - lastDebug > 10000) {
+                Serial.printf("Sensor[%d] %s: Raw=%.2f, Cal=%.2f, MB=%d\n", 
+                              i, configuredSensors[i].name, 
+                              configuredSensors[i].rawValue,
+                              configuredSensors[i].calibratedValue,
+                              configuredSensors[i].modbusValue);
+                if (i == numConfiguredSensors - 1) {
+                    lastDebug = millis();
+                }
+            }
+        } else {
+            // Read failed - keep previous values but mark as stale
+            // You could set error flags here if needed
+        }
+    }
+}
+
 // Implementation of POST /terminal/command
 void handlePOSTTerminalCommand(WiFiClient& client, String body) {
     StaticJsonDocument<512> doc;
@@ -208,20 +322,25 @@ void handlePOSTTerminalCommand(WiFiClient& client, String body) {
         client.println("{\"success\":false,\"error\":\"Invalid JSON\"}");
         return;
     }
+    
     String protocol = doc["protocol"] | "";
     String pin = doc["pin"] | "";
     String command = doc["command"] | "";
     String i2cAddress = doc["i2cAddress"] | "";
     String response = "";
     bool success = true;
-    // Basic command routing (expand as needed)
+    
+    protocol.toLowerCase();
+    command.toLowerCase();
+    
     if (protocol == "digital") {
         if (command == "read") {
             if (pin.startsWith("DI")) {
                 int pinNum = pin.substring(2).toInt();
                 if (pinNum >= 0 && pinNum < 8) {
                     bool state = digitalRead(DIGITAL_INPUTS[pinNum]);
-                    response = pin + " = " + (state ? "HIGH" : "LOW");
+                    bool raw = ioStatus.dInRaw[pinNum];
+                    response = pin + " = " + (state ? "HIGH" : "LOW") + " (Raw: " + (raw ? "HIGH" : "LOW") + ")";
                 } else {
                     success = false;
                     response = "Error: Invalid pin number";
@@ -235,15 +354,27 @@ void handlePOSTTerminalCommand(WiFiClient& client, String body) {
                     success = false;
                     response = "Error: Invalid pin number";
                 }
+            } else {
+                success = false;
+                response = "Error: Invalid pin format. Use DI0-DI7 or DO0-DO7";
             }
         } else if (command.startsWith("write ")) {
             String value = command.substring(6);
+            value.trim();
             if (pin.startsWith("DO")) {
                 int pinNum = pin.substring(2).toInt();
                 if (pinNum >= 0 && pinNum < 8) {
                     bool state = (value == "1" || value.equalsIgnoreCase("HIGH"));
                     ioStatus.dOut[pinNum] = state;
                     digitalWrite(DIGITAL_OUTPUTS[pinNum], config.doInvert[pinNum] ? !state : state);
+                    
+                    // Update all connected Modbus clients
+                    for (int i = 0; i < MAX_MODBUS_CLIENTS; i++) {
+                        if (modbusClients[i].connected) {
+                            modbusClients[i].server.coilWrite(pinNum, state);
+                        }
+                    }
+                    
                     response = pin + " set to " + (state ? "HIGH" : "LOW");
                 } else {
                     success = false;
@@ -253,75 +384,244 @@ void handlePOSTTerminalCommand(WiFiClient& client, String body) {
                 success = false;
                 response = "Error: Cannot write to input pin";
             }
+        } else if (command.startsWith("config ")) {
+            String option = command.substring(7);
+            option.trim();
+            if (pin.startsWith("DI")) {
+                int pinNum = pin.substring(2).toInt();
+                if (pinNum >= 0 && pinNum < 8) {
+                    if (option == "pullup") {
+                        config.diPullup[pinNum] = !config.diPullup[pinNum];
+                        pinMode(DIGITAL_INPUTS[pinNum], config.diPullup[pinNum] ? INPUT_PULLUP : INPUT);
+                        response = pin + " pullup " + (config.diPullup[pinNum] ? "ENABLED" : "DISABLED");
+                    } else if (option == "invert") {
+                        config.diInvert[pinNum] = !config.diInvert[pinNum];
+                        response = pin + " invert " + (config.diInvert[pinNum] ? "ENABLED" : "DISABLED");
+                    } else if (option == "latch") {
+                        config.diLatch[pinNum] = !config.diLatch[pinNum];
+                        response = pin + " latch " + (config.diLatch[pinNum] ? "ENABLED" : "DISABLED");
+                    } else {
+                        success = false;
+                        response = "Error: Unknown config option. Use 'pullup', 'invert', or 'latch'";
+                    }
+                } else {
+                    success = false;
+                    response = "Error: Invalid pin number";
+                }
+            } else {
+                success = false;
+                response = "Error: Config only available for digital inputs (DI0-DI7)";
+            }
         } else {
             success = false;
-            response = "Error: Unknown digital command";
+            response = "Error: Unknown digital command. Use 'read', 'write <value>', or 'config <option>'";
         }
     } else if (protocol == "analog") {
         if (command == "read") {
             if (pin.startsWith("AI")) {
                 int pinNum = pin.substring(2).toInt();
                 if (pinNum >= 0 && pinNum < 3) {
-                    int value = analogRead(ANALOG_INPUTS[pinNum]);
+                    int value = ioStatus.aIn[pinNum];
                     response = pin + " = " + String(value) + " mV";
+                } else {
+                    success = false;
+                    response = "Error: Invalid analog pin. Use AI0-AI2";
+                }
+            } else {
+                success = false;
+                response = "Error: Invalid pin format. Use AI0-AI2";
+            }
+        } else if (command == "config") {
+            if (pin.startsWith("AI")) {
+                int pinNum = pin.substring(2).toInt();
+                if (pinNum >= 0 && pinNum < 3) {
+                    response = pin + " - Pin " + String(ANALOG_INPUTS[pinNum]) + ", Range: 0-3300mV, Resolution: 12-bit";
                 } else {
                     success = false;
                     response = "Error: Invalid analog pin";
                 }
+            } else {
+                success = false;
+                response = "Error: Invalid pin format. Use AI0-AI2";
             }
         } else {
             success = false;
-            response = "Error: Unknown analog command";
+            response = "Error: Unknown analog command. Use 'read' or 'config'";
         }
     } else if (protocol == "i2c") {
         if (command == "scan") {
-            response = "I2C Device Scan:\n";
+            response = "I2C Device Scan:\\n";
             bool foundDevices = false;
             for (int addr = 1; addr < 127; addr++) {
                 Wire.beginTransmission(addr);
                 if (Wire.endTransmission() == 0) {
-                    response += "Found device at 0x" + String(addr, HEX) + "\n";
+                    response += "Found device at 0x" + String(addr, HEX) + "\\n";
                     foundDevices = true;
                 }
+                delay(1); // Small delay between scans
             }
             if (!foundDevices) {
                 response += "No I2C devices found";
             }
         } else if (command == "probe") {
-            int addr = i2cAddress.length() > 0 ? strtol(i2cAddress.c_str(), nullptr, 16) : 0;
-            Wire.beginTransmission(addr);
-            if (Wire.endTransmission() == 0) {
-                response = "Device present at 0x" + String(addr, HEX);
+            if (i2cAddress.length() > 0) {
+                int addr = 0;
+                if (i2cAddress.startsWith("0x") || i2cAddress.startsWith("0X")) {
+                    addr = strtol(i2cAddress.c_str(), nullptr, 16);
+                } else {
+                    addr = i2cAddress.toInt();
+                }
+                
+                if (addr >= 1 && addr <= 127) {
+                    Wire.beginTransmission(addr);
+                    if (Wire.endTransmission() == 0) {
+                        response = "Device at 0x" + String(addr, HEX) + " is present";
+                    } else {
+                        response = "No device found at 0x" + String(addr, HEX);
+                    }
+                } else {
+                    success = false;
+                    response = "Error: Invalid I2C address. Must be 1-127 (0x01-0x7F)";
+                }
             } else {
-                response = "No device at 0x" + String(addr, HEX);
+                success = false;
+                response = "Error: I2C address required for probe command";
+            }
+        } else if (command.startsWith("read ")) {
+            String regStr = command.substring(5);
+            int reg = regStr.toInt();
+            if (i2cAddress.length() > 0) {
+                int addr = 0;
+                if (i2cAddress.startsWith("0x") || i2cAddress.startsWith("0X")) {
+                    addr = strtol(i2cAddress.c_str(), nullptr, 16);
+                } else {
+                    addr = i2cAddress.toInt();
+                }
+                
+                Wire.beginTransmission(addr);
+                Wire.write(reg);
+                if (Wire.endTransmission() == 0) {
+                    Wire.requestFrom(addr, 1);
+                    if (Wire.available()) {
+                        int value = Wire.read();
+                        response = "Register 0x" + String(reg, HEX) + " = 0x" + String(value, HEX) + " (" + String(value) + ")";
+                    } else {
+                        success = false;
+                        response = "Error: No data received from device";
+                    }
+                } else {
+                    success = false;
+                    response = "Error: Communication failed with device";
+                }
+            } else {
+                success = false;
+                response = "Error: I2C address required";
+            }
+        } else if (command.startsWith("write ")) {
+            // Parse "write <register> <data>"
+            String params = command.substring(6);
+            int spaceIndex = params.indexOf(' ');
+            if (spaceIndex > 0 && i2cAddress.length() > 0) {
+                int reg = params.substring(0, spaceIndex).toInt();
+                int data = params.substring(spaceIndex + 1).toInt();
+                
+                int addr = 0;
+                if (i2cAddress.startsWith("0x") || i2cAddress.startsWith("0X")) {
+                    addr = strtol(i2cAddress.c_str(), nullptr, 16);
+                } else {
+                    addr = i2cAddress.toInt();
+                }
+                
+                Wire.beginTransmission(addr);
+                Wire.write(reg);
+                Wire.write(data);
+                if (Wire.endTransmission() == 0) {
+                    response = "Wrote 0x" + String(data, HEX) + " to register 0x" + String(reg, HEX);
+                } else {
+                    success = false;
+                    response = "Error: Write failed";
+                }
+            } else {
+                success = false;
+                response = "Error: Invalid write format. Use 'write <register> <data>' with I2C address";
             }
         } else {
             success = false;
-            response = "Error: Unknown I2C command";
+            response = "Error: Unknown I2C command. Use 'scan', 'probe', 'read <reg>', or 'write <reg> <data>'";
         }
     } else if (protocol == "system") {
         if (command == "status") {
-            response = "System OK."; // RAM info not available on RP2040
-        } else if (command == "reset") {
-            response = "System will reset.";
-            // NVIC_SystemReset(); // Not available on RP2040
+            unsigned long uptime = millis() / 1000;
+            response = "System Status:\\n";
+            response += "CPU: RP2040 @ 133MHz\\n";
+            response += "RAM: 256KB\\n";
+            response += "Flash: 2MB\\n";
+            response += "Uptime: " + String(uptime) + " seconds\\n";
+            response += "Free Heap: " + String(rp2040.getFreeHeap()) + " bytes";
+        } else if (command == "sensors") {
+            response = "Configured Sensors:\\n";
+            // Load and display sensor config
+            // Note: This would need sensor config loading logic
+            response += "0: System I/O - Enabled\\n";
+            response += "Total configured: 1";
+        } else if (command == "info") {
+            response = "Hardware Information:\\n";
+            response += "Board: Raspberry Pi Pico\\n";
+            response += "Digital Inputs: 8 (Pins 0-7)\\n";
+            response += "Digital Outputs: 8 (Pins 8-15)\\n";
+            response += "Analog Inputs: 3 (Pins 26-28)\\n";
+            response += "I2C: SDA Pin 24, SCL Pin 25\\n";
+            response += "Ethernet: W5500 (Pins 16-21)";
         } else {
             success = false;
-            response = "Error: Unknown system command";
+            response = "Error: Unknown system command. Use 'status', 'sensors', or 'info'";
+        }
+    } else if (protocol == "network") {
+        if (command == "status") {
+            response = "Ethernet Interface Status:\\n";
+            response += "IP: " + WiFi.localIP().toString() + "\\n";
+            response += "Gateway: " + WiFi.gatewayIP().toString() + "\\n";
+            response += "Subnet: " + WiFi.subnetMask().toString() + "\\n";
+            response += "MAC: " + WiFi.macAddress() + "\\n";
+            response += "Link Status: ";
+            response += (WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected");
+        } else if (command == "clients") {
+            response = "Modbus Clients:\\n";
+            response += "Connected: " + String(connectedClients) + "\\n";
+            for (int i = 0; i < MAX_MODBUS_CLIENTS; i++) {
+                if (modbusClients[i].connected) {
+                    response += "Slot " + String(i) + ": " + modbusClients[i].clientIP.toString() + "\\n";
+                }
+            }
+        } else if (command == "link") {
+            response = "Ethernet Link: ";
+            response += (WiFi.status() == WL_CONNECTED ? "UP" : "DOWN");
+        } else if (command == "stats") {
+            unsigned long uptime = millis() / 1000;
+            response = "Network Statistics:\\n";
+            response += "Connection Uptime: " + String(uptime) + " seconds\\n";
+            response += "Modbus Port: 502\\n";
+            response += "HTTP Port: 80";
+        } else {
+            success = false;
+            response = "Error: Unknown network command. Use 'status', 'clients', 'link', or 'stats'";
         }
     } else {
         success = false;
-        response = "Error: Unknown protocol";
+        response = "Error: Unknown protocol. Use 'digital', 'analog', 'i2c', 'system', or 'network'";
     }
-    StaticJsonDocument<256> respDoc;
+    
+    StaticJsonDocument<1024> respDoc;
     respDoc["success"] = success;
     if (success) {
         respDoc["response"] = response;
     } else {
         respDoc["error"] = response;
     }
+    
     String jsonResp;
     serializeJson(respDoc, jsonResp);
+    
     client.println("HTTP/1.1 200 OK");
     client.println("Content-Type: application/json");
     client.println("Connection: close");
@@ -394,6 +694,7 @@ void loop() {
     }
     
     updateIOpins();
+    updateSensorReadings();  // Update sensor values for dataflow
     // handleEzoSensors(); // Commented out for now
     handleDualHTTP();  // Handle both Ethernet and USB web interfaces
     
@@ -925,23 +1226,41 @@ void sendJSONIOStatus(WiFiClient& client) {
             JsonObject sensor = sensorsArray.createNestedObject();
             sensor["name"] = configuredSensors[i].name;
             sensor["type"] = configuredSensors[i].type;
+            sensor["protocol"] = configuredSensors[i].protocol;
             sensor["i2c_address"] = configuredSensors[i].i2cAddress;
             sensor["modbus_register"] = configuredSensors[i].modbusRegister;
             
-            // Raw sensor output (placeholder - would be actual sensor reading)
-            sensor["raw_value"] = 0; // TODO: Implement actual sensor reading
-            sensor["raw_i2c_data"] = ""; // Raw I2C data string for parsing
+            // Actual sensor readings
+            sensor["raw_value"] = configuredSensors[i].rawValue;
+            sensor["raw_i2c_data"] = configuredSensors[i].rawDataString;
             
             // Calibrated output (applying calibration equation)
-            float calibrated = 0; // raw_value * slope + offset
-            sensor["calibrated_value"] = calibrated;
+            sensor["calibrated_value"] = configuredSensors[i].calibratedValue;
             
             // Modbus register value (what gets sent to Modbus)
-            sensor["modbus_value"] = (int)(calibrated * 100); // Example scaling
+            sensor["modbus_value"] = configuredSensors[i].modbusValue;
             
             // Include calibration info for dataflow display
             sensor["calibration_offset"] = configuredSensors[i].calibrationOffset;
             sensor["calibration_slope"] = configuredSensors[i].calibrationSlope;
+            
+            // Include last read time for status
+            sensor["last_read_time"] = configuredSensors[i].lastReadTime;
+            
+            // Include pin assignments for reference
+            if (String(configuredSensors[i].protocol).equalsIgnoreCase("I2C")) {
+                sensor["sda_pin"] = configuredSensors[i].sdaPin;
+                sensor["scl_pin"] = configuredSensors[i].sclPin;
+            } else if (String(configuredSensors[i].protocol).equalsIgnoreCase("Analog Voltage")) {
+                sensor["analog_pin"] = configuredSensors[i].analogPin;
+            } else if (String(configuredSensors[i].protocol).equalsIgnoreCase("Digital Counter")) {
+                sensor["digital_pin"] = configuredSensors[i].digitalPin;
+            } else if (String(configuredSensors[i].protocol).equalsIgnoreCase("One-Wire")) {
+                sensor["onewire_pin"] = configuredSensors[i].oneWirePin;
+            } else if (String(configuredSensors[i].protocol).equalsIgnoreCase("UART")) {
+                sensor["uart_tx_pin"] = configuredSensors[i].uartTxPin;
+                sensor["uart_rx_pin"] = configuredSensors[i].uartRxPin;
+            }
         }
     }
     

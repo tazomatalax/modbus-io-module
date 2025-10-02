@@ -2215,3 +2215,147 @@ button:hover {
     border-color: var(--primary-color);
     box-shadow: 0 0 0 2px rgba(33, 150, 243, 0.2);
 }
+
+/* Sensor Dataflow Display Styles */
+.sensors-flow-container {
+    margin-top: 10px;
+}
+
+.no-sensors {
+    color: #666;
+    font-style: italic;
+    padding: 10px;
+    text-align: center;
+    background-color: #f9f9f9;
+    border-radius: 4px;
+}
+
+.sensor-dataflow-item {
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    padding: 15px;
+    margin-bottom: 10px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.sensor-dataflow-item.stale-data {
+    background: #fff5f5;
+    border-color: #ffcccb;
+}
+
+.sensor-name {
+    font-weight: bold;
+    font-size: 16px;
+    color: #333;
+    margin-bottom: 5px;
+}
+
+.sensor-details {
+    font-size: 12px;
+    color: #666;
+    margin-bottom: 10px;
+}
+
+.raw-data-string {
+    font-size: 11px;
+    color: #888;
+    font-family: monospace;
+    background: #f5f5f5;
+    padding: 4px 8px;
+    border-radius: 3px;
+    margin-bottom: 10px;
+}
+
+.dataflow-chain {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.dataflow-step {
+    background: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    padding: 8px 12px;
+    text-align: center;
+    min-width: 80px;
+    flex: 1;
+}
+
+.dataflow-step.raw-step {
+    background: #e3f2fd;
+    border-color: #90caf9;
+}
+
+.dataflow-step.calibrated-step {
+    background: #f3e5f5;
+    border-color: #ce93d8;
+}
+
+.dataflow-step.modbus-step {
+    background: #e8f5e8;
+    border-color: #a5d6a7;
+}
+
+.step-label {
+    font-size: 11px;
+    color: #666;
+    font-weight: bold;
+    margin-bottom: 2px;
+    text-transform: uppercase;
+}
+
+.step-value {
+    font-size: 14px;
+    font-weight: bold;
+    color: #333;
+}
+
+.calibration-info {
+    font-size: 10px;
+    color: #888;
+    margin-top: 2px;
+}
+
+.dataflow-arrow {
+    font-weight: bold;
+    color: #666;
+    font-size: 16px;
+}
+
+.stale-warning {
+    color: #ff6b35;
+    font-size: 12px;
+    margin-top: 8px;
+    text-align: center;
+}
+
+.protocol-category {
+    margin-bottom: 20px;
+}
+
+.protocol-category h4 {
+    margin: 0 0 10px 0;
+    color: #444;
+    border-bottom: 1px solid #e0e0e0;
+    padding-bottom: 5px;
+}
+
+/* Mobile responsive dataflow */
+@media (max-width: 768px) {
+    .dataflow-chain {
+        flex-direction: column;
+        gap: 5px;
+    }
+    
+    .dataflow-arrow {
+        transform: rotate(90deg);
+    }
+    
+    .dataflow-step {
+        min-width: unset;
+        width: 100%;
+    }
+}

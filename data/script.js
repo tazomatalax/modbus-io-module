@@ -1319,7 +1319,11 @@ window.updateIOStatus = function updateIOStatus() {
         .then(response => response.json())
         .then(data => {
             currentIOStatus = data;
-            // Update any UI elements that depend on IO status
+            
+            // Update sensor dataflow display
+            updateSensorDataFlow(data.configured_sensors || []);
+            
+            // Update any other UI elements that depend on IO status
             console.log('IO Status updated:', data);
         })
         .catch(error => {
@@ -1327,6 +1331,109 @@ window.updateIOStatus = function updateIOStatus() {
             showToast('Failed to fetch IO status', 'error');
         });
 };
+
+// Function to update sensor dataflow display
+function updateSensorDataFlow(sensors) {
+    // Clear all sensor flow containers
+    const containers = [
+        'i2c-sensors-flow', 
+        'uart-sensors-flow', 
+        'analog-sensors-flow', 
+        'onewire-sensors-flow', 
+        'digital-sensors-flow'
+    ];
+    
+    containers.forEach(containerId => {
+        const container = document.getElementById(containerId);
+        if (container) {
+            container.innerHTML = '';
+        }
+    });
+    
+    // Group sensors by protocol
+    const sensorsByProtocol = {
+        'I2C': [],
+        'UART': [],
+        'Analog Voltage': [],
+        'One-Wire': [],
+        'Digital Counter': []
+    };
+    
+    sensors.forEach(sensor => {
+        const protocol = sensor.protocol || 'Unknown';
+        if (sensorsByProtocol[protocol]) {
+            sensorsByProtocol[protocol].push(sensor);
+        }
+    });
+    
+    // Update each protocol section
+    updateProtocolSensorFlow('I2C', sensorsByProtocol['I2C'], 'i2c-sensors-flow');
+    updateProtocolSensorFlow('UART', sensorsByProtocol['UART'], 'uart-sensors-flow');
+    updateProtocolSensorFlow('Analog Voltage', sensorsByProtocol['Analog Voltage'], 'analog-sensors-flow');
+    updateProtocolSensorFlow('One-Wire', sensorsByProtocol['One-Wire'], 'onewire-sensors-flow');
+    updateProtocolSensorFlow('Digital Counter', sensorsByProtocol['Digital Counter'], 'digital-sensors-flow');
+}
+
+// Function to update sensor flow for a specific protocol
+function updateProtocolSensorFlow(protocol, sensors, containerId) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    
+    if (sensors.length === 0) {
+        container.innerHTML = '<div class="no-sensors">No ' + protocol + ' sensors configured</div>';
+        return;
+    }
+    
+    sensors.forEach(sensor => {
+        const sensorDiv = document.createElement('div');
+        sensorDiv.className = 'sensor-dataflow-item';
+        
+        const now = Date.now();
+        const lastRead = sensor.last_read_time || 0;
+        const staleData = (now - lastRead) > 10000; // More than 10 seconds old
+        
+        let rawDataDisplay = '';
+        if (sensor.raw_i2c_data && sensor.raw_i2c_data.length > 0) {
+            rawDataDisplay = `<div class="raw-data-string">Raw Data: ${sensor.raw_i2c_data}</div>`;
+        }
+        
+        sensorDiv.innerHTML = `
+            <div class="sensor-name">${sensor.name} (${sensor.type})</div>
+            <div class="sensor-details">
+                ${protocol === 'I2C' ? `Address: 0x${sensor.i2c_address.toString(16).toUpperCase().padStart(2, '0')}` : ''}
+                ${sensor.sda_pin !== undefined ? `SDA: ${sensor.sda_pin}, SCL: ${sensor.scl_pin}` : ''}
+                ${sensor.analog_pin !== undefined ? `Pin: ${sensor.analog_pin}` : ''}
+                ${sensor.digital_pin !== undefined ? `Pin: ${sensor.digital_pin}` : ''}
+                ${sensor.onewire_pin !== undefined ? `Pin: ${sensor.onewire_pin}` : ''}
+                ${sensor.uart_tx_pin !== undefined ? `TX: ${sensor.uart_tx_pin}, RX: ${sensor.uart_rx_pin}` : ''}
+            </div>
+            ${rawDataDisplay}
+            <div class="dataflow-chain ${staleData ? 'stale-data' : ''}">
+                <div class="dataflow-step raw-step">
+                    <div class="step-label">Raw Value</div>
+                    <div class="step-value">${sensor.raw_value !== undefined ? sensor.raw_value.toFixed(2) : 'N/A'}</div>
+                </div>
+                <div class="dataflow-arrow">→</div>
+                <div class="dataflow-step calibrated-step">
+                    <div class="step-label">Calibrated</div>
+                    <div class="step-value">${sensor.calibrated_value !== undefined ? sensor.calibrated_value.toFixed(2) : 'N/A'}</div>
+                    <div class="calibration-info">
+                        Offset: ${sensor.calibration_offset || 0}, 
+                        Slope: ${sensor.calibration_slope || 1}
+                    </div>
+                </div>
+                <div class="dataflow-arrow">→</div>
+                <div class="dataflow-step modbus-step">
+                    <div class="step-label">Modbus Reg ${sensor.modbus_register}</div>
+                    <div class="step-value">${sensor.modbus_value !== undefined ? sensor.modbus_value : 'N/A'}</div>
+                </div>
+            </div>
+            ${staleData ? '<div class="stale-warning">⚠️ Data may be stale</div>' : ''}
+        `;
+        
+        container.appendChild(sensorDiv);
+    });
+}
 
 // Load sensor configuration from device
 window.loadSensorConfig = function loadSensorConfig() {
@@ -1748,7 +1855,7 @@ function toggleWatch() {
                 i2cAddress: document.getElementById('terminal-i2c-address').value
             };
             
-            fetch('/terminal/watch', {
+            fetch('/terminal/command', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
@@ -2183,3 +2290,23 @@ window.saveDataFlowCalibration = function saveDataFlowCalibration() {
         alert('Error saving calibration: ' + error.message);
     });
 }
+
+// Initialize periodic updates when page loads
+document.addEventListener('DOMContentLoaded', function() {
+    // Initial load
+    updateIOStatus();
+    loadSensorConfig();
+    loadIOData();
+    
+    // Set up periodic updates for sensor dataflow
+    setInterval(function() {
+        updateIOStatus(); // Updates sensor dataflow every 3 seconds
+    }, 3000);
+    
+    // Set up periodic updates for IO status (digital/analog pins)
+    setInterval(function() {
+        loadIOData(); // Updates IO pin status every 2 seconds
+    }, 2000);
+    
+    console.log('Periodic updates initialized');
+});
