@@ -131,6 +131,10 @@ void setup() {
     Serial.println("Loading sensor configuration...");
     delay(500);
     loadSensorConfig();
+    Serial.printf("Loaded %d sensors\n", numConfiguredSensors);
+    for (int i = 0; i < numConfiguredSensors; i++) {
+        Serial.printf("Sensor[%d]: %s (%s) - %s\n", i, configuredSensors[i].name, configuredSensors[i].type, configuredSensors[i].enabled ? "ENABLED" : "DISABLED");
+    }
 
     Serial.println("Setting pin modes...");
     setPinModes();
@@ -146,8 +150,23 @@ void setup() {
     setupModbus();
     setupWebServer();
 
-    // Initialize I2C bus if needed
-    // Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN); // Uncomment if using custom I2C pins
+    // Initialize I2C bus with default pins (GP4=SDA, GP5=SCL)
+    Wire.begin();
+    Serial.println("I2C initialized on default pins (GP4=SDA, GP5=SCL)");
+    
+    // Scan for I2C devices at startup
+    Serial.println("Scanning I2C bus...");
+    bool foundDevice = false;
+    for (int addr = 1; addr < 127; addr++) {
+        Wire.beginTransmission(addr);
+        if (Wire.endTransmission() == 0) {
+            Serial.printf("I2C device found at address 0x%02X\n", addr);
+            foundDevice = true;
+        }
+    }
+    if (!foundDevice) {
+        Serial.println("No I2C devices found");
+    }
 
     // Start watchdog
     rp2040.wdt_begin(WDT_TIMEOUT);
@@ -199,12 +218,26 @@ void handlePOSTSensorCalibration(WiFiClient& client, String body) {
 // Function to read sensor values based on protocol and configuration
 void updateSensorReadings() {
     static unsigned long lastSensorUpdate = 0;
+    static unsigned long lastDebugOutput = 0;
     const unsigned long SENSOR_UPDATE_INTERVAL = 1000; // Update every 1 second
     
     if (millis() - lastSensorUpdate < SENSOR_UPDATE_INTERVAL) {
         return; // Too soon for next update
     }
     lastSensorUpdate = millis();
+    
+    // Debug output every 5 seconds
+    if (millis() - lastDebugOutput > 5000) {
+        Serial.printf("updateSensorReadings() called - %d sensors configured\n", numConfiguredSensors);
+        lastDebugOutput = millis();
+    }
+    
+    // Debug: Show that sensor reading is being called
+    static unsigned long lastFunctionDebug = 0;
+    if (millis() - lastFunctionDebug > 10000) { // Every 10 seconds
+        Serial.printf("[%lu] updateSensorReadings() called - %d sensors configured\n", millis(), numConfiguredSensors);
+        lastFunctionDebug = millis();
+    }
     
     for (int i = 0; i < numConfiguredSensors; i++) {
         if (!configuredSensors[i].enabled) continue;
@@ -238,18 +271,40 @@ void updateSensorReadings() {
         } else if (protocol == "i2c") {
             // Read I2C sensor
             if (configuredSensors[i].i2cAddress > 0 && configuredSensors[i].i2cAddress < 128) {
+                Serial.printf("Reading I2C sensor %s at address 0x%02X...\n", 
+                              configuredSensors[i].name, configuredSensors[i].i2cAddress);
+                
                 Wire.beginTransmission(configuredSensors[i].i2cAddress);
-                Wire.write(0x00); // Read from register 0 (most common)
-                if (Wire.endTransmission() == 0) {
-                    Wire.requestFrom((int)configuredSensors[i].i2cAddress, 2);
-                    if (Wire.available() >= 2) {
-                        uint8_t msb = Wire.read();
-                        uint8_t lsb = Wire.read();
-                        rawValue = (msb << 8) | lsb; // 16-bit value
-                        readSuccess = true;
-                        snprintf(configuredSensors[i].rawDataString, sizeof(configuredSensors[i].rawDataString), 
-                                 "I2C:0x%02X,0x%02X", msb, lsb);
+                byte error = Wire.endTransmission();
+                
+                if (error == 0) {
+                    // Device is present, try to read from it
+                    Wire.beginTransmission(configuredSensors[i].i2cAddress);
+                    Wire.write(0x00); // Read from register 0 (most common)
+                    error = Wire.endTransmission();
+                    
+                    if (error == 0) {
+                        int bytesRequested = Wire.requestFrom((int)configuredSensors[i].i2cAddress, 2);
+                        Serial.printf("Requested %d bytes from I2C device\n", bytesRequested);
+                        
+                        if (Wire.available() >= 2) {
+                            uint8_t msb = Wire.read();
+                            uint8_t lsb = Wire.read();
+                            rawValue = (msb << 8) | lsb; // 16-bit value
+                            readSuccess = true;
+                            snprintf(configuredSensors[i].rawDataString, sizeof(configuredSensors[i].rawDataString), 
+                                     "I2C:0x%02X,0x%02X", msb, lsb);
+                            Serial.printf("I2C read successful: MSB=0x%02X, LSB=0x%02X, Value=%.0f\n", 
+                                          msb, lsb, rawValue);
+                        } else {
+                            Serial.printf("I2C read failed: only %d bytes available\n", Wire.available());
+                        }
+                    } else {
+                        Serial.printf("I2C write to register failed with error %d\n", error);
                     }
+                } else {
+                    Serial.printf("I2C device at 0x%02X not responding (error %d)\n", 
+                                  configuredSensors[i].i2cAddress, error);
                 }
             }
         } else if (protocol == "one-wire") {
@@ -291,14 +346,15 @@ void updateSensorReadings() {
             // Update timestamp
             configuredSensors[i].lastReadTime = millis();
             
-            // Debug output every 10 seconds
+            // Debug output every 5 seconds
             static unsigned long lastDebug = 0;
-            if (millis() - lastDebug > 10000) {
-                Serial.printf("Sensor[%d] %s: Raw=%.2f, Cal=%.2f, MB=%d\n", 
-                              i, configuredSensors[i].name, 
+            if (millis() - lastDebug > 5000) {
+                Serial.printf("[%lu] Sensor[%d] %s (%s): Raw=%.2f, Cal=%.2f, MB=%d, Data=%s\n", 
+                              millis(), i, configuredSensors[i].name, configuredSensors[i].protocol,
                               configuredSensors[i].rawValue,
                               configuredSensors[i].calibratedValue,
-                              configuredSensors[i].modbusValue);
+                              configuredSensors[i].modbusValue,
+                              configuredSensors[i].rawDataString);
                 if (i == numConfiguredSensors - 1) {
                     lastDebug = millis();
                 }

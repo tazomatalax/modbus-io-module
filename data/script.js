@@ -1401,7 +1401,7 @@ function updateProtocolSensorFlow(protocol, sensors, containerId) {
             <div class="sensor-name">${sensor.name} (${sensor.type})</div>
             <div class="sensor-details">
                 ${protocol === 'I2C' ? `Address: 0x${sensor.i2c_address.toString(16).toUpperCase().padStart(2, '0')}` : ''}
-                ${sensor.sda_pin !== undefined ? `SDA: ${sensor.sda_pin}, SCL: ${sensor.scl_pin}` : ''}
+                ${sensor.sda_pin !== undefined ? `SDA: GP${sensor.sda_pin}, SCL: GP${sensor.scl_pin}` : ''}
                 ${sensor.analog_pin !== undefined ? `Pin: ${sensor.analog_pin}` : ''}
                 ${sensor.digital_pin !== undefined ? `Pin: ${sensor.digital_pin}` : ''}
                 ${sensor.onewire_pin !== undefined ? `Pin: ${sensor.onewire_pin}` : ''}
@@ -1655,88 +1655,74 @@ window.updateTerminalInterface = function updateTerminalInterface() {
         
         case 'analog':
             for (let i = 0; i < 3; i++) {
-                pinSelector.innerHTML += `<option value="AI${i}">AI${i} - Analog Input ${i}</option>`;
-            }
-            commandInput.placeholder = 'Commands: read, calibrate, range, simulate';
-            break;
-            
-        case 'i2c':
-            // Show only pins with I2C sensors configured
-            if (sensorConfigData && sensorConfigData.length > 0) {
-                sensorConfigData.forEach((sensor, index) => {
-                    if (sensor.protocol === 'I2C' && sensor.enabled) {
-                        pinSelector.innerHTML += `<option value="${sensor.sdaPin || 24}">${sensor.name} (SDA:${sensor.sdaPin || 24}, SCL:${sensor.sclPin || 25})</option>`;
-                    }
-                });
-            }
-            if (pinSelector.children.length === 1) {
-                pinSelector.innerHTML += '<option value="24">No I2C sensors configured</option>';
-            }
-            commandInput.placeholder = 'Commands: scan, read, write, detect, status';
-            break;
-            
-        case 'uart':
-            // Show only pins with UART sensors configured
-            if (sensorConfigData && sensorConfigData.length > 0) {
-                sensorConfigData.forEach((sensor, index) => {
-                    if (sensor.protocol === 'UART' && sensor.enabled) {
-                        pinSelector.innerHTML += `<option value="${sensor.txPin || 0}">${sensor.name} (TX:${sensor.txPin || 0}, RX:${sensor.rxPin || 1})</option>`;
-                    }
-                });
-            }
-            if (pinSelector.children.length === 1) {
-                pinSelector.innerHTML += '<option value="0">No UART sensors configured</option>';
-            }
-            commandInput.placeholder = 'Commands: init, send, read, baudrate, loopback, status';
-            break;
-            
-        case 'onewire':
-            // Show only pins with One-Wire sensors configured
-            if (sensorConfigData && sensorConfigData.length > 0) {
-                sensorConfigData.forEach((sensor, index) => {
-                    if (sensor.protocol === 'One-Wire' && sensor.enabled) {
-                        pinSelector.innerHTML += `<option value="${sensor.digitalPin || 0}">${sensor.name} (Pin ${sensor.digitalPin || 0})</option>`;
-                    }
-                });
-            }
-            if (pinSelector.children.length === 1) {
-                pinSelector.innerHTML += '<option value="0">No One-Wire sensors configured</option>';
-            }
-            commandInput.placeholder = 'Commands: scan, read, search, power, reset';
-            break;
-            
-        case 'analog':
-            for (let i = 0; i < 3; i++) {
                 pinSelector.innerHTML += `<option value="AI${i}">AI${i} - Analog Input ${i} (Pin ${26 + i})</option>`;
             }
             commandInput.placeholder = 'Commands: read, config';
             break;
             
         case 'i2c':
-            pinSelector.innerHTML += '<option value="I2C0">I2C0 - SDA: Pin 24, SCL: Pin 25</option>';
-            commandInput.placeholder = 'Commands: scan, read [reg], write [reg] [data], probe';
+            // Always provide independent I2C access options
+            pinSelector.innerHTML += '<option value="I2C0">I2C0 - SDA: GP4 (Pin 6), SCL: GP5 (Pin 7)</option>';
+            pinSelector.innerHTML += '<option value="Any">Any - For scan/probe operations</option>';
+            
+            // Add configured I2C sensors as additional options
+            if (sensorConfigData && sensorConfigData.length > 0) {
+                sensorConfigData.forEach((sensor, index) => {
+                    if (sensor.protocol === 'I2C' && sensor.enabled) {
+                        pinSelector.innerHTML += `<option value="${sensor.name}">${sensor.name} (SDA:${sensor.sdaPin || 4}, SCL:${sensor.sclPin || 5}) - 0x${sensor.i2cAddress.toString(16).toUpperCase()}</option>`;
+                    }
+                });
+            }
+            commandInput.placeholder = 'Commands: scan, probe, read [reg], write [reg] [data]';
             break;
             
         case 'uart':
-            pinSelector.innerHTML += '<option value="UART0">UART0 - TX: Pin 0, RX: Pin 1</option>';
-            pinSelector.innerHTML += '<option value="UART1">UART1 - TX: Pin 4, RX: Pin 5</option>';
-            commandInput.placeholder = 'Commands: send [data], config [baud], read';
+            // Always provide independent UART access
+            pinSelector.innerHTML += '<option value="UART0">UART0 - TX: GP0 (Pin 1), RX: GP1 (Pin 2)</option>';
+            pinSelector.innerHTML += '<option value="UART1">UART1 - TX: GP4 (Pin 6), RX: GP5 (Pin 7)</option>';
+            
+            // Add configured UART sensors as additional options
+            if (sensorConfigData && sensorConfigData.length > 0) {
+                sensorConfigData.forEach((sensor, index) => {
+                    if (sensor.protocol === 'UART' && sensor.enabled) {
+                        pinSelector.innerHTML += `<option value="${sensor.name}">${sensor.name} (TX:${sensor.uartTxPin || 0}, RX:${sensor.uartRxPin || 1})</option>`;
+                    }
+                });
+            }
+            commandInput.placeholder = 'Commands: init, send [data], read, baudrate [rate], status';
             break;
             
-        case 'network':
-            pinSelector.innerHTML += '<option value="ETH">Ethernet Interface - W5500</option>';
-            pinSelector.innerHTML += '<option value="ETH_PHY">Ethernet PHY Status</option>';
-            pinSelector.innerHTML += '<option value="ETH_PINS">Ethernet Pins (MISO:16, CS:17, SCK:18, MOSI:19, RST:20, IRQ:21)</option>';
-            pinSelector.innerHTML += '<option value="MODBUS">Modbus TCP Server</option>';
-            pinSelector.innerHTML += '<option value="MODBUS_CLIENTS">Connected Modbus Clients</option>';
-            commandInput.placeholder = 'Commands: status, clients, reset, config, link, stats';
+        case 'onewire':
+            // Provide common One-Wire pin options
+            pinSelector.innerHTML += '<option value="OW0">One-Wire Pin 2 (GP2)</option>';
+            pinSelector.innerHTML += '<option value="OW1">One-Wire Pin 3 (GP3)</option>';
+            
+            // Add configured One-Wire sensors
+            if (sensorConfigData && sensorConfigData.length > 0) {
+                sensorConfigData.forEach((sensor, index) => {
+                    if (sensor.protocol === 'One-Wire' && sensor.enabled) {
+                        pinSelector.innerHTML += `<option value="${sensor.name}">${sensor.name} (Pin ${sensor.oneWirePin || 2})</option>`;
+                    }
+                });
+            }
+            commandInput.placeholder = 'Commands: scan, read, search, reset';
             break;
             
         case 'system':
-            pinSelector.innerHTML += '<option value="CPU">CPU Status</option>';
-            pinSelector.innerHTML += '<option value="MEMORY">Memory Usage</option>';
-            pinSelector.innerHTML += '<option value="SENSORS">All Sensors</option>';
-            commandInput.placeholder = 'Commands: status, reset, info, sensors';
+            pinSelector.innerHTML += '<option value="System">System Information</option>';
+            commandInput.placeholder = 'Commands: status, info, sensors';
+            break;
+            
+        case 'network':
+            pinSelector.innerHTML += '<option value="Ethernet Interface">Ethernet Interface</option>';
+            pinSelector.innerHTML += '<option value="Modbus TCP Server">Modbus TCP Server</option>';
+            pinSelector.innerHTML += '<option value="Connected Modbus Clients">Connected Modbus Clients</option>';
+            commandInput.placeholder = 'Commands: status, clients, link, stats';
+            break;
+            
+        default:
+            pinSelector.innerHTML += '<option value="Any">Any</option>';
+            commandInput.placeholder = 'Enter command...';
             break;
     }
 }
@@ -1760,13 +1746,13 @@ function sendTerminalCommand() {
         return;
     }
     
-    if (!pin && protocol !== 'system') {
+    if (!pin && protocol !== 'system' && protocol !== 'network') {
         addTerminalOutput('Error: No pin/port selected', 'error');
         return;
     }
     
-    // Check for I2C address - but not required for scan command
-    if (protocol === 'i2c' && !i2cAddress && command.toLowerCase() !== 'scan') {
+    // Check for I2C address - but not required for scan command or when using "Any"
+    if (protocol === 'i2c' && !i2cAddress && command.toLowerCase() !== 'scan' && pin !== 'Any') {
         addTerminalOutput('Error: I2C address required (except for scan command)', 'error');
         return;
     }
@@ -2291,12 +2277,25 @@ window.saveDataFlowCalibration = function saveDataFlowCalibration() {
     });
 }
 
+// Add missing loadIOConfig function
+window.loadIOConfig = function loadIOConfig() {
+    fetch('/ioconfig')
+        .then(response => response.json())
+        .then(data => {
+            console.log('IO Config loaded:', data);
+            // Update UI elements with config data if needed
+        })
+        .catch(error => {
+            console.error('Error loading IO config:', error);
+        });
+};
+
 // Initialize periodic updates when page loads
 document.addEventListener('DOMContentLoaded', function() {
     // Initial load
     updateIOStatus();
     loadSensorConfig();
-    loadIOData();
+    loadIOConfig();
     
     // Set up periodic updates for sensor dataflow
     setInterval(function() {
@@ -2305,7 +2304,7 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Set up periodic updates for IO status (digital/analog pins)
     setInterval(function() {
-        loadIOData(); // Updates IO pin status every 2 seconds
+        updateIOStatus(); // Updates IO pin status every 2 seconds
     }, 2000);
     
     console.log('Periodic updates initialized');
