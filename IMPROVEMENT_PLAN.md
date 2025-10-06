@@ -1,5 +1,60 @@
 # Modbus IO Module – Improvement Plan
 
+_Last updated: 2025-10-06_
+
+## 2025-10-06 - Sensor Configuration and Bus Management Improvements
+
+During testing of sensor configuration through the web UI, several areas for improvement have been identified:
+
+### 1. Bus/Pin Polling Frequency Management
+- Need to implement polling frequency configuration at the bus/pin level
+- Individual sensor measurement commands for generic I2C and OneWire sensors
+- Strategy for avoiding timing conflicts on shared buses
+
+### 2. Bus Conflict Prevention Strategy
+#### A. Strict Bus Sequencing
+- **1-Wire Protocol**:
+  - Implement proper bus reset sequence (0xF0)
+  - Use MATCH ROM (0x55) + 64-bit serial for specific devices
+  - Use SKIP ROM (0xCC) + CONVERT T (0x44) for simultaneous polling
+- **I2C Protocol**:
+  - Address conflict management
+  - Support for TCA9548A multiplexer
+  - Sequential device addressing with response waiting
+- **UART Protocol**:
+  - Separate TX/RX pin management
+  - Hardware/software UART multiplexer support
+
+#### B. Non-blocking Sensor Management
+Implement asynchronous polling approach:
+1. Request: Send measurement initiation command
+2. Wait: Non-blocking wait while polling other sensors
+3. Read: Get results on subsequent polling loop pass
+
+#### C. Fault Tolerance
+- Data validation before calibration
+- CRC checking for 1-Wire
+- I2C bus recovery routine
+- Sensor timeout implementation
+
+### 3. Terminal Enhancements
+- Add live command/response watching in web UI terminal
+- Show sensor communication sequence in real-time
+- Implement "Send to Config" button functionality
+- Add digital pin state scanning (pulled up/latched)
+- Add pin state display in terminal dropdowns
+
+### 4. Data Extraction Process
+- Fix data byte and checksum byte identification
+- Improve terminal-to-config data string transfer
+- Enhance data parsing configuration modal
+- Add checksum validation in parsing process
+
+### 5. Digital Pin Management
+- Add comprehensive pin state scanning
+- Show pin states in terminal dropdowns
+- Match functionality to I2C pin scanning interface
+
 _Last updated: 2025-09-24_
 existing features of the web ui to keep:
 - header showing modbus client status.

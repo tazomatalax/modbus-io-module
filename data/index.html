@@ -365,6 +365,11 @@
                                 </select>
                             </div>
                             <div class="form-group">
+                                <label for="sensor-i2c-polling">Bus Polling Interval (ms)</label>
+                                <input type="number" id="sensor-i2c-polling" min="100" max="60000" value="1000" placeholder="1000">
+                                <small class="form-help">How often to poll all sensors on this I2C bus</small>
+                            </div>
+                            <div class="form-group">
                                 <label for="sensor-i2c-address">I2C Address (Hex)</label>
                                 <input type="text" id="sensor-i2c-address" pattern="^(0x)?[0-9A-Fa-f]{1,2}$" placeholder="0x48" required>
                                 <small class="form-help">Use 0x00 for simulated sensors</small>
@@ -380,6 +385,11 @@
                                 <select id="sensor-uart-pins">
                                     <option value="">Select UART pins...</option>
                                 </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="sensor-uart-polling">Bus Polling Interval (ms)</label>
+                                <input type="number" id="sensor-uart-polling" min="100" max="60000" value="1000" placeholder="1000">
+                                <small class="form-help">How often to poll all sensors on this UART bus</small>
                             </div>
                             <div class="form-group">
                                 <label for="sensor-uart-baud">Baud Rate</label>
@@ -469,6 +479,11 @@
                                     <option value="">Select One-Wire pin...</option>
                                 </select>
                             </div>
+                            <div class="form-group">
+                                <label for="sensor-onewire-polling">Bus Polling Interval (ms)</label>
+                                <input type="number" id="sensor-onewire-polling" min="100" max="60000" value="1000" placeholder="1000">
+                                <small class="form-help">How often to poll all sensors on this One-Wire bus</small>
+                            </div>
                         </div>
                         
                         <div class="form-row">
@@ -519,6 +534,21 @@
                         <input type="checkbox" id="sensor-enabled" checked>
                         <span class="checkbox-text">Enable sensor</span>
                     </label>
+                </div>
+                
+                <!-- Sensor Command Configuration -->
+                <div class="form-section" id="sensor-command-section" style="display: none;">
+                    <h4>Sensor Command Configuration</h4>
+                    <div class="form-group">
+                        <label for="sensor-command">Command to Send</label>
+                        <input type="text" id="sensor-command" placeholder="Enter command (e.g., R for Atlas EZO, 0x44 for DS18B20)">
+                        <small class="form-help">Command to send at each polling interval</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="sensor-command-wait">Command Wait Time (ms)</label>
+                        <input type="number" id="sensor-command-wait" min="0" max="10000" value="750" placeholder="750">
+                        <small class="form-help">Time to wait after sending command before reading response</small>
+                    </div>
                 </div>
                 
                 <div class="form-section" id="data-parsing-section" style="display: none;">

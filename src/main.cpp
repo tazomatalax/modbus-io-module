@@ -465,6 +465,76 @@ void updateSensorReadings() {
             snprintf(configuredSensors[i].rawDataString, sizeof(configuredSensors[i].rawDataString), 
                      "UART:NOT_IMPLEMENTED");
             Serial.printf("UART sensor protocol not yet implemented\n");
+        } else if (strcmp(configuredSensors[i].type, "SHT30") == 0) {
+            // Initialize and poll SHT30 sensor
+            Wire.beginTransmission(configuredSensors[i].i2cAddress);
+            Wire.write(0x2C); // Command to start measurement
+            Wire.write(0x06);
+            Wire.endTransmission();
+            delay(15); // Wait for measurement
+
+            Wire.requestFrom(configuredSensors[i].i2cAddress, 6);
+            if (Wire.available() == 6) {
+                uint16_t temp_raw = (Wire.read() << 8) | Wire.read();
+                uint16_t hum_raw = (Wire.read() << 8) | Wire.read();
+                Wire.read(); // CRC byte, ignored
+                Wire.read(); // CRC byte, ignored
+
+                float temperature = -45.0 + 175.0 * ((float)temp_raw / 65535.0);
+                float humidity = 100.0 * ((float)hum_raw / 65535.0);
+
+                Serial.printf("SHT30: Temp=%.2f C, Hum=%.2f%%\n", temperature, humidity);
+                rawValue = temperature; // Example: store temperature as raw value
+                readSuccess = true;
+            } else {
+                Serial.println("SHT30: Failed to read data");
+            }
+        } else if (strcmp(configuredSensors[i].type, "EZO-PH") == 0) {
+            // Initialize and poll EZO-PH sensor
+            Wire.beginTransmission(configuredSensors[i].i2cAddress);
+            Wire.write("R\r"); // Command to read pH
+            Wire.endTransmission();
+            delay(900); // Wait for measurement
+
+            Wire.requestFrom(configuredSensors[i].i2cAddress, 32);
+            if (Wire.available()) {
+                char response[32];
+                int index = 0;
+                while (Wire.available() && index < 31) {
+                    response[index++] = Wire.read();
+                }
+                response[index] = '\0';
+
+                float ph = atof(response);
+                Serial.printf("EZO-PH: pH=%.2f\n", ph);
+                rawValue = ph; // Store pH value as raw value
+                readSuccess = true;
+            } else {
+                Serial.println("EZO-PH: Failed to read data");
+            }
+        } else if (strcmp(configuredSensors[i].type, "EZO-EC") == 0) {
+            // Initialize and poll EZO-EC sensor
+            Wire.beginTransmission(configuredSensors[i].i2cAddress);
+            Wire.write("R\r"); // Command to read EC
+            Wire.endTransmission();
+            delay(900); // Wait for measurement
+
+            Wire.requestFrom(configuredSensors[i].i2cAddress, 32);
+            if (Wire.available()) {
+                char response[32];
+                int index = 0;
+                while (Wire.available() && index < 31) {
+                    response[index++] = Wire.read();
+                }
+                response[index] = '\0';
+
+                float ec = atof(response);
+                Serial.printf("EZO-EC: EC=%.2f\n", ec);
+                rawValue = ec; // Store EC value as raw value
+                readSuccess = true;
+            } else {
+                Serial.println("EZO-EC: Failed to read data");
+            }
         }
         
         if (readSuccess) {
@@ -1237,6 +1307,7 @@ void loop() {
             Serial.println("http://" + eth.localIP().toString() + "/test");
             Serial.println("http://" + eth.localIP().toString() + "/config");
             Serial.println("http://" + eth.localIP().toString() + "/iostatus");
+            Serial.println("http://" + eth.localIP().toString() + "/sensors/config");
             Serial.println("=====================");
         }
     }
@@ -2377,6 +2448,7 @@ void handlePOSTSensorCommand(WiFiClient& client, String body) {
                     response += "Found device at 0x" + String(addr, HEX) + "\\n";
                     foundDevices = true;
                 }
+                delay(1); // Small delay between scans
             }
             if (!foundDevices) {
                 response += "No I2C devices found";
@@ -2576,6 +2648,77 @@ void updateIOpins() {
                         }
                     } else if (strcmp(configuredSensors[i].response, "ERROR") == 0) {
                         Serial.printf("EZO sensor %s has error response\n", configuredSensors[i].type);
+                    }
+                }
+                else if (strcmp(configuredSensors[i].type, "SHT30") == 0) {
+                    // Initialize and poll SHT30 sensor
+                    Wire.beginTransmission(configuredSensors[i].i2cAddress);
+                    Wire.write(0x2C); // Command to start measurement
+                    Wire.write(0x06);
+                    Wire.endTransmission();
+                    delay(15); // Wait for measurement
+
+                    Wire.requestFrom(configuredSensors[i].i2cAddress, 6);
+                    if (Wire.available() == 6) {
+                        uint16_t temp_raw = (Wire.read() << 8) | Wire.read();
+                        uint16_t hum_raw = (Wire.read() << 8) | Wire.read();
+                        Wire.read(); // CRC byte, ignored
+                        Wire.read(); // CRC byte, ignored
+
+                        float temperature = -45.0 + 175.0 * ((float)temp_raw / 65535.0);
+                        float humidity = 100.0 * ((float)hum_raw / 65535.0);
+
+                        Serial.printf("SHT30: Temp=%.2f C, Hum=%.2f%%\n", temperature, humidity);
+                        rawValue = temperature; // Example: store temperature as raw value
+                        readSuccess = true;
+                    } else {
+                        Serial.println("SHT30: Failed to read data");
+                    }
+                } else if (strcmp(configuredSensors[i].type, "EZO-PH") == 0) {
+                    // Initialize and poll EZO-PH sensor
+                    Wire.beginTransmission(configuredSensors[i].i2cAddress);
+                    Wire.write("R\r"); // Command to read pH
+                    Wire.endTransmission();
+                    delay(900); // Wait for measurement
+
+                    Wire.requestFrom(configuredSensors[i].i2cAddress, 32);
+                    if (Wire.available()) {
+                        char response[32];
+                        int index = 0;
+                        while (Wire.available() && index < 31) {
+                            response[index++] = Wire.read();
+                        }
+                        response[index] = '\0';
+
+                        float ph = atof(response);
+                        Serial.printf("EZO-PH: pH=%.2f\n", ph);
+                        rawValue = ph; // Store pH value as raw value
+                        readSuccess = true;
+                    } else {
+                        Serial.println("EZO-PH: Failed to read data");
+                    }
+                } else if (strcmp(configuredSensors[i].type, "EZO-EC") == 0) {
+                    // Initialize and poll EZO-EC sensor
+                    Wire.beginTransmission(configuredSensors[i].i2cAddress);
+                    Wire.write("R\r"); // Command to read EC
+                    Wire.endTransmission();
+                    delay(900); // Wait for measurement
+
+                    Wire.requestFrom(configuredSensors[i].i2cAddress, 32);
+                    if (Wire.available()) {
+                        char response[32];
+                        int index = 0;
+                        while (Wire.available() && index < 31) {
+                            response[index++] = Wire.read();
+                        }
+                        response[index] = '\0';
+
+                        float ec = atof(response);
+                        Serial.printf("EZO-EC: EC=%.2f\n", ec);
+                        rawValue = ec; // Store EC value as raw value
+                        readSuccess = true;
+                    } else {
+                        Serial.println("EZO-EC: Failed to read data");
                     }
                 }
                 // TODO: Add support for other sensor types here

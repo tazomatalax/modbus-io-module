@@ -1,5 +1,16 @@
+// Initialize all functionality when DOM is loaded
+document.addEventListener('DOMContentLoaded', function() {
+    console.log('DOM Content Loaded');
+
+// Global state
+window.watchState = {
+    interval: null,
+    lastReadings: {},
+    isWatching: false
+};
+
 // Simple toast notification function
-window.showToast = function showToast(message, type = 'info', persistent = false, duration = 3000) {
+window.showToast = function(message, type = 'info', persistent = false, duration = 3000) {
     let toastContainer = document.getElementById('toast-container');
     if (!toastContainer) {
         toastContainer = document.createElement('div');
@@ -190,12 +201,14 @@ window.updateSensorTableBody = function updateSensorTableBody() {
     }).join('');
     updateRegisterSummary();
 }
-console.log("script.js loaded");
-window.sensorConfigData = [];
-let currentSensorConfig = [];
-let currentCalibratedSensors = [];
-let currentSensorCommand = null;
-let currentSensorI2CData = null;
+    // Initialize sensorConfigData and other globals
+    window.sensorConfigData = [];
+    window.currentSensorConfig = [];
+    window.currentCalibratedSensors = [];
+    window.currentSensorCommand = null;
+    window.currentSensorI2CData = null;
+    console.log("script.js loaded");
+});
 
 // Toast notification functions
 // ...existing code...
@@ -250,16 +263,8 @@ window.showAddSensorModal = function showAddSensorModal() {
     document.getElementById('sensor-calibration-expression').value = '';
     showSensorCalibrationMethod('linear');
 
-    // Setup sensor type change listeners
-    const sensorTypeSelect = document.getElementById('sensor-type');
-    sensorTypeSelect.addEventListener('change', updateSensorFormFields);
-    sensorTypeSelect.addEventListener('change', () => {
-        // Show/hide sensor command section based on generic sensor selection
-        const sensorCommandSection = document.getElementById('sensor-command-section');
-        if (sensorCommandSection) {
-            sensorCommandSection.style.display = isGenericSensor(sensorTypeSelect.value) ? 'block' : 'none';
-        }
-    });
+    // Setup sensor type change listener
+    document.getElementById('sensor-type').addEventListener('change', updateSensorFormFields);
     
     // Setup data parsing change listener
     document.getElementById('sensor-data-parsing').addEventListener('change', updateDataParsingFields);
@@ -399,23 +404,11 @@ window.loadAvailablePins = function loadAvailablePins(protocol) {
 };
 
 // Update sensor type options based on selected protocol
-// Helper function to check if sensor type is a generic sensor
-function isGenericSensor(sensorType) {
-    return ['GENERIC_I2C', 'GENERIC_UART', 'GENERIC_ONEWIRE', 'ANALOG_CUSTOM', 'GENERIC_DIGITAL'].includes(sensorType);
-}
-
 window.updateSensorTypeOptions = function updateSensorTypeOptions() {
     const protocolType = document.getElementById('sensor-protocol').value;
     const sensorTypeSelect = document.getElementById('sensor-type');
-    const sensorType = sensorTypeSelect.value;
     
-    // Show/hide sensor command section based on generic sensor selection
-    const sensorCommandSection = document.getElementById('sensor-command-section');
-    if (sensorCommandSection) {
-        sensorCommandSection.style.display = isGenericSensor(sensorType) ? 'block' : 'none';
-    }
-    
-    // Clear current options if protocol changed
+    // Clear current options
     sensorTypeSelect.innerHTML = '<option value="">Select sensor type</option>';
     
     let optgroups = [];
@@ -789,33 +782,6 @@ window.editSensor = function editSensor(index) {
     // Trigger protocol change to update form fields
     updateSensorProtocolFields();
     
-    // Load bus polling frequency if it exists
-    switch (sensor.protocol) {
-        case 'I2C':
-            document.getElementById('sensor-i2c-polling').value = sensor.pollingFrequency || 1000;
-            break;
-        case 'UART':
-            document.getElementById('sensor-uart-polling').value = sensor.pollingFrequency || 1000;
-            break;
-        case 'One-Wire':
-            document.getElementById('sensor-onewire-polling').value = sensor.pollingFrequency || 1000;
-            break;
-    }
-
-    // Load sensor command configuration if it exists
-    const sensorCommandSection = document.getElementById('sensor-command-section');
-    if (sensorCommandSection) {
-        if (isGenericSensor(sensor.type) && sensor.command) {
-            sensorCommandSection.style.display = 'block';
-            document.getElementById('sensor-command').value = sensor.command.command || '';
-            document.getElementById('sensor-command-wait').value = sensor.command.waitTime || 750;
-        } else {
-            sensorCommandSection.style.display = 'none';
-            document.getElementById('sensor-command').value = '';
-            document.getElementById('sensor-command-wait').value = 750;
-        }
-    }
-
     // Load pin assignments if they exist
     if (sensor.protocol === 'I2C' && sensor.sdaPin !== undefined && sensor.sclPin !== undefined) {
         document.getElementById('sensor-i2c-pins').value = `${sensor.sdaPin},${sensor.sclPin}`;
@@ -862,6 +828,32 @@ window.editSensor = function editSensor(index) {
     document.getElementById('sensor-i2c-address').value = sensor.i2cAddress ? `0x${sensor.i2cAddress.toString(16).toUpperCase().padStart(2, '0')}` : '';
     document.getElementById('sensor-modbus-register').value = sensor.modbusRegister || '';
     document.getElementById('sensor-enabled').checked = sensor.enabled;
+
+    // Load bus timing configuration
+    if (sensor.busTiming) {
+        document.getElementById('sensor-poll-interval').value = sensor.busTiming.pollInterval || 1000;
+        document.getElementById('sensor-retry-count').value = sensor.busTiming.retryCount || 3;
+        document.getElementById('sensor-timeout').value = sensor.busTiming.timeout || 1000;
+    }
+
+    // Load protocol-specific command configuration
+    if (sensor.protocol === 'I2C') {
+        if (sensor.measureCmd !== undefined) {
+            document.getElementById('sensor-i2c-measure-cmd').value = `0x${sensor.measureCmd.toString(16).toUpperCase().padStart(2, '0')}`;
+        }
+        if (sensor.readCmd !== undefined) {
+            document.getElementById('sensor-i2c-read-cmd').value = `0x${sensor.readCmd.toString(16).toUpperCase().padStart(2, '0')}`;
+        }
+        document.getElementById('sensor-i2c-conversion-time').value = sensor.conversionTime || 100;
+    } else if (sensor.protocol === 'One-Wire') {
+        if (sensor.measureCmd !== undefined) {
+            document.getElementById('sensor-onewire-measure-cmd').value = `0x${sensor.measureCmd.toString(16).toUpperCase().padStart(2, '0')}`;
+        }
+        if (sensor.readCmd !== undefined) {
+            document.getElementById('sensor-onewire-read-cmd').value = `0x${sensor.readCmd.toString(16).toUpperCase().padStart(2, '0')}`;
+        }
+        document.getElementById('sensor-onewire-conversion-time').value = sensor.conversionTime || 750;
+    }
 
     // Setup sensor calibration method listeners
     setupSensorCalibrationMethodListeners();
@@ -1163,6 +1155,41 @@ window.saveSensor = function saveSensor() {
         showToast('Modbus register already in use by another sensor', 'error');
         return;
     }
+
+    // Collect bus timing configuration
+    const busConfig = {
+        pollInterval: parseInt(document.getElementById('sensor-poll-interval').value) || 1000,
+        retryCount: parseInt(document.getElementById('sensor-retry-count').value) || 3,
+        timeout: parseInt(document.getElementById('sensor-timeout').value) || 1000
+    };
+
+    // Collect protocol-specific command configuration
+    let commandConfig = {};
+    if (protocol === 'I2C') {
+        const measureCmd = document.getElementById('sensor-i2c-measure-cmd').value.trim();
+        const readCmd = document.getElementById('sensor-i2c-read-cmd').value.trim();
+        const conversionTime = parseInt(document.getElementById('sensor-i2c-conversion-time').value) || 100;
+
+        if (measureCmd) {
+            commandConfig.measureCmd = parseI2CAddress(measureCmd);
+        }
+        if (readCmd) {
+            commandConfig.readCmd = parseI2CAddress(readCmd);
+        }
+        commandConfig.conversionTime = conversionTime;
+    } else if (protocol === 'One-Wire') {
+        const measureCmd = document.getElementById('sensor-onewire-measure-cmd').value.trim();
+        const readCmd = document.getElementById('sensor-onewire-read-cmd').value.trim();
+        const conversionTime = parseInt(document.getElementById('sensor-onewire-conversion-time').value) || 750;
+
+        if (measureCmd) {
+            commandConfig.measureCmd = parseI2CAddress(measureCmd); // reuse parser for hex values
+        }
+        if (readCmd) {
+            commandConfig.readCmd = parseI2CAddress(readCmd);
+        }
+        commandConfig.conversionTime = conversionTime;
+    }
     
     // Get calibration data based on selected method
     const selectedCalibrationMethod = document.querySelector('input[name="sensor-calibration-method"]:checked').value;
@@ -1367,33 +1394,6 @@ window.saveSensor = function saveSensor() {
         }
     }
 
-    // Get bus polling frequency based on protocol
-    let pollingFrequency = 1000; // Default 1 second
-    switch (protocol) {
-        case 'I2C':
-            pollingFrequency = parseInt(document.getElementById('sensor-i2c-polling').value) || 1000;
-            break;
-        case 'UART':
-            pollingFrequency = parseInt(document.getElementById('sensor-uart-polling').value) || 1000;
-            break;
-        case 'One-Wire':
-            pollingFrequency = parseInt(document.getElementById('sensor-onewire-polling').value) || 1000;
-            break;
-    }
-
-    // Get sensor command configuration for generic sensors
-    let sensorCommand = null;
-    if (isGenericSensor(type)) {
-        const command = document.getElementById('sensor-command').value.trim();
-        const commandWait = parseInt(document.getElementById('sensor-command-wait').value) || 750;
-        if (command) {
-            sensorCommand = {
-                command: command,
-                waitTime: commandWait
-            };
-        }
-    }
-
     const sensor = {
         enabled: enabled,
         name: name,
@@ -1402,9 +1402,9 @@ window.saveSensor = function saveSensor() {
         i2cAddress: i2cAddress,
         modbusRegister: modbusRegister,
         calibration: calibration,
-        pollingFrequency: pollingFrequency,
+        busTiming: busConfig,
         ...pinAssignments,
-        ...(sensorCommand && { command: sensorCommand })
+        ...commandConfig
     };
     
     // Add multi-value config if it exists
@@ -2256,7 +2256,8 @@ function sendTerminalCommand() {
         protocol: protocol,
         pin: pin,
         command: command,
-        i2cAddress: i2cAddress
+        i2cAddress: i2cAddress,
+        timestamp: new Date().toISOString()
     };
     
     fetch('/terminal/command', {
@@ -2269,6 +2270,19 @@ function sendTerminalCommand() {
     .then(response => response.json())
     .then(data => {
         if (data.success) {
+            // Add to bus monitor if it's a bus-related command
+            if (protocol === 'i2c' || protocol === 'onewire' || protocol === 'modbus') {
+                addBusCommandEntry({
+                    type: protocol.toUpperCase(),
+                    command: command,
+                    response: data.response || 'Command executed successfully',
+                    timestamp: payload.timestamp,
+                    pin: pin,
+                    i2cAddress: i2cAddress,
+                    success: true
+                });
+            }
+
             addTerminalOutput(data.response || 'Command executed successfully', 'success');
             
             // Show "Send to Config" button if response contains sensor data
@@ -2286,7 +2300,19 @@ function sendTerminalCommand() {
                 }, 30000);
             }
         } else {
-            addTerminalOutput(data.error || 'Command failed', 'error');
+            const errorMsg = data.error || 'Command failed';
+            if (protocol === 'i2c' || protocol === 'onewire' || protocol === 'modbus') {
+                addBusCommandEntry({
+                    type: protocol.toUpperCase(),
+                    command: command,
+                    response: errorMsg,
+                    timestamp: payload.timestamp,
+                    pin: pin,
+                    i2cAddress: i2cAddress,
+                    success: false
+                });
+            }
+            addTerminalOutput(errorMsg, 'error');
         }
     })
     .catch(error => {
@@ -2297,19 +2323,373 @@ function sendTerminalCommand() {
     document.getElementById('terminal-command').value = '';
 }
 
+// Initialize global state and functions
+window.watchState = {
+    interval: null,
+    lastReadings: {},
+    isWatching: false
+};
+
+// Expose functions to window
+window.showAddSensorModal = function() {
+    showSensorModal();
+};
+
+window.clearTerminalOutput = function() {
+    const terminal = document.getElementById('terminal-content');
+    terminal.innerHTML = `
+        <div class="terminal-welcome">
+            Modbus IO Terminal - Ready<br>
+            Type 'help' for available commands<br>
+            > 
+        </div>
+        <div id="bus-monitor" class="bus-monitor" style="display: none;"></div>
+    `;
+};
+
+window.saveIOConfig = function() {
+    // Save the current IO configuration
+    const config = {
+        pins: Array.from(document.querySelectorAll('.pin-config')).map(pin => ({
+            number: pin.dataset.pin,
+            mode: pin.querySelector('.pin-mode').value,
+            function: pin.querySelector('.pin-function').value
+        }))
+    };
+
+    fetch('/config/io', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(config)
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            showToast('IO Configuration saved successfully', 'success');
+        } else {
+            showToast(data.error || 'Failed to save IO configuration', 'error');
+        }
+    })
+    .catch(error => {
+        showToast(`Error saving IO configuration: ${error.message}`, 'error');
+    });
+};
+
+// Helper function to recognize sensor patterns
+function recognizeSensorPattern(data) {
+    const patterns = {
+        DS18B20: {
+            match: /Temperature:\s*([-\d.]+)\s*C/i,
+            type: 'temperature',
+            unit: '°C'
+        },
+        DHT: {
+            match: /Humidity:\s*(\d+\.?\d*)%.*Temperature:\s*([-\d.]+)C/i,
+            type: 'humidity+temperature',
+            unit: '%+°C'
+        },
+        BMP: {
+            match: /Pressure:\s*(\d+\.?\d*)/i,
+            type: 'pressure',
+            unit: 'hPa'
+        },
+        I2C_GENERIC: {
+            match: /I2C:\s*([0-9a-fA-F\s]+)/i,
+            type: 'raw_i2c',
+            unit: 'hex'
+        }
+    };
+
+    for (const [sensorType, pattern] of Object.entries(patterns)) {
+        const match = data.match(pattern.match);
+        if (match) {
+            return {
+                type: sensorType,
+                dataType: pattern.type,
+                unit: pattern.unit,
+                values: match.slice(1)
+            };
+        }
+    }
+
+    return null;
+}
+
 // Toggle watch mode
-function toggleWatch() {
+// Make sure functions are exposed to window object
+window.showAddSensorModal = function() {
+    showSensorModal();
+};
+
+window.clearTerminalOutput = function() {
+    const terminal = document.getElementById('terminal-content');
+    terminal.innerHTML = `
+        <div class="terminal-welcome">
+            Modbus IO Terminal - Ready<br>
+            Type 'help' for available commands<br>
+            > 
+        </div>
+        <div id="bus-monitor" class="bus-monitor" style="display: none;"></div>
+    `;
+};
+
+window.saveIOConfig = function() {
+    // Save the current IO configuration
+    const config = {
+        pins: Array.from(document.querySelectorAll('.pin-config')).map(pin => ({
+            number: pin.dataset.pin,
+            mode: pin.querySelector('.pin-mode').value,
+            function: pin.querySelector('.pin-function').value
+        }))
+    };
+
+    fetch('/config/io', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(config)
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            showToast('IO Configuration saved successfully', 'success');
+        } else {
+            showToast(data.error || 'Failed to save IO configuration', 'error');
+        }
+    })
+    .catch(error => {
+        showToast(`Error saving IO configuration: ${error.message}`, 'error');
+    });
+};
+
+window.toggleWatch = function() {
     const watchBtn = document.getElementById('watch-btn');
     const watchStatus = document.getElementById('watch-status');
     const protocol = document.getElementById('terminal-protocol').value;
     const pin = document.getElementById('terminal-pin').value;
+    const i2cAddress = document.getElementById('terminal-i2c-address').value;
     
     if (!pin && protocol !== 'system') {
         addTerminalOutput('Error: No pin/port selected for watching', 'error');
         return;
     }
     
-    if (isWatching) {
+    // Additional validation for I2C
+    if (protocol === 'i2c' && !i2cAddress) {
+        addTerminalOutput('Error: I2C address required for watching', 'error');
+        return;
+    }
+    
+    if (watchState.isWatching) {
+        // Stop watching
+        clearInterval(watchState.interval);
+        watchState.interval = null;
+        watchState.isWatching = false;
+        watchBtn.textContent = 'Start Watch';
+        watchBtn.classList.remove('watching');
+        watchStatus.textContent = '';
+        watchStatus.classList.remove('watching');
+        return;
+    }
+    
+    // Start watching
+    watchState.isWatching = true;
+    watchBtn.textContent = 'Stop Watch';
+    watchBtn.classList.add('watching');
+    watchStatus.textContent = `Watching ${protocol.toUpperCase()} ${pin}`;
+    watchStatus.classList.add('watching');
+    
+    // Setup watch interval
+    watchState.interval = setInterval(() => {
+        const payload = {
+            protocol: protocol,
+            pin: pin,
+            command: 'read',
+            i2cAddress: i2cAddress,
+            timestamp: new Date().toISOString()
+        };
+        
+        fetch('/terminal/command', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(payload)
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                const currentValue = data.response;
+                if (currentValue !== watchState.lastReadings[pin]) {
+                    watchState.lastReadings[pin] = currentValue;
+                    
+                    // Format timestamp
+                    const now = new Date();
+                    const timestamp = now.toLocaleTimeString();
+                    
+                    // Add to terminal with timestamp
+                    addTerminalOutput(`[${timestamp}] ${pin}: ${currentValue}`, 'success');
+                    
+                    // Show Send to Config if it looks like sensor data
+                    if (currentValue.includes('Raw Data:') || 
+                        currentValue.includes('OneWire:') || 
+                        currentValue.includes('I2C:') || 
+                        currentValue.includes('Temperature:') || 
+                        currentValue.includes('Humidity:')) {
+                        
+                        const sendToConfigBtn = document.getElementById('send-to-config-btn');
+                        if (sendToConfigBtn) {
+                            sendToConfigBtn.style.display = 'inline-block';
+                        }
+                    }
+                }
+            } else if (data.error) {
+                addTerminalOutput(`Watch error: ${data.error}`, 'error');
+            }
+        })
+        .catch(error => {
+            addTerminalOutput(`Watch network error: ${error.message}`, 'error');
+        });
+    }, 1000);
+};
+
+    // Start watching
+    watchState.isWatching = true;
+    watchBtn.textContent = 'Stop Watch';
+    watchBtn.classList.add('watching');
+    watchStatus.textContent = `Watching ${protocol.toUpperCase()} ${pin}`;
+    watchStatus.classList.add('watching');
+
+    // Protocol-specific watch commands
+    let watchCommand = '';
+    switch (protocol) {
+        case 'i2c':
+            watchCommand = 'read';
+            break;
+        case 'onewire':
+            watchCommand = 'read';
+            break;
+        case 'digital':
+            watchCommand = 'read';
+            break;
+        case 'analog':
+            watchCommand = 'read';
+            break;
+        default:
+            watchCommand = 'read';
+    }
+
+    // Setup watch interval
+    watchInterval = setInterval(() => {
+        const payload = {
+            protocol: protocol,
+            pin: pin,
+            command: watchCommand,
+            i2cAddress: i2cAddress
+        };
+
+        fetch('/terminal/command', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(payload)
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                const currentValue = data.response;
+                if (currentValue !== watchState.lastReadings[pin]) {
+                    watchState.lastReadings[pin] = currentValue;
+                    
+                    // Format timestamp
+                    const now = new Date();
+                    const timestamp = now.toLocaleTimeString();
+                    
+                    // Add to terminal with timestamp
+                    addTerminalOutput(`[${timestamp}] ${pin}: ${currentValue}`, 'success');
+                    
+                    // Show Send to Config if it looks like sensor data
+                    if (currentValue.includes('Raw Data:') || 
+                        currentValue.includes('OneWire:') || 
+                        currentValue.includes('I2C:') || 
+                        currentValue.includes('Temperature:') || 
+                        currentValue.includes('Humidity:')) {
+                        
+                        const sendToConfigBtn = document.getElementById('send-to-config-btn');
+                        if (sendToConfigBtn) {
+                            sendToConfigBtn.style.display = 'inline-block';
+                            // Keep button visible while watching
+                        }
+                    }
+                }
+            } else if (data.error) {
+                addTerminalOutput(`Watch error: ${data.error}`, 'error');
+            }
+        })
+        .catch(error => {
+            addTerminalOutput(`Watch network error: ${error.message}`, 'error');
+            // Don't stop watching on temporary errors
+        });
+    }, 1000); // 1 second interval
+});
+
+window.addBusCommandEntry = function(data) {
+    const busMonitor = document.getElementById('bus-monitor');
+    if (!busMonitor) return;
+    
+    busMonitor.style.display = 'block';
+    const entry = document.createElement('div');
+    entry.className = 'bus-command-monitor';            const header = document.createElement('div');
+            header.className = 'bus-command-header';
+            
+            const timestamp = new Date(data.timestamp).toLocaleTimeString();
+            header.innerHTML = `
+                <span>${timestamp}</span>
+                <span class="bus-command-type">${data.type}</span>
+            `;
+            
+            const content = document.createElement('div');
+            content.className = 'bus-command-content';
+            content.textContent = `${data.command}`;
+            
+            const response = document.createElement('div');
+            response.className = data.success ? 'bus-command-response' : 'bus-command-error';
+            response.textContent = data.response;
+            
+            const stats = document.createElement('div');
+            stats.className = 'bus-command-stats';
+            
+            const pinStat = document.createElement('div');
+            pinStat.className = 'bus-stat';
+            pinStat.innerHTML = `
+                <span class="bus-stat-label">Pin:</span>
+                <span class="bus-stat-value">${data.pin}</span>
+            `;
+            
+            stats.appendChild(pinStat);
+            
+            if (data.type === 'I2C' && data.i2cAddress) {
+                const addressStat = document.createElement('div');
+                addressStat.className = 'bus-stat';
+                addressStat.innerHTML = `
+                    <span class="bus-stat-label">Address:</span>
+                    <span class="bus-stat-value">${data.i2cAddress}</span>
+                `;
+                stats.appendChild(addressStat);
+            }
+            
+            entry.appendChild(header);
+            entry.appendChild(content);
+            entry.appendChild(response);
+            entry.appendChild(stats);
+            
+            busMonitor.insertBefore(entry, busMonitor.firstChild);
+        }
+        
         // Stop watching
         clearInterval(watchInterval);
         isWatching = false;
@@ -2318,48 +2698,11 @@ function toggleWatch() {
         watchStatus.textContent = '';
         watchStatus.classList.remove('watching');
         addTerminalOutput('Watch mode stopped', 'success');
-    } else {
-        // Start watching
-        isWatching = true;
-        watchBtn.textContent = 'Stop Watch';
-        watchBtn.classList.add('watching');
-        watchStatus.textContent = `Watching ${pin}`;
-        watchStatus.classList.add('watching');
-        addTerminalOutput(`Started watching ${pin}`, 'success');
-        
-        // Start periodic updates
-        watchInterval = setInterval(() => {
-            const payload = {
-                protocol: protocol,
-                pin: pin,
-                command: 'read',
-                i2cAddress: document.getElementById('terminal-i2c-address').value
-            };
-            
-            fetch('/terminal/command', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(payload)
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    const timestamp = new Date().toLocaleTimeString();
-                    addTerminalOutput(`[${timestamp}] ${data.response}`, 'response');
-                }
-            })
-            .catch(error => {
-                // Silently handle watch errors to avoid spam
-                console.error('Watch error:', error);
-            });
-        }, 1000); // Update every second
-    }
+
 }
 
 // Add output to terminal
-function addTerminalOutput(text, type = 'response') {
+window.addTerminalOutput = function(text, type = 'response') {
     const terminal = document.getElementById('terminal-content');
     const div = document.createElement('div');
     div.className = `terminal-${type}`;
@@ -2367,22 +2710,25 @@ function addTerminalOutput(text, type = 'response') {
     
     terminal.appendChild(div);
     terminal.scrollTop = terminal.scrollHeight;
-}
+};
 
 // Clear terminal output
-function clearTerminalOutput() {
+window.clearTerminalOutput = function() {
     const terminal = document.getElementById('terminal-content');
+    const busMonitor = document.getElementById('bus-monitor');
+    
     terminal.innerHTML = `
         <div class="terminal-welcome">
             Modbus IO Terminal - Ready<br>
             Type 'help' for available commands<br>
             > 
         </div>
+        <div id="bus-monitor" class="bus-monitor" style="display: none;"></div>
     `;
 }
 
 // Show terminal help
-function showTerminalHelp() {
+window.showTerminalHelp = function() {
     const helpText = `
 Available Commands:
 
@@ -2936,12 +3282,36 @@ window.sendDataToConfig = function sendDataToConfig() {
     const output = terminalContent.textContent;
     const lines = output.split('\n');
     
-    // Find the most recent sensor data line
+    // Data patterns to match
+    const patterns = {
+        temperature: /Temperature:\s*([\d.-]+)/i,
+        humidity: /Humidity:\s*([\d.-]+)/i,
+        pressure: /Pressure:\s*([\d.-]+)/i,
+        rawI2C: /I2C:\s*([0-9a-fA-F\s]+)/i,
+        oneWire: /OneWire:\s*([0-9a-fA-F\s]+)/i,
+        rawData: /Raw Data:\s*(.+)/i
+    };
+    
+    // Find the most recent sensor data line and extract values
     let lastDataLine = '';
+    let extractedData = {};
+    
     for (let i = lines.length - 1; i >= 0; i--) {
         const line = lines[i].trim();
-        if (line.includes('Raw Data:') || line.includes('OneWire:') || line.includes('I2C:') || line.includes('UART:')) {
+        if (line.includes('Raw Data:') || line.includes('OneWire:') || 
+            line.includes('I2C:') || line.includes('Temperature:') || 
+            line.includes('Humidity:') || line.includes('Pressure:')) {
+            
             lastDataLine = line;
+            
+            // Extract all possible values
+            Object.entries(patterns).forEach(([key, pattern]) => {
+                const match = line.match(pattern);
+                if (match) {
+                    extractedData[key] = match[1].trim();
+                }
+            });
+            
             break;
         }
     }
@@ -2966,20 +3336,47 @@ window.sendDataToConfig = function sendDataToConfig() {
     setTimeout(() => {
         const exampleSection = document.getElementById('example-data-section');
         const exampleTextarea = document.getElementById('example-data-string');
+        const formulaField = document.getElementById('sensor-formula');
+        const dataParsingSection = document.getElementById('data-parsing-section');
         
+        // Display raw data
         exampleSection.style.display = 'block';
         exampleTextarea.value = lastDataLine;
         
-        // Auto-suggest sensor name based on pin
+        // Auto-suggest sensor name based on protocol and data type
         const nameField = document.getElementById('sensor-name');
         if (!nameField.value) {
-            nameField.value = `${protocol}_${pin}`;
+            let suggestedName = `${protocol}_${pin}`;
+            if (extractedData.temperature) suggestedName += '_temp';
+            else if (extractedData.humidity) suggestedName += '_hum';
+            else if (extractedData.pressure) suggestedName += '_press';
+            nameField.value = suggestedName;
         }
         
-        // Show data parsing section
-        const dataParsingSection = document.getElementById('data-parsing-section');
+        // Show and populate data parsing section
         dataParsingSection.style.display = 'block';
         
-        showToast('Data imported from terminal - configure parsing below', 'success');
+        // Suggest formula based on extracted data
+        if (Object.keys(extractedData).length > 0) {
+            let suggestedFormula = '';
+            
+            if (extractedData.temperature) {
+                suggestedFormula = '{raw} * 1.0'; // Direct temperature value
+            } else if (extractedData.humidity) {
+                suggestedFormula = '{raw} * 1.0'; // Direct humidity value
+            } else if (extractedData.pressure) {
+                suggestedFormula = '{raw} / 100.0'; // Convert to hPa
+            } else if (extractedData.rawI2C || extractedData.oneWire) {
+                suggestedFormula = 'extractNumber({raw})'; // Extract first number
+            }
+            
+            if (formulaField && suggestedFormula) {
+                formulaField.value = suggestedFormula;
+            }
+            
+            showToast('Data pattern recognized - formula suggested', 'success');
+        } else {
+            showToast('Data imported from terminal - configure parsing below', 'success');
+        }
     }, 100);
 };
