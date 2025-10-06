@@ -7,23 +7,13 @@
 // ...existing code...
 
 
-#include <Arduino.h>
-#include <SPI.h>
-#include <Wire.h>
-#include <ArduinoJson.h>
-#include <LittleFS.h>
-#include "../config/formula_parser.h"
-
-
-
-// Example usage in sensor read logic:
-// double raw_value = ...;
-// double converted = applyFormula(configuredSensors[i].formula, raw_value);
-
-
-
-#include <ArduinoModbus.h>
 #include "sys_init.h"
+
+// Sensor reading functions
+bool readSHT30(uint8_t sensorIndex, float& temperature, float& humidity);
+bool readDS18B20(uint8_t sensorIndex, float& temperature);
+bool readEZOPH(uint8_t sensorIndex, float& ph);
+bool readEZOEC(uint8_t sensorIndex, float& conductivity);
 // Use ANALOG_INPUTS from sys_init.h instead of ADC_PINS
 #include "Ezo_i2c.h"
 
@@ -40,6 +30,29 @@ WiFiServer httpServer(80);    // HTTP server on port 80
 WiFiClient client;
 ModbusClientConnection modbusClients[MAX_MODBUS_CLIENTS];
 int connectedClients = 0;
+
+// Bus operation queues are declared in sys_init.h
+extern BusOperation i2cQueue[MAX_SENSORS];
+extern BusOperation uartQueue[MAX_SENSORS];
+extern BusOperation oneWireQueue[MAX_SENSORS];
+extern int i2cQueueSize;
+extern int uartQueueSize;
+extern int oneWireQueueSize;
+
+// Command arrays for each bus type
+CommandArray i2cCommands;
+CommandArray uartCommands;
+CommandArray oneWireCommands;
+
+// Bus operation queues
+BusOperation i2cQueue[MAX_SENSORS];
+BusOperation uartQueue[MAX_SENSORS];
+BusOperation oneWireQueue[MAX_SENSORS];
+int i2cQueueSize = 0;
+int uartQueueSize = 0;
+int oneWireQueueSize = 0;
+
+// Command queues are already declared as extern above
 
 // Forward declarations for functions used before definition
 void updateIOForClient(int clientIndex);
@@ -59,10 +72,274 @@ void handlePOSTResetSingleLatch(WiFiClient& client, String body);
 // Sensor functions temporarily commented out
 void handlePOSTSensorConfig(WiFiClient& client, String body);
 void handlePOSTSensorCommand(WiFiClient& client, String body);
+bool validateCRC(uint8_t* data, size_t length) {
+    uint8_t crc = 0;
+    
+    for (size_t i = 0; i < length - 1; i++) {
+        uint8_t inbyte = data[i];
+        for (uint8_t j = 0; j < 8; j++) {
+            uint8_t mix = (crc ^ inbyte) & 0x01;
+            crc >>= 1;
+            if (mix) crc ^= 0x8C;
+            inbyte >>= 1;
+        }
+    }
+    
+    return crc == data[length - 1];
+}
+
 void setPinModes();
 void setupEthernet();
 void setupModbus();
 void setupWebServer();
+
+// Bus operation management functions
+void processI2CQueue();
+void processUARTQueue();
+void processOneWireQueue();
+void enqueueBusOperation(uint8_t sensorIndex, const char* protocol);
+void updateBusQueues();
+// validateCRC is already declared above
+
+// CRC validation for One-Wire sensors is implemented above
+
+// Bus queue processor implementations
+void processI2CQueue() {
+    if (i2cQueueSize == 0) return;
+    
+    unsigned long currentTime = millis();
+    BusOperation& op = i2cQueue[0];
+    
+    switch(op.state) {
+        case BusOpState::IDLE:
+            // Start I2C operation
+            Wire.beginTransmission(configuredSensors[op.sensorIndex].i2cAddress);
+            Wire.write(configuredSensors[op.sensorIndex].command);
+            if (Wire.endTransmission() == 0) {
+                op.state = BusOpState::REQUEST_SENT;
+                op.startTime = currentTime;
+            } else if (++op.retryCount >= 3) {
+                // Move to next operation after 3 retries
+                for(int i = 0; i < i2cQueueSize - 1; i++) {
+                    i2cQueue[i] = i2cQueue[i + 1];
+                }
+                i2cQueueSize--;
+            }
+            break;
+            
+        case BusOpState::REQUEST_SENT:
+            if (currentTime - op.startTime >= op.conversionTime) {
+                op.state = BusOpState::READY_TO_READ;
+            }
+            break;
+            
+        case BusOpState::READY_TO_READ:
+            Wire.requestFrom((int)configuredSensors[op.sensorIndex].i2cAddress, 32);
+            if (Wire.available()) {
+                char response[32] = {0};
+                int idx = 0;
+                while(Wire.available() && idx < 31) {
+                    response[idx++] = Wire.read();
+                }
+                response[idx] = '\0';
+                strncpy(configuredSensors[op.sensorIndex].response, response, sizeof(configuredSensors[op.sensorIndex].response)-1);
+                configuredSensors[op.sensorIndex].lastReadTime = currentTime;
+                
+                // Process response based on sensor type
+                if (strcmp(configuredSensors[op.sensorIndex].type, "EZO-PH") == 0) {
+                    configuredSensors[op.sensorIndex].rawValue = atof(response);
+                } else if (strcmp(configuredSensors[op.sensorIndex].type, "EZO-EC") == 0) {
+                    configuredSensors[op.sensorIndex].rawValue = atof(response);
+                }
+                
+                // Move queue forward
+                for(int i = 0; i < i2cQueueSize - 1; i++) {
+                    i2cQueue[i] = i2cQueue[i + 1];
+                }
+                i2cQueueSize--;
+            }
+            break;
+            
+        case BusOpState::ERROR:
+            // Move to next operation
+            for(int i = 0; i < i2cQueueSize - 1; i++) {
+                i2cQueue[i] = i2cQueue[i + 1];
+            }
+            i2cQueueSize--;
+            break;
+    }
+}
+
+void processUARTQueue() {
+    // Similar structure to I2C queue but for UART operations
+    // Not yet implemented - placeholder for future UART support
+}
+
+void processOneWireQueue() {
+    if (oneWireQueueSize == 0) return;
+    
+    unsigned long currentTime = millis();
+    BusOperation& op = oneWireQueue[0];
+    
+    int owPin = configuredSensors[op.sensorIndex].oneWirePin;
+    uint8_t scratchpad[9] = {0};
+    bool presence;
+    bool readOk;
+    
+    switch(op.state) {
+        case BusOpState::IDLE:
+            // Initialize One-Wire transaction
+            pinMode(owPin, OUTPUT);
+            digitalWrite(owPin, LOW);
+            delayMicroseconds(480);
+            pinMode(owPin, INPUT_PULLUP);
+            delayMicroseconds(70);
+            presence = !digitalRead(owPin);
+            delayMicroseconds(410);
+            
+            if (presence) {
+                op.state = BusOpState::REQUEST_SENT;
+                op.startTime = currentTime;
+                configuredSensors[op.sensorIndex].lastOneWireCmd = currentTime;
+            } else if (++op.retryCount >= 3) {
+                // Move to next operation after 3 retries
+                for(int i = 0; i < oneWireQueueSize - 1; i++) {
+                    oneWireQueue[i] = oneWireQueue[i + 1];
+                }
+                oneWireQueueSize--;
+            }
+            break;
+            
+        case BusOpState::REQUEST_SENT:
+            if (currentTime - op.startTime >= op.conversionTime) {
+                op.state = BusOpState::READY_TO_READ;
+            }
+            break;
+            
+        case BusOpState::READY_TO_READ:
+            readOk = true;
+            
+            // Send read command
+            pinMode(owPin, OUTPUT);
+            digitalWrite(owPin, LOW);
+            delayMicroseconds(480);
+            pinMode(owPin, INPUT_PULLUP);
+            delayMicroseconds(70);
+            presence = !digitalRead(owPin);
+            delayMicroseconds(410);
+            
+            if (presence) {
+                // Read scratchpad data
+                for (int i = 0; i < 9 && readOk; i++) {
+                    uint8_t value = 0;
+                    for (int bit = 0; bit < 8; bit++) {
+                        pinMode(owPin, OUTPUT);
+                        digitalWrite(owPin, LOW);
+                        delayMicroseconds(3);
+                        pinMode(owPin, INPUT_PULLUP);
+                        delayMicroseconds(10);
+                        value |= (digitalRead(owPin) << bit);
+                        delayMicroseconds(53);
+                    }
+                    scratchpad[i] = value;
+                }
+                
+                if (op.needsCRC && !validateCRC(scratchpad, 9)) {
+                    readOk = false;
+                }
+                
+                if (readOk) {
+                    // Convert raw data to temperature (DS18B20 format)
+                    int16_t raw = (scratchpad[1] << 8) | scratchpad[0];
+                    float temp = raw / 16.0;
+                    configuredSensors[op.sensorIndex].rawValue = temp;
+                    configuredSensors[op.sensorIndex].lastReadTime = currentTime;
+                    
+                    // Format raw data string
+                    char dataStr[32];
+                    snprintf(dataStr, sizeof(dataStr), "%.2f°C", temp);
+                    strncpy(configuredSensors[op.sensorIndex].rawDataString, dataStr, 
+                            sizeof(configuredSensors[op.sensorIndex].rawDataString)-1);
+                }
+            }
+            
+            // Move to next operation
+            for(int i = 0; i < oneWireQueueSize - 1; i++) {
+                oneWireQueue[i] = oneWireQueue[i + 1];
+            }
+            oneWireQueueSize--;
+            break;
+            
+        case BusOpState::ERROR:
+            // Move to next operation
+            for(int i = 0; i < oneWireQueueSize - 1; i++) {
+                oneWireQueue[i] = oneWireQueue[i + 1];
+            }
+            oneWireQueueSize--;
+            break;
+    }
+}
+
+void enqueueBusOperation(uint8_t sensorIndex, const char* protocol) {
+    if (!configuredSensors[sensorIndex].enabled) return;
+    
+    BusOperation op = {
+        .sensorIndex = sensorIndex,
+        .startTime = 0,
+        .conversionTime = 750, // Default 750ms, adjust per sensor type
+        .state = BusOpState::IDLE,
+        .retryCount = 0,
+        .needsCRC = true
+    };
+    
+    // Adjust conversion time based on sensor type
+    if (strcmp(configuredSensors[sensorIndex].type, "EZO-PH") == 0 ||
+        strcmp(configuredSensors[sensorIndex].type, "EZO-EC") == 0) {
+        op.conversionTime = 900;
+    } else if (strcmp(configuredSensors[sensorIndex].type, "DS18B20") == 0) {
+        op.conversionTime = configuredSensors[sensorIndex].oneWireConversionTime;
+        if (op.conversionTime <= 0) op.conversionTime = 750;
+    }
+    
+    // Add to appropriate queue
+    if (strcmp(protocol, "I2C") == 0 && i2cQueueSize < MAX_SENSORS) {
+        i2cQueue[i2cQueueSize++] = op;
+    } else if (strcmp(protocol, "UART") == 0 && uartQueueSize < MAX_SENSORS) {
+        uartQueue[uartQueueSize++] = op;
+    } else if (strcmp(protocol, "One-Wire") == 0 && oneWireQueueSize < MAX_SENSORS) {
+        oneWireQueue[oneWireQueueSize++] = op;
+    }
+}
+
+void updateBusQueues() {
+    static unsigned long lastQueueUpdate = 0;
+    unsigned long currentTime = millis();
+    
+    // Update every 100ms
+    if (currentTime - lastQueueUpdate < 100) return;
+    lastQueueUpdate = currentTime;
+    
+    // Check each enabled sensor
+    for (int i = 0; i < numConfiguredSensors; i++) {
+        if (!configuredSensors[i].enabled) continue;
+        
+        // Add to queue if it's time for next reading
+        if (currentTime - configuredSensors[i].lastReadTime >= configuredSensors[i].updateInterval) {
+            if (strncmp(configuredSensors[i].protocol, "I2C", 3) == 0) {
+                enqueueBusOperation(i, "I2C");
+            } else if (strncmp(configuredSensors[i].protocol, "UART", 4) == 0) {
+                enqueueBusOperation(i, "UART");
+            } else if (strncmp(configuredSensors[i].protocol, "One-Wire", 8) == 0) {
+                enqueueBusOperation(i, "One-Wire");
+            }
+        }
+    }
+    
+    // Process queues
+    processI2CQueue();
+    processUARTQueue();
+    processOneWireQueue();
+}
 
 // EZO sensor functionality 
 Ezo_board* ezoSensors[MAX_SENSORS] = {nullptr};
@@ -131,9 +408,45 @@ void setup() {
     Serial.println("Loading sensor configuration...");
     delay(500);
     loadSensorConfig();
+    
+    // Initialize command queues
+    
     Serial.printf("Loaded %d sensors\n", numConfiguredSensors);
+    
+    // Initialize bus queues and command arrays
+    i2cQueueSize = 0;
+    uartQueueSize = 0;
+    oneWireQueueSize = 0;
+    i2cCommands.init();
+    uartCommands.init();
+    oneWireCommands.init();
+    
     for (int i = 0; i < numConfiguredSensors; i++) {
         Serial.printf("Sensor[%d]: %s (%s) - %s\n", i, configuredSensors[i].name, configuredSensors[i].type, configuredSensors[i].enabled ? "ENABLED" : "DISABLED");
+        
+        // Initialize sensor commands
+        if (configuredSensors[i].enabled) {
+            SensorCommand cmd = {
+                .sensorIndex = i,
+                .nextExecutionMs = millis(),
+                .intervalMs = configuredSensors[i].updateInterval,
+                .command = (strcmp(configuredSensors[i].type, "GENERIC") == 0) ? configuredSensors[i].command : nullptr,
+                .isGeneric = (strcmp(configuredSensors[i].type, "GENERIC") == 0)
+            };
+            
+            // Add to appropriate command array
+            if (strncmp(configuredSensors[i].protocol, "I2C", 3) == 0) {
+                i2cCommands.add(cmd);
+                // Queue initial bus operation
+                enqueueBusOperation(i, "I2C");
+            } else if (strncmp(configuredSensors[i].protocol, "UART", 4) == 0) {
+                uartCommands.add(cmd);
+                enqueueBusOperation(i, "UART");
+            } else if (strncmp(configuredSensors[i].protocol, "One-Wire", 8) == 0) {
+                oneWireCommands.add(cmd);
+                enqueueBusOperation(i, "One-Wire");
+            }
+        }
     }
 
     Serial.println("Setting pin modes...");
@@ -1201,8 +1514,38 @@ void handlePOSTTerminalCommand(WiFiClient& client, String body) {
     client.print(jsonResp);
 }
 void loop() {
+    static unsigned long lastWebCheck = 0;
+    static unsigned long lastStats = 0;
+    static unsigned long webRequests = 0;
+    static unsigned long loopCount = 0;
+    unsigned long now = millis();
+    
+    // Process web requests more frequently
+    if (now - lastWebCheck >= 1) {  // Check every 1ms
+        handleSimpleHTTP();
+        lastWebCheck = now;
+    }
+    
+    // Print stats every 5 seconds
+    if (now - lastStats >= 5000) {
+        Serial.print("Loop frequency: ");
+        Serial.print(loopCount / 5);
+        Serial.println(" Hz");
+        Serial.print("Web requests/5s: ");
+        Serial.println(webRequests);
+        Serial.print("Free RAM: ");
+        Serial.println(rp2040.getFreeHeap());
+        loopCount = 0;
+        webRequests = 0;
+        lastStats = now;
+    }
+    
+    // Update bus operation queues
+    updateBusQueues();
+
     // Check for new client connections on the WiFi server (actually Ethernet via W5500lwIP)
     WiFiClient newClient = modbusServer.accept();
+    loopCount++;
     
     if (newClient) {
         // Find an available slot for the new client
@@ -1581,11 +1924,21 @@ void setupWebServer() {
 }
 
 void handleSimpleHTTP() {
+    static unsigned long lastDebugPrint = 0;
+    static unsigned long requestCount = 0;
+    
     WiFiClient client = httpServer.accept();
     if (client) {
-        Serial.println("=== WEB CLIENT CONNECTED ===");
-        Serial.print("Client IP: ");
-        Serial.println(client.remoteIP());
+        requestCount++;
+        if (millis() - lastDebugPrint > 5000) { // Print debug every 5 seconds
+            Serial.print("=== WEB STATS: Requests/5s: ");
+            Serial.println(requestCount);
+            requestCount = 0;
+            lastDebugPrint = millis();
+        }
+        
+        Serial.print("Client Connected - Free RAM: ");
+        Serial.println(rp2040.getFreeHeap());
         
         String request = "";
         String method = "";
@@ -1770,6 +2123,20 @@ void sendFile(WiFiClient& client, String filename, String contentType) {
 }
 
 void sendJSONIOStatus(WiFiClient& client) {
+    static unsigned long lastCall = 0;
+    unsigned long now = millis();
+    
+    // Debug timing between calls
+    if (lastCall != 0) {
+        unsigned long delta = now - lastCall;
+        if (delta > 1000) { // Log if more than 1 second between calls
+            Serial.print("IOStatus delay: ");
+            Serial.print(delta);
+            Serial.println("ms");
+        }
+    }
+    lastCall = now;
+    
     StaticJsonDocument<2048> doc;
     
     JsonArray dInArray = doc.createNestedArray("dIn");
@@ -2669,8 +3036,8 @@ void updateIOpins() {
                         float humidity = 100.0 * ((float)hum_raw / 65535.0);
 
                         Serial.printf("SHT30: Temp=%.2f C, Hum=%.2f%%\n", temperature, humidity);
-                        rawValue = temperature; // Example: store temperature as raw value
-                        readSuccess = true;
+                        ioStatus.rawValue[i] = temperature; // Example: store temperature as raw value
+                        bool readSuccess = true;
                     } else {
                         Serial.println("SHT30: Failed to read data");
                     }
@@ -2692,8 +3059,8 @@ void updateIOpins() {
 
                         float ph = atof(response);
                         Serial.printf("EZO-PH: pH=%.2f\n", ph);
-                        rawValue = ph; // Store pH value as raw value
-                        readSuccess = true;
+                        ioStatus.rawValue[i] = ph; // Store pH value as raw value
+                        bool readSuccess = true;
                     } else {
                         Serial.println("EZO-PH: Failed to read data");
                     }
@@ -2715,8 +3082,8 @@ void updateIOpins() {
 
                         float ec = atof(response);
                         Serial.printf("EZO-EC: EC=%.2f\n", ec);
-                        rawValue = ec; // Store EC value as raw value
-                        readSuccess = true;
+                        ioStatus.rawValue[i] = ec; // Store EC value as raw value
+                        bool readSuccess = true;
                     } else {
                         Serial.println("EZO-EC: Failed to read data");
                     }

@@ -2,9 +2,51 @@
 
 _Last updated: 2025-10-06_
 
-## 2025-10-06 - Sensor Configuration and Bus Management Improvements
+## 2025-10-06 - Web UI and Firmware Alignment Analysis
 
-During testing of sensor configuration through the web UI, several areas for improvement have been identified:
+Analysis of current implementation reveals gaps between web UI capabilities and firmware implementation that need to be addressed:
+
+### Current Status Assessment
+
+1. **Generic Sensor Configuration**
+   - ✅ UI: Supports protocol selection (I2C, UART, One-Wire, Analog)
+   - ✅ UI: Allows custom polling intervals per bus
+   - ❌ Firmware: Missing dynamic command execution for generic sensors
+   - ❌ Firmware: Bus-level polling frequencies not fully implemented
+
+2. **Named Sensor Support**
+   - ✅ UI: Can select predefined sensor types
+   - ⚠️ Firmware: Partially implemented (DS18B20, EZO-PH, EZO-EC, SHT30)
+   - ❌ Firmware: Missing systematic approach for named sensor abstraction
+
+3. **Bus Management**
+   - ✅ UI: Configurable bus parameters (I2C address, UART baud rate, etc.)
+   - ⚠️ Firmware: Basic I2C and One-Wire support exists
+   - ❌ Firmware: Missing bus conflict prevention and sequencing
+
+### Implementation Plan
+
+#### Phase 1: Dynamic Command System
+1. Create command queue per bus type
+2. Implement configurable polling frequencies
+3. Add protocol-specific command formatting
+4. Integrate with existing sensor configuration
+
+#### Phase 2: Named Sensor Framework
+1. Create sensor type registry
+2. Define standard sensor interfaces
+3. Implement automatic initialization
+4. Add named sensor abstraction layer
+
+#### Phase 3: Bus Management System
+1. Implement bus scheduling
+2. Add conflict prevention
+3. Support non-blocking operations
+4. Integrate with command system
+
+## 2025-10-06 - Earlier Identified Improvements
+
+During initial testing of sensor configuration through the web UI, several areas for improvement were identified:
 
 ### 1. Bus/Pin Polling Frequency Management
 - Need to implement polling frequency configuration at the bus/pin level

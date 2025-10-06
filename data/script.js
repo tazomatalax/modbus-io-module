@@ -1730,23 +1730,66 @@ window.deleteSensor = function deleteSensor(index) {
 }
 
 // Update IO Status data and refresh displays
+let consecutiveErrors = 0;
+let lastSuccessfulUpdate = Date.now();
+
 window.updateIOStatus = function updateIOStatus() {
+    // Don't spam requests if we're having connection issues
+    if (consecutiveErrors > 3) {
+        const timeSinceLastSuccess = Date.now() - lastSuccessfulUpdate;
+        if (timeSinceLastSuccess < 10000) { // Wait 10 seconds before retrying
+            console.log('Skipping update due to recent errors');
+            return;
+        }
+        consecutiveErrors = 0; // Reset counter and try again
+    }
+
     fetch('/iostatus')
-        .then(response => response.json())
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            return response.json();
+        })
         .then(data => {
+            consecutiveErrors = 0; // Reset error counter on success
+            lastSuccessfulUpdate = Date.now();
             currentIOStatus = data;
             
             // Update sensor dataflow display
             updateSensorDataFlow(data.configured_sensors || []);
             
-            // Update any other UI elements that depend on IO status
-            console.log('IO Status updated:', data);
+            // Clear any previous error messages
+            const errorDiv = document.getElementById('connection-error');
+            if (errorDiv) {
+                errorDiv.style.display = 'none';
+            }
         })
         .catch(error => {
+            consecutiveErrors++;
             console.error('Error fetching IO status:', error);
-            showToast('Failed to fetch IO status', 'error');
+            
+            // Only show toast on first error
+            if (consecutiveErrors === 1) {
+                showToast('Connection issue detected', 'warning');
+            }
+            
+            // Show persistent error message if we've had multiple failures
+            if (consecutiveErrors > 2) {
+                const errorDiv = document.getElementById('connection-error') || createErrorDiv();
+                errorDiv.textContent = 'Connection lost - will keep retrying...';
+                errorDiv.style.display = 'block';
+            }
         });
 };
+
+function createErrorDiv() {
+    const div = document.createElement('div');
+    div.id = 'connection-error';
+    div.style.cssText = 'position: fixed; top: 10px; right: 10px; background: #ff6b6b; color: white; padding: 10px; border-radius: 4px; display: none;';
+    document.body.appendChild(div);
+    return div;
+}
 
 // Function to update sensor dataflow display
 function updateSensorDataFlow(sensors) {
@@ -2818,14 +2861,9 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
     
-    // Set up periodic updates for sensor dataflow
+    // Set up a single periodic update for IO status and sensor dataflow
     setInterval(function() {
-        updateIOStatus(); // Updates sensor dataflow every 3 seconds
-    }, 3000);
-    
-    // Set up periodic updates for IO status (digital/analog pins)
-    setInterval(function() {
-        updateIOStatus(); // Updates IO pin status every 2 seconds
+        updateIOStatus(); // Update all IO status every 2 seconds
     }, 2000);
     
     console.log('Periodic updates initialized');

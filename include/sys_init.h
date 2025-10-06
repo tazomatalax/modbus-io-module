@@ -2,12 +2,63 @@
 
 #include <Arduino.h>
 #include <SPI.h>
+#include <Wire.h>
 #include <W5500lwIP.h>
 #include <LwipEthernet.h>
 #include <WebServer.h>
 #include <ArduinoModbus.h>
 #include <ArduinoJson.h>
 #include <LittleFS.h>
+
+#define MAX_SENSORS 10
+
+// Forward declarations
+struct SensorCommand {
+    uint8_t sensorIndex;
+    uint32_t nextExecutionMs;
+    uint32_t intervalMs;
+    const char* command;
+    bool isGeneric;
+};
+
+// Simple command array handler
+struct CommandArray {
+    SensorCommand commands[MAX_SENSORS];
+    uint8_t count;
+    
+    void init() {
+        count = 0;
+    }
+    
+    bool add(const SensorCommand& cmd) {
+        if (count < MAX_SENSORS) {
+            commands[count++] = cmd;
+            return true;
+        }
+        return false;
+    }
+    
+    bool isEmpty() const {
+        return count == 0;
+    }
+    
+    SensorCommand* getNext() {
+        return isEmpty() ? nullptr : &commands[0];
+    }
+    
+    void remove() {
+        if (!isEmpty()) {
+            for (uint8_t i = 0; i < count - 1; i++) {
+                commands[i] = commands[i + 1];
+            }
+            count--;
+        }
+    }
+    
+    void clear() {
+        count = 0;
+    }
+};
 
 // Watchdog timer
 #define WDT_TIMEOUT 5000
@@ -43,6 +94,27 @@ const uint8_t ANALOG_INPUTS[] = {26, 27, 28};   // ADC pins
 
 // Network and Modbus Configuration
 
+// Bus operation states
+enum class BusOpState {
+    IDLE,
+    REQUEST_SENT,
+    WAITING_CONVERSION,
+    READY_TO_READ,
+    ERROR
+};
+
+// Bus operation structure
+struct BusOperation {
+    uint8_t sensorIndex;
+    uint32_t startTime;
+    uint32_t conversionTime;
+    BusOpState state;
+    uint8_t retryCount;
+    bool needsCRC;
+};
+
+// SensorCommand is already defined above
+
 struct Config {
     uint8_t version;
     bool dhcpEnabled;
@@ -74,6 +146,8 @@ struct IOStatus {
     float rawValue[MAX_SENSORS];   // Raw value per sensor
     char rawUnit[MAX_SENSORS][8];  // Raw unit per sensor ("mV", "ADC", etc.)
     float calibratedValue[MAX_SENSORS]; // Calibrated value per sensor
+    float ph;
+    float conductivity;
 };
 
 // Sensor configuration structure (KEEP - intentional improvements)
@@ -98,6 +172,9 @@ struct SensorConfig {
     int digitalPin;
     // Data parsing configuration
     char parsingMethod[16];   // raw, custom_bits, bit_field, status_register, json_path, csv_column
+    char command[32];
+    uint32_t updateInterval;
+    uint8_t i2cMultiplexerChannel;
     char parsingConfig[128];  // JSON string for parsing configuration
     // EZO sensor state tracking
     bool cmdPending;
