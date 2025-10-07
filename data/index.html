@@ -409,6 +409,12 @@
                                 </select>
                             </div>
                         </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <input type="checkbox" id="uart-streaming-checkbox">
+                                <label for="uart-streaming-checkbox">Streams continuously (no measurement command required)</label>
+                            </div>
+                        </div>
                     </div>
                     
                     <!-- Analog Configuration -->
@@ -553,6 +559,7 @@
                 
                 <div class="form-section" id="data-parsing-section" style="display: none;">
                     <h4>Data Parsing Configuration</h4>
+                    <button type="button" id="poll-now-btn" class="btn" style="float:right;">Poll Now</button>
                     <div class="form-row">
                         <div class="form-group">
                             <label for="sensor-data-parsing">Parsing Method</label>
@@ -636,7 +643,8 @@
                     <div class="example-data-container">
                         <label for="example-data-string">Raw Data from Sensor:</label>
                         <textarea id="example-data-string" rows="3" readonly placeholder="Raw data will appear here when available..."></textarea>
-                        <small class="form-help">This shows the actual data string received from the sensor. Use this to configure data parsing.</small>
+                        <div id="data-string-dissect" style="margin-top:8px;"></div>
+                        <small class="form-help">Click to select/delineate the portion of the data string to extract for calibration.</small>
                     </div>
                 </div>
                 
