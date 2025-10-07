@@ -55,6 +55,7 @@ int oneWireQueueSize = 0;
 // Command queues are already declared as extern above
 
 // Forward declarations for functions used before definition
+void handleSimpleHTTP();
 void updateIOForClient(int clientIndex);
 void handleDualHTTP();
 void routeRequest(WiFiClient& client, String method, String path, String body);
@@ -285,7 +286,7 @@ void enqueueBusOperation(uint8_t sensorIndex, const char* protocol) {
     
     BusOperation op = {
         .sensorIndex = sensorIndex,
-        .startTime = 0,
+            .startTime = millis(),
         .conversionTime = 750, // Default 750ms, adjust per sensor type
         .state = BusOpState::IDLE,
         .retryCount = 0,
@@ -427,7 +428,7 @@ void setup() {
         // Initialize sensor commands
         if (configuredSensors[i].enabled) {
             SensorCommand cmd = {
-                .sensorIndex = i,
+                .sensorIndex = (uint8_t)i,
                 .nextExecutionMs = millis(),
                 .intervalMs = configuredSensors[i].updateInterval,
                 .command = (strcmp(configuredSensors[i].type, "GENERIC") == 0) ? configuredSensors[i].command : nullptr,
@@ -1033,15 +1034,19 @@ void handlePOSTTerminalCommand(WiFiClient& client, String body) {
         }
     } else if (protocol == "i2c") {
         if (command == "scan") {
-            response = "I2C Device Scan:\\n";
+            response = "I2C Device Scan:\n";
             bool foundDevices = false;
+            // RP2040 Wire library does not support dynamic pin assignment via begin(sda, scl)
+            // Only scan using default pins
+            int sda = 4; // Default SDA
+            int scl = 5; // Default SCL
             for (int addr = 1; addr < 127; addr++) {
                 Wire.beginTransmission(addr);
                 if (Wire.endTransmission() == 0) {
-                    response += "Found device at 0x" + String(addr, HEX) + "\\n";
+                    response += "Found device at 0x" + String(addr, HEX) + " on SDA: " + String(sda) + ", SCL: " + String(scl) + "\n";
                     foundDevices = true;
                 }
-                delay(1); // Small delay between scans
+                delay(1);
             }
             if (!foundDevices) {
                 response += "No I2C devices found";
@@ -1208,21 +1213,25 @@ void handlePOSTTerminalCommand(WiFiClient& client, String body) {
             success = false;
             response = "Error: Invalid One-Wire pin. Use GP0-GP28 format";
         } else if (command == "scan" || command == "search") {
-            // Basic One-Wire presence detection
-            pinMode(owPin, OUTPUT);
-            digitalWrite(owPin, LOW);
-            delayMicroseconds(480); // Reset pulse
-            pinMode(owPin, INPUT_PULLUP);
-            delayMicroseconds(70);
-            bool presence = !digitalRead(owPin); // Presence pulse is low
-            delayMicroseconds(410);
-            
-            if (presence) {
-                response = "One-Wire device detected on GP" + String(owPin) + "\\n";
-                response += "Use 'read' to get temperature data\\n";
-                response += "Note: Full ROM search requires OneWire library";
-            } else {
-                response = "No One-Wire devices found on GP" + String(owPin);
+            // Scan all supported One-Wire pins
+            int oneWirePins[] = {0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,22,26,27,28};
+            bool foundDevice = false;
+            for (int i = 0; i < sizeof(oneWirePins)/sizeof(oneWirePins[0]); i++) {
+                int pin = oneWirePins[i];
+                pinMode(pin, OUTPUT);
+                digitalWrite(pin, LOW);
+                delayMicroseconds(480); // Reset pulse
+                pinMode(pin, INPUT_PULLUP);
+                delayMicroseconds(70);
+                bool presence = !digitalRead(pin); // Presence pulse is low
+                delayMicroseconds(410);
+                if (presence) {
+                    response += "One-Wire device detected on GP" + String(pin) + "\n";
+                    foundDevice = true;
+                }
+            }
+            if (!foundDevice) {
+                response += "No One-Wire devices found on any supported pin";
             }
         } else if (command == "read") {
             // Raw One-Wire data read - no libraries needed!
