@@ -21,6 +21,52 @@ bool readEZOEC(uint8_t sensorIndex, float& conductivity);
 SensorConfig configuredSensors[MAX_SENSORS] = {};
 int numConfiguredSensors = 0;
 
+// Preset table for named sensors
+struct SensorPreset {
+    const char* type;
+    const char* protocol;
+    uint8_t command[2];
+    int commandLen;
+    int updateInterval;
+    int delayBeforeRead;
+};
+
+const SensorPreset sensorPresets[] = {
+    // SHT30: I2C command 0x2C 0x06, 1s polling, 15ms delay
+    { "SHT30", "I2C", {0x2C, 0x06}, 2, 1000, 15 },
+    // Add more named sensors here as needed
+};
+
+void applySensorPresets() {
+    for (int i = 0; i < numConfiguredSensors; i++) {
+        for (unsigned int p = 0; p < sizeof(sensorPresets)/sizeof(sensorPresets[0]); p++) {
+            if (strcmp(configuredSensors[i].type, sensorPresets[p].type) == 0 &&
+                strcmp(configuredSensors[i].protocol, sensorPresets[p].protocol) == 0) {
+                // Only set fields if not already set
+                if (configuredSensors[i].updateInterval <= 0)
+                    configuredSensors[i].updateInterval = sensorPresets[p].updateInterval;
+                if (configuredSensors[i].calibrationOffset == 0 && configuredSensors[i].calibrationSlope == 0) {
+                    // Set command bytes as string for compatibility
+                    snprintf(configuredSensors[i].command, sizeof(configuredSensors[i].command), "0x%02X 0x%02X", sensorPresets[p].command[0], sensorPresets[p].command[1]);
+                }
+                // Protocol-specific delay assignment
+                if (strcmp(configuredSensors[i].protocol, "I2C") == 0) {
+                    // For I2C, use updateInterval and (optionally) a dedicated delay field if present
+                    // If you have a conversionTime or similar, set it here
+                    // Example: configuredSensors[i].conversionTime = sensorPresets[p].delayBeforeRead;
+                } else if (strcmp(configuredSensors[i].protocol, "ONEWIRE") == 0) {
+                    // For One-Wire, set oneWireConversionTime and oneWireCommand
+                    if (configuredSensors[i].oneWireConversionTime <= 0)
+                        configuredSensors[i].oneWireConversionTime = sensorPresets[p].delayBeforeRead;
+                    // Set oneWireCommand if not set
+                    if (strlen(configuredSensors[i].oneWireCommand) == 0)
+                        snprintf(configuredSensors[i].oneWireCommand, sizeof(configuredSensors[i].oneWireCommand), "0x%02X", sensorPresets[p].command[0]);
+                }
+            }
+        }
+    }
+}
+
 // Global object definitions
 Config config; // Define the actual config object
 IOStatus ioStatus = {};
@@ -57,7 +103,6 @@ int oneWireQueueSize = 0;
 // Forward declarations for functions used before definition
 void handleSimpleHTTP();
 void updateIOForClient(int clientIndex);
-void handleDualHTTP();
 void routeRequest(WiFiClient& client, String method, String path, String body);
 void sendFile(WiFiClient& client, String filename, String contentType);
 void send404(WiFiClient& client);
@@ -409,6 +454,8 @@ void setup() {
     Serial.println("Loading sensor configuration...");
     delay(500);
     loadSensorConfig();
+    // Ensure presets are applied after initial config load
+    applySensorPresets();
     
     // Initialize command queues
     
@@ -1620,7 +1667,6 @@ void loop() {
     updateIOpins();
     updateSensorReadings();  // Update sensor values for dataflow
     // handleEzoSensors(); // Commented out for now
-    handleDualHTTP();  // Handle both Ethernet and USB web interfaces
     
     // Debug: Web server check (every 30 seconds)
     static unsigned long lastWebDebug = 0;
@@ -1740,20 +1786,18 @@ void saveConfig() {
 
 void loadSensorConfig() {
     Serial.println("Loading sensor configuration...");
-    
     // Initialize sensors array
     numConfiguredSensors = 0;
     memset(configuredSensors, 0, sizeof(configuredSensors));
-    
+    // After loading sensors.json into configuredSensors[] (if implemented)
+    applySensorPresets();
 }
 
 void saveSensorConfig() {
     Serial.println("Saving sensor configuration...");
-    
     // Create JSON document
     StaticJsonDocument<1024> doc;
     JsonArray sensorsArray = doc.createNestedArray("sensors");
-    
     // Add each configured sensor to the array
     for (int i = 0; i < numConfiguredSensors; i++) {
         JsonObject sensor = sensorsArray.createNestedObject();
@@ -1763,10 +1807,12 @@ void saveSensorConfig() {
         sensor["i2cAddress"] = configuredSensors[i].i2cAddress;
         sensor["modbusRegister"] = configuredSensors[i].modbusRegister;
     }
-    
     // Open file for writing
     // No-op: sensors config is RAM-only, not persisted
     Serial.println("Sensors config save (RAM only, not persisted)");
+    // After saving, re-apply presets to ensure runtime config is correct
+    applySensorPresets();
+
 }
 
 // Reset all latched inputs
@@ -1777,21 +1823,40 @@ void resetLatches() {
     }
 }
 
+// ...existing code...
+
 void setPinModes() {
     for (int i = 0; i < sizeof(DIGITAL_INPUTS)/sizeof(DIGITAL_INPUTS[0]); i++) {
         pinMode(DIGITAL_INPUTS[i], config.diPullup[i] ? INPUT_PULLUP : INPUT);
     }
     for (int i = 0; i < sizeof(DIGITAL_OUTPUTS)/sizeof(DIGITAL_OUTPUTS[0]); i++) {
         pinMode(DIGITAL_OUTPUTS[i], OUTPUT);
-        
+
         // Set the digital output to its initial state from config
         ioStatus.dOut[i] = config.doInitialState[i];
-        
+
         // Apply any inversion logic
         bool physicalState = config.doInvert[i] ? !ioStatus.dOut[i] : ioStatus.dOut[i];
         digitalWrite(DIGITAL_OUTPUTS[i], physicalState);
     }
+    // --- I2C pull-up logic for all configured sensors ---
+    bool i2cPinsSet[32] = {false}; // Avoid duplicate pinMode calls
+    for (int i = 0; i < numConfiguredSensors; i++) {
+        if (strncmp(configuredSensors[i].protocol, "I2C", 3) == 0) {
+            int sda = configuredSensors[i].sdaPin >= 0 ? configuredSensors[i].sdaPin : 4;
+            int scl = configuredSensors[i].sclPin >= 0 ? configuredSensors[i].sclPin : 5;
+            if (sda >= 0 && sda < 32 && !i2cPinsSet[sda]) {
+                pinMode(sda, INPUT_PULLUP);
+                i2cPinsSet[sda] = true;
+            }
+            if (scl >= 0 && scl < 32 && !i2cPinsSet[scl]) {
+                pinMode(scl, INPUT_PULLUP);
+                i2cPinsSet[scl] = true;
+            }
+        }
+    }
 }
+// ...existing code...
 
 void setupEthernet() {
     Serial.println("Initializing W5500 Ethernet...");
@@ -3166,10 +3231,3 @@ void updateIOForClient(int clientIndex) {
     }
 }
 
-// HTTP Handler - Currently Ethernet only, USB interface planned
-void handleDualHTTP() {
-    // Handle Ethernet HTTP requests
-    handleSimpleHTTP();
-    // USB RNDIS HTTP implementation is auto-configured by RP2040 core; no manual handling required here.
-    // To support USB HTTP, bind server to USB network interface if/when supported by Arduino core.
-}
