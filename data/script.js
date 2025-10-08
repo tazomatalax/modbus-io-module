@@ -2814,19 +2814,97 @@ window.saveDataFlowCalibration = function saveDataFlowCalibration() {
         alert('Error saving calibration: ' + error.message);
     });
 }
+// --- Digital IO Config Table and Controls ---
 
-// Add missing loadIOConfig function
+window.renderIOConfigTable = function renderIOConfigTable(ioConfig) {
+    const table = document.getElementById('io-config-table');
+    if (!table) return;
+
+    let html = `
+        <tr>
+            <th>Pin</th>
+            <th>State</th>
+            <th>Latched</th>
+            <th>Pull-up</th>
+            <th>Invert</th>
+            <th>Latch</th>
+            <th>Actions</th>
+        </tr>
+    `;
+
+    for (let i = 0; i < 8; i++) {
+        html += `
+            <tr>
+                <td>DI${i}</td>
+                <td>${ioConfig.diState[i] ? 'HIGH' : 'LOW'}</td>
+                <td>${ioConfig.diLatched[i] ? 'Latched' : '-'}</td>
+                <td>
+                    <input type="checkbox" ${ioConfig.diPullup[i] ? 'checked' : ''} onchange="togglePullup(${i}, this.checked)">
+                </td>
+                <td>
+                    <input type="checkbox" ${ioConfig.diInvert[i] ? 'checked' : ''} onchange="toggleInvert(${i}, this.checked)">
+                </td>
+                <td>
+                    <input type="checkbox" ${ioConfig.diLatch[i] ? 'checked' : ''} onchange="toggleLatch(${i}, this.checked)">
+                </td>
+                <td>
+                    <button onclick="resetLatch(${i})">Unlatch</button>
+                </td>
+            </tr>
+        `;
+    }
+
+    table.innerHTML = html;
+};
+
+window.togglePullup = function togglePullup(index, state) {
+    fetch('/ioconfig', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ input: index, pullup: state })
+    }).then(() => window.loadIOConfig());
+};
+
+window.toggleInvert = function toggleInvert(index, state) {
+    fetch('/ioconfig', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ input: index, invert: state })
+    }).then(() => window.loadIOConfig());
+};
+
+window.toggleLatch = function toggleLatch(index, state) {
+    fetch('/ioconfig', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ input: index, latch: state })
+    }).then(() => window.loadIOConfig());
+};
+
+window.resetLatch = function resetLatch(index) {
+    fetch('/reset-latch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ input: index })
+    }).then(() => window.loadIOConfig());
+};
+
 window.loadIOConfig = function loadIOConfig() {
     fetch('/ioconfig')
         .then(response => response.json())
         .then(data => {
-            console.log('IO Config loaded:', data);
-            // Update UI elements with config data if needed
+            window.renderIOConfigTable(data);
         })
         .catch(error => {
             console.error('Error loading IO config:', error);
         });
 };
+
+// On page load, ensure IO config table is rendered
+document.addEventListener('DOMContentLoaded', function() {
+    window.loadIOConfig();
+});
+
 
 // Initialize periodic updates when page loads
 document.addEventListener('DOMContentLoaded', function() {

@@ -150,11 +150,12 @@
             </div>
         </div>
         
-        <div class="card config-card">
+               <div class="card config-card">
             <div class="card-header">
                 <h2>IO Configuration</h2>
             </div>
             <div class="card-body">
+                <table id="io-config-table" class="io-config-table"></table>
                 <p class="info-text"><span class="info-icon">ℹ️</span> Latched inputs remain ON until manually reset or read via Modbus. For Modbus clients, latches can be reset by writing '1' to coils 100-107.</p>
                 <div id="di-config"></div>
                 <div id="do-config"></div>

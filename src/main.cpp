@@ -2285,32 +2285,31 @@ void sendJSONIOStatus(WiFiClient& client) {
 
 void sendJSONIOConfig(WiFiClient& client) {
     StaticJsonDocument<1024> doc;
-    
+
     JsonArray diPullupArray = doc.createNestedArray("diPullup");
+    JsonArray diInvertArray = doc.createNestedArray("diInvert");
+    JsonArray diLatchArray = doc.createNestedArray("diLatch");
+    JsonArray diStateArray = doc.createNestedArray("diState");      // Display: digital input states
+    JsonArray diLatchedArray = doc.createNestedArray("diLatched");  // Display: latched states
+
     for (int i = 0; i < 8; i++) {
         diPullupArray.add(config.diPullup[i]);
-    }
-    
-    JsonArray diInvertArray = doc.createNestedArray("diInvert");
-    for (int i = 0; i < 8; i++) {
         diInvertArray.add(config.diInvert[i]);
-    }
-    
-    JsonArray diLatchArray = doc.createNestedArray("diLatch");
-    for (int i = 0; i < 8; i++) {
         diLatchArray.add(config.diLatch[i]);
+        diStateArray.add(ioStatus.dInRaw[i]);        // Actual pin state (HIGH/LOW)
+        diLatchedArray.add(ioStatus.dInLatched[i]);  // Latched state (true/false)
     }
-    
+
     JsonArray doInvertArray = doc.createNestedArray("doInvert");
+    JsonArray doInitialStateArray = doc.createNestedArray("doInitialState");
+    JsonArray doStateArray = doc.createNestedArray("doState");      // Display: digital output states
+
     for (int i = 0; i < 8; i++) {
         doInvertArray.add(config.doInvert[i]);
-    }
-    
-    JsonArray doInitialStateArray = doc.createNestedArray("doInitialState");
-    for (int i = 0; i < 8; i++) {
         doInitialStateArray.add(config.doInitialState[i]);
+        doStateArray.add(ioStatus.dOut[i]);          // Actual output state (HIGH/LOW)
     }
-    
+
     String response;
     serializeJson(doc, response);
     sendJSON(client, response);
