@@ -177,6 +177,8 @@ void handlePOSTResetSingleLatch(WiFiClient& client, String body);
 // Sensor functions temporarily commented out
 void handlePOSTSensorConfig(WiFiClient& client, String body);
 void handlePOSTSensorCommand(WiFiClient& client, String body);
+void handlePOSTSensorPoll(WiFiClient& client, String body);
+// TODO: Implement Poll Now functionality
 bool validateCRC(uint8_t* data, size_t length) {
     uint8_t crc = 0;
     
@@ -227,23 +229,43 @@ void processI2CQueue() {
             // Start I2C operation
             Wire.beginTransmission(configuredSensors[op.sensorIndex].i2cAddress);
             
-            // Log the command being sent
-            String cmdStr = "";
-            for (int i = 0; i < strlen(configuredSensors[op.sensorIndex].command); i++) {
-                if (i > 0) cmdStr += " ";
-                cmdStr += "0x" + String((uint8_t)configuredSensors[op.sensorIndex].command[i], HEX);
-            }
-            logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "TX", 
-                            "CMD: " + cmdStr + " (" + String(configuredSensors[op.sensorIndex].type) + ")", 
-                            String(configuredSensors[op.sensorIndex].sdaPin));
+            // Check if sensor has a command to send
+            bool hasCommand = strlen(configuredSensors[op.sensorIndex].command) > 0;
             
-            Wire.write(configuredSensors[op.sensorIndex].command);
+            if (hasCommand) {
+                // Log the command being sent
+                String cmdStr = "";
+                for (int i = 0; i < strlen(configuredSensors[op.sensorIndex].command); i++) {
+                    if (i > 0) cmdStr += " ";
+                    cmdStr += "0x" + String((uint8_t)configuredSensors[op.sensorIndex].command[i], HEX);
+                }
+                logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "TX", 
+                                "CMD: " + cmdStr + " (" + String(configuredSensors[op.sensorIndex].type) + ")", 
+                                String(configuredSensors[op.sensorIndex].sdaPin));
+                
+                // Write command bytes
+                Wire.write((uint8_t*)configuredSensors[op.sensorIndex].command, strlen(configuredSensors[op.sensorIndex].command));
+            } else {
+                // No command - direct read sensor
+                logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "PREP", 
+                                "Direct read (no command) for " + String(configuredSensors[op.sensorIndex].type), 
+                                String(configuredSensors[op.sensorIndex].sdaPin));
+            }
+            
             int result = Wire.endTransmission();
             
             if (result == 0) {
-                op.state = BusOpState::REQUEST_SENT;
-                op.startTime = currentTime;
-                logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "ACK", "Command sent successfully", String(configuredSensors[op.sensorIndex].sdaPin));
+                // Check if sensor needs delay before reading
+                bool hasCommand = strlen(configuredSensors[op.sensorIndex].command) > 0;
+                if (hasCommand && op.conversionTime > 0) {
+                    op.state = BusOpState::REQUEST_SENT;
+                    op.startTime = currentTime;
+                    logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "ACK", "Command sent successfully", String(configuredSensors[op.sensorIndex].sdaPin));
+                } else {
+                    // No delay needed - go directly to read
+                    op.state = BusOpState::READY_TO_READ;
+                    logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "ACK", "Ready for immediate read", String(configuredSensors[op.sensorIndex].sdaPin));
+                }
             } else {
                 logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "NACK", "Error code: " + String(result), String(configuredSensors[op.sensorIndex].sdaPin));
                 if (++op.retryCount >= 3) {
@@ -266,7 +288,9 @@ void processI2CQueue() {
         }
             
         case BusOpState::READY_TO_READ: {
-            logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "REQ", "Requesting 32 bytes", String(configuredSensors[op.sensorIndex].sdaPin));
+            logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "REQ", 
+                            "Requesting 32 bytes from " + String(configuredSensors[op.sensorIndex].type), 
+                            String(configuredSensors[op.sensorIndex].sdaPin));
             Wire.requestFrom((int)configuredSensors[op.sensorIndex].i2cAddress, 32);
             
             if (Wire.available()) {
@@ -297,6 +321,9 @@ void processI2CQueue() {
                 } else if (strcmp(configuredSensors[op.sensorIndex].type, "EZO-EC") == 0) {
                     configuredSensors[op.sensorIndex].rawValue = atof(response);
                     logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "VAL", "EC: " + String(configuredSensors[op.sensorIndex].rawValue), String(configuredSensors[op.sensorIndex].sdaPin));
+                } else {
+                    // Fallback: log raw value for all other I2C sensors
+                    logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "VAL", "Raw: " + String(response), String(configuredSensors[op.sensorIndex].sdaPin));
                 }
                 
                 // Move queue forward
@@ -1373,15 +1400,29 @@ void updateSensorReadings() {
                 parsedValue = rawValue;
             }
             
-            // Store raw value
+            // Store raw value(s)
             configuredSensors[i].rawValue = parsedValue;
             
-            // Apply calibration
+            // Apply calibration to primary value
             float calibrated = (parsedValue * configuredSensors[i].calibrationSlope) + configuredSensors[i].calibrationOffset;
             configuredSensors[i].calibratedValue = calibrated;
             
-            // Convert to Modbus register value (typically scaled integer)
+            // Convert primary value to Modbus register value (typically scaled integer)
             configuredSensors[i].modbusValue = (int)(calibrated * 100); // Scale by 100 for decimal places
+            
+            // Handle multi-output sensors (like SHT30 with temp + humidity)
+            if (strcmp(configuredSensors[i].type, "SHT30") == 0 && configuredSensors[i].rawValueB != 0) {
+                // Apply calibration to secondary value (humidity)
+                float calibratedB = (configuredSensors[i].rawValueB * configuredSensors[i].calibrationSlopeB) + configuredSensors[i].calibrationOffsetB;
+                configuredSensors[i].calibratedValueB = calibratedB;
+                configuredSensors[i].modbusValueB = (int)(calibratedB * 100); // Scale humidity by 100
+                
+                Serial.printf("[%lu] SHT30 Multi-output: Temp=%.2f->%d (reg %d), Hum=%.2f->%d (reg %d)\n", 
+                              millis(), configuredSensors[i].calibratedValue, configuredSensors[i].modbusValue, 
+                              configuredSensors[i].modbusRegister,
+                              configuredSensors[i].calibratedValueB, configuredSensors[i].modbusValueB, 
+                              configuredSensors[i].modbusRegister + 1);
+            }
             
             // Update timestamp
             configuredSensors[i].lastReadTime = millis();
@@ -2655,6 +2696,8 @@ void routeRequest(WiFiClient& client, String method, String path, String body) {
             handlePOSTSensorCommand(client, body);
         } else if (path == "/api/sensor/calibration") {
             handlePOSTSensorCalibration(client, body);
+        } else if (path == "/api/sensor/poll") {
+            handlePOSTSensorPoll(client, body);
         } else if (path == "/terminal/command") {
             handlePOSTTerminalCommand(client, body);
         } else if (path == "/terminal/start-watch") {
@@ -2755,9 +2798,23 @@ void sendJSONIOStatus(WiFiClient& client) {
             // Modbus register value (what gets sent to Modbus)
             sensor["modbus_value"] = configuredSensors[i].modbusValue;
             
+            // Multi-output sensor support (for SHT30 humidity, BME280 pressure, etc.)
+            if (strcmp(configuredSensors[i].type, "SHT30") == 0 && configuredSensors[i].rawValueB != 0) {
+                sensor["raw_value_b"] = configuredSensors[i].rawValueB;        // Humidity raw
+                sensor["calibrated_value_b"] = configuredSensors[i].calibratedValueB;  // Humidity calibrated
+                sensor["modbus_value_b"] = configuredSensors[i].modbusValueB;  // Humidity modbus (register+1)
+                sensor["modbus_register_b"] = configuredSensors[i].modbusRegister + 1;
+            }
+            
             // Include calibration info for dataflow display
             sensor["calibration_offset"] = configuredSensors[i].calibrationOffset;
             sensor["calibration_slope"] = configuredSensors[i].calibrationSlope;
+            
+            // Multi-output calibration info
+            if (configuredSensors[i].calibrationSlopeB != 1.0 || configuredSensors[i].calibrationOffsetB != 0.0) {
+                sensor["calibration_offset_b"] = configuredSensors[i].calibrationOffsetB;
+                sensor["calibration_slope_b"] = configuredSensors[i].calibrationSlopeB;
+            }
             
             // Include last read time for status
             sensor["last_read_time"] = configuredSensors[i].lastReadTime;
@@ -3258,6 +3315,12 @@ void handlePOSTSensorConfig(WiFiClient& client, String body) {
         configuredSensors[numConfiguredSensors].calibrationOffset = sensor["calibrationOffset"] | 0.0;
         configuredSensors[numConfiguredSensors].calibrationSlope = sensor["calibrationSlope"] | 1.0;
         
+        // Multi-output calibration data (for sensors like SHT30 with temp+humidity)
+        configuredSensors[numConfiguredSensors].calibrationOffsetB = sensor["calibrationOffsetB"] | 0.0;
+        configuredSensors[numConfiguredSensors].calibrationSlopeB = sensor["calibrationSlopeB"] | 1.0;
+        configuredSensors[numConfiguredSensors].calibrationOffsetC = sensor["calibrationOffsetC"] | 0.0;
+        configuredSensors[numConfiguredSensors].calibrationSlopeC = sensor["calibrationSlopeC"] | 1.0;
+        
         // Data parsing configuration
         if (sensor.containsKey("dataParsing") && sensor["dataParsing"].is<JsonObject>()) {
             JsonObject dataParsing = sensor["dataParsing"];
@@ -3459,6 +3522,121 @@ void handlePOSTSensorCommand(WiFiClient& client, String body) {
     StaticJsonDocument<1024> responseDoc;
     responseDoc["success"] = success;
     responseDoc["message"] = response;
+    
+    String jsonResponse;
+    serializeJson(responseDoc, jsonResponse);
+    
+    client.println("HTTP/1.1 200 OK");
+    client.println("Content-Type: application/json");
+    client.println("Connection: close");
+    client.print("Content-Length: ");
+    client.println(jsonResponse.length());
+    client.println();
+    client.print(jsonResponse);
+}
+
+// Poll Now endpoint - live sensor testing for configuration
+void handlePOSTSensorPoll(WiFiClient& client, String body) {
+    StaticJsonDocument<512> doc;
+    DeserializationError error = deserializeJson(doc, body);
+    
+    if (error) {
+        sendJSON(client, "{\"success\":false,\"error\":\"Invalid JSON\"}");
+        return;
+    }
+    
+    String protocol = doc["protocol"] | "";
+    String command = doc["command"] | "";
+    int i2cAddress = doc["i2cAddress"] | 0x44;
+    int delayBeforeRead = doc["delayBeforeRead"] | 0;
+    
+    StaticJsonDocument<1024> responseDoc;
+    bool success = false;
+    String errorMsg = "";
+    
+    if (protocol == "I2C") {
+        Wire.begin();
+        
+        if (i2cAddress < 1 || i2cAddress > 127) {
+            errorMsg = "Invalid I2C address: 0x" + String(i2cAddress, HEX);
+        } else {
+            // Test device presence
+            addTerminalLog("POLL [0x" + String(i2cAddress, HEX) + "] Testing device presence");
+            Wire.beginTransmission(i2cAddress);
+            int probeResult = Wire.endTransmission();
+            
+            if (probeResult != 0) {
+                errorMsg = "No device at 0x" + String(i2cAddress, HEX) + " (Error: " + String(probeResult) + ")";
+                addTerminalLog("POLL [0x" + String(i2cAddress, HEX) + "] Device not found");
+            } else {
+                addTerminalLog("POLL [0x" + String(i2cAddress, HEX) + "] Device found, sending command");
+                
+                // Send command if provided
+                Wire.beginTransmission(i2cAddress);
+                if (command.length() > 0) {
+                    String cleanCmd = command;
+                    cleanCmd.replace("0x", "");
+                    cleanCmd.replace(" ", "");
+                    
+                    for (int i = 0; i < cleanCmd.length(); i += 2) {
+                        String hexByte = cleanCmd.substring(i, i + 2);
+                        uint8_t byte = strtoul(hexByte.c_str(), NULL, 16);
+                        Wire.write(byte);
+                    }
+                    addTerminalLog("POLL [0x" + String(i2cAddress, HEX) + "] TX: " + command);
+                }
+                
+                int result = Wire.endTransmission();
+                if (result == 0) {
+                    if (delayBeforeRead > 0) {
+                        delay(delayBeforeRead);
+                    }
+                    
+                    // Read response
+                    Wire.requestFrom(i2cAddress, 32);
+                    if (Wire.available()) {
+                        String rawHex = "";
+                        String rawAscii = "";
+                        char response[33] = {0};
+                        int idx = 0;
+                        
+                        while (Wire.available() && idx < 32) {
+                            uint8_t byte = Wire.read();
+                            response[idx++] = byte;
+                            if (rawHex.length() > 0) rawHex += " ";
+                            rawHex += String(byte, HEX);
+                            rawAscii += (byte >= 32 && byte <= 126) ? (char)byte : '.';
+                        }
+                        
+                        addTerminalLog("POLL [0x" + String(i2cAddress, HEX) + "] RX: [" + rawHex + "] '" + rawAscii + "'");
+                        
+                        success = true;
+                        responseDoc["rawHex"] = rawHex;
+                        responseDoc["rawAscii"] = rawAscii;
+                        responseDoc["response"] = String(response);
+                        
+                        float parsedValue = atof(response);
+                        if (parsedValue != 0.0 || response[0] == '0') {
+                            responseDoc["parsedValue"] = parsedValue;
+                        }
+                    } else {
+                        errorMsg = "No response from sensor";
+                        addTerminalLog("POLL [0x" + String(i2cAddress, HEX) + "] No response");
+                    }
+                } else {
+                    errorMsg = "I2C transmission failed (" + String(result) + ")";
+                    addTerminalLog("POLL [0x" + String(i2cAddress, HEX) + "] TX failed: " + String(result));
+                }
+            }
+        }
+    } else {
+        errorMsg = "Protocol not supported: " + protocol;
+    }
+    
+    responseDoc["success"] = success;
+    if (!success) {
+        responseDoc["error"] = errorMsg;
+    }
     
     String jsonResponse;
     serializeJson(responseDoc, jsonResponse);
@@ -3694,6 +3872,21 @@ void updateIOForClient(int clientIndex) {
 
     // modbusClients[clientIndex].server.inputRegisterWrite(3, temp_x_100); // Temperature
     // modbusClients[clientIndex].server.inputRegisterWrite(4, hum_x_100); // Humidity
+    
+    // Update Modbus registers with configured sensor values
+    for (int i = 0; i < numConfiguredSensors; i++) {
+        if (configuredSensors[i].enabled && configuredSensors[i].modbusRegister >= 0) {
+            // Primary value (temperature for SHT30)
+            modbusClients[clientIndex].server.inputRegisterWrite(configuredSensors[i].modbusRegister, configuredSensors[i].modbusValue);
+            
+            // Multi-output sensors (SHT30 humidity, BME280 pressure, etc.)
+            if (strcmp(configuredSensors[i].type, "SHT30") == 0 && configuredSensors[i].rawValueB != 0) {
+                // Write humidity to next register
+                modbusClients[clientIndex].server.inputRegisterWrite(configuredSensors[i].modbusRegister + 1, configuredSensors[i].modbusValueB);
+            }
+            // Future: Add BME280 (temp, hum, pressure) and other multi-output sensors here
+        }
+    }
     
     // Check coils 100-107 for latch reset commands
     for (int i = 0; i < 8; i++) {

@@ -574,6 +574,136 @@ window.updateSensorFormFields = function updateSensorFormFields() {
     }
 }
 
+// Poll Sensor Now functionality
+window.pollSensorNow = function pollSensorNow() {
+    const protocolElement = document.getElementById('sensor-protocol');
+    const pollResults = document.getElementById('poll-results');
+    const pollStatus = document.getElementById('poll-status');
+    const rawResponse = document.getElementById('raw-response');
+    const parsedData = document.getElementById('parsed-data');
+    
+    if (!protocolElement || !pollResults || !pollStatus || !rawResponse || !parsedData) {
+        alert('Poll form elements not found. Please ensure sensor configuration form is open.');
+        return;
+    }
+    
+    const protocol = protocolElement.value;
+    
+    // Show results area
+    pollResults.style.display = 'block';
+    pollStatus.className = 'poll-status polling';
+    pollStatus.textContent = 'Polling sensor...';
+    rawResponse.textContent = '';
+    parsedData.textContent = '';
+    
+    // Gather sensor configuration with null checks
+    const nameElement = document.getElementById('sensor-name');
+    const typeElement = document.getElementById('sensor-type');
+    
+    const sensorConfig = {
+        protocol: protocol,
+        name: nameElement ? nameElement.value || 'Test Sensor' : 'Test Sensor',
+        type: typeElement ? typeElement.value || 'GENERIC_I2C' : 'GENERIC_I2C'
+    };
+    
+    if (protocol === 'I2C') {
+        const addressElement = document.getElementById('sensor-i2c-address');
+        const commandElement = document.getElementById('sensor-command');
+        const delayElement = document.getElementById('sensor-command-wait');
+        
+        sensorConfig.i2cAddress = addressElement ? parseI2CAddress(addressElement.value) : 0x44;
+        sensorConfig.command = commandElement ? commandElement.value || '' : '';
+        sensorConfig.delayBeforeRead = delayElement ? parseInt(delayElement.value) || 0 : 0;
+        
+        const pins = getPinsForProtocol('I2C');
+        sensorConfig.sdaPin = pins[0];
+        sensorConfig.sclPin = pins[1];
+    } else if (protocol === 'UART') {
+        const baudElement = document.getElementById('sensor-uart-baud');
+        const commandElement = document.getElementById('sensor-command');
+        
+        sensorConfig.baudRate = baudElement ? parseInt(baudElement.value) || 9600 : 9600;
+        sensorConfig.command = commandElement ? commandElement.value || '' : '';
+        
+        const pins = getPinsForProtocol('UART');
+        sensorConfig.txPin = pins[0];
+        sensorConfig.rxPin = pins[1];
+    } else if (protocol === 'One-Wire') {
+        const commandElement = document.getElementById('sensor-onewire-command-custom');
+        const conversionElement = document.getElementById('sensor-onewire-conversion-time');
+        
+        sensorConfig.oneWireCommand = commandElement ? commandElement.value || '' : '';
+        sensorConfig.oneWireConversionTime = conversionElement ? parseInt(conversionElement.value) || 750 : 750;
+        
+        const pins = getPinsForProtocol('One-Wire');
+        sensorConfig.oneWirePin = pins[0];
+    }
+    
+    // Send poll request to backend
+    fetch('/api/sensor/poll', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(sensorConfig)
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            pollStatus.className = 'poll-status success';
+            pollStatus.textContent = 'Poll completed successfully';
+            
+            // Display raw response
+            if (data.rawHex) {
+                rawResponse.textContent = `Raw Hex: ${data.rawHex}\nRaw ASCII: "${data.rawAscii || ''}"`;
+            } else {
+                rawResponse.textContent = data.response || 'No response data';
+            }
+            
+            // Display parsed data if available
+            if (data.parsedValue !== undefined) {
+                parsedData.textContent = `Parsed Value: ${data.parsedValue}`;
+            } else {
+                parsedData.textContent = 'No parsing applied - raw data only';
+            }
+            
+        } else {
+            pollStatus.className = 'poll-status error';
+            pollStatus.textContent = `Poll failed: ${data.error || 'Unknown error'}`;
+            rawResponse.textContent = data.details || 'No additional details';
+        }
+    })
+    .catch(error => {
+        pollStatus.className = 'poll-status error';
+        pollStatus.textContent = `Network error: ${error.message}`;
+        rawResponse.textContent = 'Failed to communicate with device';
+    });
+};
+
+// Helper function to parse I2C address from string (hex or decimal)
+function parseI2CAddress(addressStr) {
+    if (!addressStr) return 0x44;
+    const cleanAddr = addressStr.trim();
+    if (cleanAddr.startsWith('0x') || cleanAddr.startsWith('0X')) {
+        return parseInt(cleanAddr, 16);
+    }
+    return parseInt(cleanAddr, 10);
+}
+
+// Helper function to get pins for current protocol selection
+function getPinsForProtocol(protocol) {
+    const pinSelectId = `sensor-${protocol.toLowerCase()}-pins`;
+    const pinSelect = document.getElementById(pinSelectId);
+    if (pinSelect && pinSelect.value) {
+        return pinSelect.value.split(',').map(p => parseInt(p));
+    }
+    // Default pins
+    if (protocol === 'I2C') return [4, 5];
+    if (protocol === 'UART') return [0, 1];
+    if (protocol === 'One-Wire') return [2];
+    return [];
+}
+
 // Auto-configure sensor settings based on type
 window.autoConfigureSensorType = function autoConfigureSensorType() {
     const sensorType = document.getElementById('sensor-type').value;

@@ -560,7 +560,17 @@
                 
                 <div class="form-section" id="data-parsing-section" style="display: none;">
                     <h4>Data Parsing Configuration</h4>
-                    <button type="button" id="poll-now-btn" class="btn" style="float:right;">Poll Now</button>
+                    <button type="button" id="poll-now-btn" class="btn" style="float:right;" onclick="pollSensorNow()">Poll Now</button>
+                    
+                    <!-- Poll Results Display -->
+                    <div id="poll-results" class="poll-results" style="display:none;">
+                        <h4>Live Sensor Response</h4>
+                        <div class="poll-results-content">
+                            <div class="poll-status" id="poll-status">Ready to poll...</div>
+                            <div class="raw-response" id="raw-response"></div>
+                            <div class="parsed-data" id="parsed-data"></div>
+                        </div>
+                    </div>
                     <div class="form-row">
                         <div class="form-group">
                             <label for="sensor-data-parsing">Parsing Method</label>
