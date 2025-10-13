@@ -1,4 +1,10 @@
 # Changelog - Modbus TCP IO Module
+[2025-10-07]
+Backend and firmware now support dynamic sensor parameters for generic sensors, including protocol, pin assignments, measurement command, polling interval, parsing method/config, calibration, and modbus register. These are loaded and saved via config_manager.cpp and used in main.cpp for sensor reading and bus operations.
+
+Validated that all UI-configured fields (protocol, pins, command, parsing, calibration, modbus register) are sent to the backend and stored in sensors.json. Confirmed firmware uses these fields for reading, parsing, and Modbus mapping.
+
+System is ready for end-to-end workflow validation for generic sensor abstraction and configuration.
 
 ## [v2.0.0] - 2025-09-09 - Major Sensor Enhancement Update
 

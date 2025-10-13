@@ -130,8 +130,73 @@ Response: Sent: TEST123, Received: TEST123
 - Use `loopback` to test if TX/RX are properly connected
 - Use `baudrate` to match device communication speed
 - Use `at` for testing AT-command compatible devices (GPS, GSM modules)
+- Ensure proper ground connection between devices
 
-### 5. Network Information
+### 5. One-Wire Communication
+**Available Pins:**
+- Any GPIO pin (GP0-GP28) - Commonly GP2, GP3, GP22, GP26-GP28
+- Requires 4.7kΩ pullup resistor to 3.3V
+
+**Commands:**
+- `scan` / `search` - Detect One-Wire devices on the bus
+- `read` - Read temperature from DS18B20 sensor
+- `convert` - Start temperature conversion (wait 750ms before read)
+- `reset` - Send reset pulse and check for device presence
+- `power` - Check power mode information
+- `info` - Show One-Wire protocol information
+- `crc` - Show CRC validation information
+
+**Supported Devices:**
+- DS18B20 - Digital thermometer (±0.5°C accuracy)
+- DS18S20 - Digital thermometer (±0.5°C accuracy)  
+- DS1822 - Digital thermometer (±2°C accuracy)
+- DS2431 - 1024-bit EEPROM
+- DS2438 - Smart battery monitor
+
+**Examples:**
+```
+Protocol: One-Wire, Pin: GP28, Command: scan
+Response: One-Wire device detected on GP28
+Use 'read' to get temperature data
+
+Protocol: One-Wire, Pin: GP28, Command: read
+Response: One-Wire Read from GP28:
+Temperature: 21.5°C
+Note: Install OneWire + DallasTemperature libraries for real readings
+
+Protocol: One-Wire, Pin: GP28, Command: reset
+Response: Reset pulse sent to GP28
+Device presence detected
+
+Protocol: One-Wire, Pin: GP28, Command: convert
+Response: Temperature conversion started on GP28
+Wait 750ms before reading for 12-bit resolution
+
+Protocol: One-Wire, Pin: GP28, Command: info
+Response: One-Wire Information for GP28:
+Protocol: Dallas 1-Wire
+Common devices: DS18B20, DS18S20, DS1822
+Requires: 4.7kΩ pullup resistor
+Voltage: 3.3V or 5V
+Speed: 15.4 kbps (standard), 125 kbps (overdrive)
+```
+
+**Wiring Requirements:**
+- **Data Line**: Connect to any GPIO pin (e.g., GP28)
+- **Power**: 3.3V or 5V (depending on sensor)
+- **Ground**: Common ground with RP2040
+- **Pullup**: 4.7kΩ resistor from data line to VCC
+- **Parasitic Power**: Some sensors can use data line for power
+
+**Common One-Wire Troubleshooting:**
+- Verify 4.7kΩ pullup resistor is installed
+- Check data line connections
+- Ensure proper power supply voltage
+- Use `scan` to verify device presence before reading
+- Wait appropriate time after `convert` command (750ms for DS18B20)
+- For multiple devices, each needs unique ROM address
+
+### 6. Network Information
 **Available Ports:**
 - Ethernet Interface - W5500
 - Ethernet PHY Status  
@@ -187,7 +252,7 @@ Slot 0: 192.168.1.50
 Slot 1: 192.168.1.75
 ```
 
-### 6. System Information
+### 7. System Information
 **Commands:**
 - `status` - Show system status and uptime
 - `sensors` - List configured sensors

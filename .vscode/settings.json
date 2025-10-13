@@ -13,7 +13,8 @@
         "tuple": "cpp",
         "type_traits": "cpp",
         "utility": "cpp",
-        "variant": "cpp"
+        "variant": "cpp",
+        "compare": "cpp"
     },
     "files.encoding": "utf8",
     "files.autoGuessEncoding": false,

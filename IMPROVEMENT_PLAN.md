@@ -1,5 +1,102 @@
 # Modbus IO Module – Improvement Plan
 
+_Last updated: 2025-10-06_
+
+## 2025-10-06 - Web UI and Firmware Alignment Analysis
+
+Analysis of current implementation reveals gaps between web UI capabilities and firmware implementation that need to be addressed:
+
+### Current Status Assessment
+
+1. **Generic Sensor Configuration**
+   - ✅ UI: Supports protocol selection (I2C, UART, One-Wire, Analog)
+   - ✅ UI: Allows custom polling intervals per bus
+   - ❌ Firmware: Missing dynamic command execution for generic sensors
+   - ❌ Firmware: Bus-level polling frequencies not fully implemented
+
+2. **Named Sensor Support**
+   - ✅ UI: Can select predefined sensor types
+   - ⚠️ Firmware: Partially implemented (DS18B20, EZO-PH, EZO-EC, SHT30)
+   - ❌ Firmware: Missing systematic approach for named sensor abstraction
+
+3. **Bus Management**
+   - ✅ UI: Configurable bus parameters (I2C address, UART baud rate, etc.)
+   - ⚠️ Firmware: Basic I2C and One-Wire support exists
+   - ❌ Firmware: Missing bus conflict prevention and sequencing
+
+### Implementation Plan
+
+#### Phase 1: Dynamic Command System
+1. Create command queue per bus type
+2. Implement configurable polling frequencies
+3. Add protocol-specific command formatting
+4. Integrate with existing sensor configuration
+
+#### Phase 2: Named Sensor Framework
+1. Create sensor type registry
+2. Define standard sensor interfaces
+3. Implement automatic initialization
+4. Add named sensor abstraction layer
+
+#### Phase 3: Bus Management System
+1. Implement bus scheduling
+2. Add conflict prevention
+3. Support non-blocking operations
+4. Integrate with command system
+
+## 2025-10-06 - Earlier Identified Improvements
+
+During initial testing of sensor configuration through the web UI, several areas for improvement were identified:
+
+### 1. Bus/Pin Polling Frequency Management
+- Need to implement polling frequency configuration at the bus/pin level
+- Individual sensor measurement commands for generic I2C and OneWire sensors
+- Strategy for avoiding timing conflicts on shared buses
+
+### 2. Bus Conflict Prevention Strategy
+#### A. Strict Bus Sequencing
+- **1-Wire Protocol**:
+  - Implement proper bus reset sequence (0xF0)
+  - Use MATCH ROM (0x55) + 64-bit serial for specific devices
+  - Use SKIP ROM (0xCC) + CONVERT T (0x44) for simultaneous polling
+- **I2C Protocol**:
+  - Address conflict management
+  - Support for TCA9548A multiplexer
+  - Sequential device addressing with response waiting
+- **UART Protocol**:
+  - Separate TX/RX pin management
+  - Hardware/software UART multiplexer support
+
+#### B. Non-blocking Sensor Management
+Implement asynchronous polling approach:
+1. Request: Send measurement initiation command
+2. Wait: Non-blocking wait while polling other sensors
+3. Read: Get results on subsequent polling loop pass
+
+#### C. Fault Tolerance
+- Data validation before calibration
+- CRC checking for 1-Wire
+- I2C bus recovery routine
+- Sensor timeout implementation
+
+### 3. Terminal Enhancements
+- Add live command/response watching in web UI terminal
+- Show sensor communication sequence in real-time
+- Implement "Send to Config" button functionality
+- Add digital pin state scanning (pulled up/latched)
+- Add pin state display in terminal dropdowns
+
+### 4. Data Extraction Process
+- Fix data byte and checksum byte identification
+- Improve terminal-to-config data string transfer
+- Enhance data parsing configuration modal
+- Add checksum validation in parsing process
+
+### 5. Digital Pin Management
+- Add comprehensive pin state scanning
+- Show pin states in terminal dropdowns
+- Match functionality to I2C pin scanning interface
+
 _Last updated: 2025-09-24_
 existing features of the web ui to keep:
 - header showing modbus client status.

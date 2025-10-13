@@ -5,6 +5,20 @@
   "sensors": [
     {
       "enabled": true,
+      "name": "SHT30 Temperature + Humidity",
+      "type": "SHT30",
+      "protocol": "I2C",
+      "i2cAddress": 68,
+      "modbusRegister": 10,
+      "updateInterval": 1000,
+      "calibrationOffset": 0.0,
+      "calibrationSlope": 1.0,
+      "calibrationOffsetB": 0.0,
+      "calibrationSlopeB": 1.0,
+      "_comment": "Multi-output sensor: Temperature goes to register 10, Humidity to register 11"
+    },
+    {
+      "enabled": true,
       "name": "Demo Temperature",
       "type": "SIM_I2C_TEMPERATURE",
       "i2cAddress": 0,

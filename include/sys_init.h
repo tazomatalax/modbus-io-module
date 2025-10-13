@@ -2,12 +2,63 @@
 
 #include <Arduino.h>
 #include <SPI.h>
+#include <Wire.h>
 #include <W5500lwIP.h>
 #include <LwipEthernet.h>
 #include <WebServer.h>
 #include <ArduinoModbus.h>
 #include <ArduinoJson.h>
 #include <LittleFS.h>
+
+#define MAX_SENSORS 10
+
+// Forward declarations
+struct SensorCommand {
+    uint8_t sensorIndex;
+    uint32_t nextExecutionMs;
+    uint32_t intervalMs;
+    const char* command;
+    bool isGeneric;
+};
+
+// Simple command array handler
+struct CommandArray {
+    SensorCommand commands[MAX_SENSORS];
+    uint8_t count;
+    
+    void init() {
+        count = 0;
+    }
+    
+    bool add(const SensorCommand& cmd) {
+        if (count < MAX_SENSORS) {
+            commands[count++] = cmd;
+            return true;
+        }
+        return false;
+    }
+    
+    bool isEmpty() const {
+        return count == 0;
+    }
+    
+    SensorCommand* getNext() {
+        return isEmpty() ? nullptr : &commands[0];
+    }
+    
+    void remove() {
+        if (!isEmpty()) {
+            for (uint8_t i = 0; i < count - 1; i++) {
+                commands[i] = commands[i + 1];
+            }
+            count--;
+        }
+    }
+    
+    void clear() {
+        count = 0;
+    }
+};
 
 // Watchdog timer
 #define WDT_TIMEOUT 5000
@@ -28,7 +79,7 @@
 // Constants
 #define CONFIG_FILE "/config.json"
 #define SENSORS_FILE "/sensors.json"
-#define CONFIG_VERSION 6  // Increment this when config structure changes
+#define CONFIG_VERSION 7  // Increment this when config structure changes
 #define HOSTNAME_MAX_LENGTH 32
 #define MAX_MODBUS_CLIENTS 4  // Maximum number of concurrent Modbus clients
 #define MAX_SENSORS 10
@@ -42,6 +93,27 @@ const uint8_t DIGITAL_OUTPUTS[] = {8, 9, 10, 11, 12, 13, 14, 15}; // Digital out
 const uint8_t ANALOG_INPUTS[] = {26, 27, 28};   // ADC pins
 
 // Network and Modbus Configuration
+
+// Bus operation states
+enum class BusOpState {
+    IDLE,
+    REQUEST_SENT,
+    WAITING_CONVERSION,
+    READY_TO_READ,
+    ERROR
+};
+
+// Bus operation structure
+struct BusOperation {
+    uint8_t sensorIndex;
+    uint32_t startTime;
+    uint32_t conversionTime;
+    BusOpState state;
+    uint8_t retryCount;
+    bool needsCRC;
+};
+
+// SensorCommand is already defined above
 
 struct Config {
     uint8_t version;
@@ -74,6 +146,8 @@ struct IOStatus {
     float rawValue[MAX_SENSORS];   // Raw value per sensor
     char rawUnit[MAX_SENSORS][8];  // Raw unit per sensor ("mV", "ADC", etc.)
     float calibratedValue[MAX_SENSORS]; // Calibrated value per sensor
+    float ph;
+    float conductivity;
 };
 
 // Sensor configuration structure (KEEP - intentional improvements)
@@ -98,19 +172,50 @@ struct SensorConfig {
     int digitalPin;
     // Data parsing configuration
     char parsingMethod[16];   // raw, custom_bits, bit_field, status_register, json_path, csv_column
+    char command[32];
+    uint32_t updateInterval;
+    uint8_t i2cMultiplexerChannel;
     char parsingConfig[128];  // JSON string for parsing configuration
+    
+    // Secondary parsing for multi-output sensors
+    char parsingMethodB[16];  // Parsing method for secondary value (rawValueB)
+    char parsingConfigB[128]; // JSON config for secondary parsing
+    char parsingMethodC[16];  // Parsing method for tertiary value (rawValueC)  
+    char parsingConfigC[128]; // JSON config for tertiary parsing
     // EZO sensor state tracking
     bool cmdPending;
     unsigned long lastCmdSent;
     // Response data storage
     char response[64];
     char calibrationData[256];
-    // Current sensor values for dataflow
-    float rawValue;           // Raw sensor reading
-    float calibratedValue;    // After applying calibration
-    int modbusValue;          // Value written to Modbus register
+    // Current sensor values for dataflow - support multiple outputs
+    float rawValue;           // Primary raw sensor reading (rawValueA)
+    float rawValueB;          // Secondary raw reading (humidity for SHT30, pressure for BME280)
+    float rawValueC;          // Tertiary raw reading (pressure for BME280, etc.)
+    
+    float calibratedValue;    // Primary calibrated value (after applying calibration)
+    float calibratedValueB;   // Secondary calibrated value
+    float calibratedValueC;   // Tertiary calibrated value
+    
+    int modbusValue;          // Primary value written to Modbus register
+    int modbusValueB;         // Secondary value for next Modbus register
+    int modbusValueC;         // Tertiary value for next Modbus register
+    
+    // Calibration for multiple outputs
+    float calibrationOffsetB; // Calibration offset for rawValueB
+    float calibrationSlopeB;  // Calibration slope for rawValueB
+    float calibrationOffsetC; // Calibration offset for rawValueC  
+    float calibrationSlopeC;  // Calibration slope for rawValueC
+    
     char rawDataString[128];  // Raw data string for parsing (I2C/UART responses)
     unsigned long lastReadTime; // When last read was performed
+    
+    // One-Wire specific configuration
+    char oneWireCommand[16];  // Hex command to send (e.g., "0x44" for Convert T)
+    int oneWireInterval;      // Interval in seconds between commands (0 = manual only)
+    int oneWireConversionTime; // Time in ms to wait after command before reading
+    unsigned long lastOneWireCmd; // When last command was sent
+    bool oneWireAutoMode;     // Enable automatic periodic commands
 };
 
 // Extern declarations for global variables

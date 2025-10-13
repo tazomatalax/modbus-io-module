@@ -150,11 +150,12 @@
             </div>
         </div>
         
-        <div class="card config-card">
+               <div class="card config-card">
             <div class="card-header">
                 <h2>IO Configuration</h2>
             </div>
             <div class="card-body">
+                <table id="io-config-table" class="io-config-table"></table>
                 <p class="info-text"><span class="info-icon">ℹ️</span> Latched inputs remain ON until manually reset or read via Modbus. For Modbus clients, latches can be reset by writing '1' to coils 100-107.</p>
                 <div id="di-config"></div>
                 <div id="do-config"></div>
@@ -225,6 +226,7 @@
                         <option value="analog">Analog I/O</option>
                         <option value="i2c">I2C</option>
                         <option value="uart">UART</option>
+                        <option value="onewire">One-Wire</option>
                         <option value="network">Network</option>
                         <option value="system">System</option>
                     </select>
@@ -252,6 +254,7 @@
                 <div class="terminal-buttons">
                     <button onclick="sendTerminalCommand()" class="terminal-btn send-btn">Send</button>
                     <button onclick="toggleWatch()" class="terminal-btn watch-btn" id="watch-btn">Start Watch</button>
+                    <button onclick="sendDataToConfig()" class="terminal-btn config-btn" id="send-to-config-btn" style="display: none;">Send to Config</button>
                     <button onclick="clearTerminalOutput()" class="terminal-btn clear-btn">Clear</button>
                 </div>
             </div>
@@ -342,6 +345,15 @@
                     </select>
                 </div>
                 
+                <!-- Multi-Value Sensor Checkbox - Hidden by default, shown for digital protocols -->
+                <div class="form-group" id="multi-value-option" style="display: none;">
+                    <label>
+                        <input type="checkbox" id="sensor-multi-value" onchange="toggleMultiValueConfig()">
+                        Multi-Value Sensor (produces multiple data values)
+                    </label>
+                    <small class="form-help">Check if this sensor provides multiple values (e.g., temperature + humidity)</small>
+                </div>
+                
                 <!-- Protocol-specific configuration fields -->
                 <div id="protocol-config" style="display: none;">
                     <!-- I2C Configuration -->
@@ -352,6 +364,11 @@
                                 <select id="sensor-i2c-pins">
                                     <option value="">Select I2C pins...</option>
                                 </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="sensor-i2c-polling">Bus Polling Interval (ms)</label>
+                                <input type="number" id="sensor-i2c-polling" min="100" max="60000" value="1000" placeholder="1000">
+                                <small class="form-help">How often to poll all sensors on this I2C bus</small>
                             </div>
                             <div class="form-group">
                                 <label for="sensor-i2c-address">I2C Address (Hex)</label>
@@ -371,6 +388,11 @@
                                 </select>
                             </div>
                             <div class="form-group">
+                                <label for="sensor-uart-polling">Bus Polling Interval (ms)</label>
+                                <input type="number" id="sensor-uart-polling" min="100" max="60000" value="1000" placeholder="1000">
+                                <small class="form-help">How often to poll all sensors on this UART bus</small>
+                            </div>
+                            <div class="form-group">
                                 <label for="sensor-uart-baud">Baud Rate</label>
                                 <select id="sensor-uart-baud">
                                     <option value="9600">9600</option>
@@ -386,6 +408,12 @@
                                     <option value="0,1">UART0 (TX:0, RX:1)</option>
                                     <option value="4,5">UART1 (TX:4, RX:5)</option>
                                 </select>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <input type="checkbox" id="uart-streaming-checkbox">
+                                <label for="uart-streaming-checkbox">Streams continuously (no measurement command required)</label>
                             </div>
                         </div>
                     </div>
@@ -458,6 +486,45 @@
                                     <option value="">Select One-Wire pin...</option>
                                 </select>
                             </div>
+                            <div class="form-group">
+                                <label for="sensor-onewire-polling">Bus Polling Interval (ms)</label>
+                                <input type="number" id="sensor-onewire-polling" min="100" max="60000" value="1000" placeholder="1000">
+                                <small class="form-help">How often to poll all sensors on this One-Wire bus</small>
+                            </div>
+                        </div>
+                        
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="sensor-onewire-auto">Auto Commands</label>
+                                <input type="checkbox" id="sensor-onewire-auto" checked>
+                                <small class="form-help">Automatically send commands at regular intervals</small>
+                            </div>
+                        </div>
+                        
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="sensor-onewire-command">Command (Hex)</label>
+                                <select id="sensor-onewire-command">
+                                    <option value="0x44">0x44 - Convert Temperature (DS18B20)</option>
+                                    <option value="0x48">0x48 - Convert Voltage (DS2438)</option>
+                                    <option value="0x14">0x14 - Read Memory (DS2423)</option>
+                                    <option value="custom">Custom...</option>
+                                </select>
+                                <input type="text" id="sensor-onewire-command-custom" placeholder="0x44" style="display: none; margin-top: 5px;">
+                            </div>
+                            <div class="form-group">
+                                <label for="sensor-onewire-interval">Interval (seconds)</label>
+                                <input type="number" id="sensor-onewire-interval" min="1" max="3600" value="5" placeholder="5">
+                                <small class="form-help">How often to send the command</small>
+                            </div>
+                        </div>
+                        
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="sensor-onewire-conversion-time">Conversion Time (ms)</label>
+                                <input type="number" id="sensor-onewire-conversion-time" min="10" max="5000" value="750" placeholder="750">
+                                <small class="form-help">Wait time after command before reading data</small>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -476,8 +543,34 @@
                     </label>
                 </div>
                 
+                <!-- Sensor Command Configuration -->
+                <div class="form-section" id="sensor-command-section" style="display: none;">
+                    <h4>Sensor Command Configuration</h4>
+                    <div class="form-group">
+                        <label for="sensor-command">Command to Send</label>
+                        <input type="text" id="sensor-command" placeholder="Enter command (e.g., R for Atlas EZO, 0x44 for DS18B20)">
+                        <small class="form-help">Command to send at each polling interval</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="sensor-command-wait">Command Wait Time (ms)</label>
+                        <input type="number" id="sensor-command-wait" min="0" max="10000" value="750" placeholder="750">
+                        <small class="form-help">Time to wait after sending command before reading response</small>
+                    </div>
+                </div>
+                
                 <div class="form-section" id="data-parsing-section" style="display: none;">
                     <h4>Data Parsing Configuration</h4>
+                    <button type="button" id="poll-now-btn" class="btn" style="float:right;" onclick="pollSensorNow()">Poll Now</button>
+                    
+                    <!-- Poll Results Display -->
+                    <div id="poll-results" class="poll-results" style="display:none;">
+                        <h4>Live Sensor Response</h4>
+                        <div class="poll-results-content">
+                            <div class="poll-status" id="poll-status">Ready to poll...</div>
+                            <div class="raw-response" id="raw-response"></div>
+                            <div class="parsed-data" id="parsed-data"></div>
+                        </div>
+                    </div>
                     <div class="form-row">
                         <div class="form-group">
                             <label for="sensor-data-parsing">Parsing Method</label>
@@ -548,6 +641,32 @@
                             </div>
                         </div>
                     </div>
+                </div>
+                
+                <!-- Engineering Units Display -->
+                <div id="engineering-units-display" class="engineering-units" style="display: none;">
+                    Units: Not specified
+                </div>
+                
+                <!-- Example Data String -->
+                <div id="example-data-section" class="form-section" style="display: none;">
+                    <h4>Example Data String</h4>
+                    <div class="example-data-container">
+                        <label for="example-data-string">Raw Data from Sensor:</label>
+                        <textarea id="example-data-string" rows="3" readonly placeholder="Raw data will appear here when available..."></textarea>
+                        <div id="data-string-dissect" style="margin-top:8px;"></div>
+                        <small class="form-help">Click to select/delineate the portion of the data string to extract for calibration.</small>
+                    </div>
+                </div>
+                
+                <!-- Multi-Value Sensor Configuration -->
+                <div id="multi-value-section" class="form-section" style="display: none;">
+                    <h4>Multi-Value Sensor Configuration</h4>
+                    <p class="form-help">Configure each data value from this sensor with its own register and calibration:</p>
+                    <div id="multi-value-fields">
+                        <!-- Dynamic fields will be populated here -->
+                    </div>
+                    <button type="button" onclick="addMultiValueField()" class="btn-secondary">Add Value</button>
                 </div>
                 
                 <div class="form-section">
