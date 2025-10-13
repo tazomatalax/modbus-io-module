@@ -1784,6 +1784,15 @@ button:hover {
     padding-left: 10px;
 }
 
+.terminal-bus-traffic {
+    color: #ffcc00;
+    margin: 2px 0;
+    padding-left: 15px;
+    font-family: 'Courier New', monospace;
+    font-size: 0.9em;
+    border-left: 2px solid #ffcc00;
+}
+
 .terminal-timestamp {
     color: #888;
     font-size: 0.8em;

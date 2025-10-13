@@ -2136,6 +2136,7 @@ window.sendEzoCalibrationCommandWithValue = function sendEzoCalibrationCommandWi
 
 let watchInterval = null;
 let isWatching = false;
+let displayedLogs = new Set(); // Track displayed terminal logs to avoid duplicates
 
 // Update the terminal interface based on selected protocol
 window.updateTerminalInterface = function updateTerminalInterface() {
@@ -2354,50 +2355,84 @@ function toggleWatch() {
     
     if (isWatching) {
         // Stop watching
-        clearInterval(watchInterval);
-        isWatching = false;
-        watchBtn.textContent = 'Start Watch';
-        watchBtn.classList.remove('watching');
-        watchStatus.textContent = '';
-        watchStatus.classList.remove('watching');
-        addTerminalOutput('Watch mode stopped', 'success');
+        fetch('/terminal/stop-watch', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'stopped') {
+                clearInterval(watchInterval);
+                isWatching = false;
+                watchBtn.textContent = 'Start Watch';
+                watchBtn.classList.remove('watching');
+                watchStatus.textContent = '';
+                watchStatus.classList.remove('watching');
+                addTerminalOutput('Watch mode stopped', 'success');
+            }
+        })
+        .catch(error => {
+            console.error('Error stopping watch:', error);
+            addTerminalOutput('Error stopping watch: ' + error.message, 'error');
+        });
     } else {
         // Start watching
-        isWatching = true;
-        watchBtn.textContent = 'Stop Watch';
-        watchBtn.classList.add('watching');
-        watchStatus.textContent = `Watching ${pin}`;
-        watchStatus.classList.add('watching');
-        addTerminalOutput(`Started watching ${pin}`, 'success');
+        const payload = {
+            protocol: protocol,
+            pin: pin
+        };
         
-        // Start periodic updates
-        watchInterval = setInterval(() => {
-            const payload = {
-                protocol: protocol,
-                pin: pin,
-                command: 'read',
-                i2cAddress: document.getElementById('terminal-i2c-address').value
-            };
-            
-            fetch('/terminal/command', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(payload)
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    const timestamp = new Date().toLocaleTimeString();
-                    addTerminalOutput(`[${timestamp}] ${data.response}`, 'response');
-                }
-            })
-            .catch(error => {
-                // Silently handle watch errors to avoid spam
-                console.error('Watch error:', error);
-            });
-        }, 1000); // Update every second
+        fetch('/terminal/start-watch', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(payload)
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'started') {
+                isWatching = true;
+                watchBtn.textContent = 'Stop Watch';
+                watchBtn.classList.add('watching');
+                watchStatus.textContent = `Watching ${protocol} on ${pin}`;
+                watchStatus.classList.add('watching');
+                addTerminalOutput(`Started watching ${protocol} on pin ${pin}`, 'success');
+                
+                // Start polling for terminal logs
+                watchInterval = setInterval(() => {
+                    fetch('/terminal/logs')
+                    .then(response => response.json())
+                    .then(logs => {
+                        // Show new logs that weren't displayed yet
+                        logs.slice(-10).forEach(log => {
+                            if (!displayedLogs.has(log)) {
+                                addTerminalOutput(log, 'bus-traffic');
+                                displayedLogs.add(log);
+                            }
+                        });
+                        
+                        // Keep only recent logs in memory to prevent memory leak
+                        if (displayedLogs.size > 100) {
+                            const logsArray = Array.from(displayedLogs);
+                            displayedLogs.clear();
+                            logsArray.slice(-50).forEach(log => displayedLogs.add(log));
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Watch polling error:', error);
+                    });
+                }, 500); // Poll every 500ms for real-time feel
+            } else {
+                addTerminalOutput('Failed to start watch mode', 'error');
+            }
+        })
+        .catch(error => {
+            console.error('Error starting watch:', error);
+            addTerminalOutput('Error starting watch: ' + error.message, 'error');
+        });
     }
 }
 

@@ -39,6 +39,61 @@ const SensorPreset sensorPresets[] = {
 
 void applySensorPresets() {
     for (int i = 0; i < numConfiguredSensors; i++) {
+        if (!configuredSensors[i].enabled) continue;
+        
+        // Auto-configure based on sensor type
+        if (strcmp(configuredSensors[i].type, "EZO-PH") == 0) {
+            configuredSensors[i].i2cAddress = 0x63;
+            strcpy(configuredSensors[i].command, "R");
+            strcpy(configuredSensors[i].protocol, "I2C");
+            configuredSensors[i].updateInterval = 5000;
+            configuredSensors[i].modbusRegister = 10;
+            Serial.println("Auto-configured EZO-PH sensor");
+        } else if (strcmp(configuredSensors[i].type, "EZO-EC") == 0) {
+            configuredSensors[i].i2cAddress = 0x64;
+            strcpy(configuredSensors[i].command, "R");
+            strcpy(configuredSensors[i].protocol, "I2C");
+            configuredSensors[i].updateInterval = 5000;
+            configuredSensors[i].modbusRegister = 11;
+            Serial.println("Auto-configured EZO-EC sensor");
+        } else if (strcmp(configuredSensors[i].type, "EZO-DO") == 0) {
+            configuredSensors[i].i2cAddress = 0x61;
+            strcpy(configuredSensors[i].command, "R");
+            strcpy(configuredSensors[i].protocol, "I2C");
+            configuredSensors[i].updateInterval = 5000;
+            configuredSensors[i].modbusRegister = 12;
+            Serial.println("Auto-configured EZO-DO sensor");
+        } else if (strcmp(configuredSensors[i].type, "EZO-RTD") == 0) {
+            configuredSensors[i].i2cAddress = 0x66;
+            strcpy(configuredSensors[i].command, "R");
+            strcpy(configuredSensors[i].protocol, "I2C");
+            configuredSensors[i].updateInterval = 5000;
+            configuredSensors[i].modbusRegister = 13;
+            Serial.println("Auto-configured EZO-RTD sensor");
+        } else if (strcmp(configuredSensors[i].type, "SHT30") == 0) {
+            configuredSensors[i].i2cAddress = 0x44;
+            strcpy(configuredSensors[i].protocol, "I2C");
+            configuredSensors[i].updateInterval = 1000;
+            configuredSensors[i].modbusRegister = 15;
+            Serial.println("Auto-configured SHT30 sensor");
+        } else if (strcmp(configuredSensors[i].type, "BME280") == 0) {
+            configuredSensors[i].i2cAddress = 0x76;
+            strcpy(configuredSensors[i].protocol, "I2C");
+            configuredSensors[i].updateInterval = 1000;
+            configuredSensors[i].modbusRegister = 16;
+            Serial.println("Auto-configured BME280 sensor");
+        } else if (strcmp(configuredSensors[i].type, "DS18B20") == 0) {
+            strcpy(configuredSensors[i].protocol, "One-Wire");
+            configuredSensors[i].updateInterval = 2000;
+            configuredSensors[i].modbusRegister = 14;
+            Serial.println("Auto-configured DS18B20 sensor");
+        }
+        
+        // Set default pins if not configured
+        if (configuredSensors[i].sdaPin == 0) configuredSensors[i].sdaPin = I2C_SDA_PIN;
+        if (configuredSensors[i].sclPin == 0) configuredSensors[i].sclPin = I2C_SCL_PIN;
+    }
+    for (int i = 0; i < numConfiguredSensors; i++) {
         for (unsigned int p = 0; p < sizeof(sensorPresets)/sizeof(sensorPresets[0]); p++) {
             if (strcmp(configuredSensors[i].type, sensorPresets[p].type) == 0 &&
                 strcmp(configuredSensors[i].protocol, sensorPresets[p].protocol) == 0) {
@@ -70,6 +125,10 @@ void applySensorPresets() {
 // Global object definitions
 Config config; // Define the actual config object
 IOStatus ioStatus = {};
+
+// Network configuration for W5500
+uint8_t mac[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED};
+
 Wiznet5500lwIP eth(PIN_ETH_CS, SPI, PIN_ETH_IRQ);
 WiFiServer modbusServer(502); 
 WiFiServer httpServer(80);    // HTTP server on port 80
@@ -139,6 +198,13 @@ void setupEthernet();
 void setupModbus();
 void setupWebServer();
 
+// Terminal monitoring function declarations
+void addTerminalLog(String message);
+void logI2CTransaction(int address, String direction, String data, String pin);
+void logOneWireTransaction(String pin, String direction, String data);
+void logUARTTransaction(String pin, String direction, String data);
+String executeTerminalCommand(String command, String pin, String protocol);
+
 // Bus operation management functions
 void processI2CQueue();
 void processUARTQueue();
@@ -157,45 +223,80 @@ void processI2CQueue() {
     BusOperation& op = i2cQueue[0];
     
     switch(op.state) {
-        case BusOpState::IDLE:
+        case BusOpState::IDLE: {
             // Start I2C operation
             Wire.beginTransmission(configuredSensors[op.sensorIndex].i2cAddress);
+            
+            // Log the command being sent
+            String cmdStr = "";
+            for (int i = 0; i < strlen(configuredSensors[op.sensorIndex].command); i++) {
+                if (i > 0) cmdStr += " ";
+                cmdStr += "0x" + String((uint8_t)configuredSensors[op.sensorIndex].command[i], HEX);
+            }
+            logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "TX", 
+                            "CMD: " + cmdStr + " (" + String(configuredSensors[op.sensorIndex].type) + ")", 
+                            String(configuredSensors[op.sensorIndex].sdaPin));
+            
             Wire.write(configuredSensors[op.sensorIndex].command);
-            if (Wire.endTransmission() == 0) {
+            int result = Wire.endTransmission();
+            
+            if (result == 0) {
                 op.state = BusOpState::REQUEST_SENT;
                 op.startTime = currentTime;
-            } else if (++op.retryCount >= 3) {
-                // Move to next operation after 3 retries
-                for(int i = 0; i < i2cQueueSize - 1; i++) {
-                    i2cQueue[i] = i2cQueue[i + 1];
+                logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "ACK", "Command sent successfully", String(configuredSensors[op.sensorIndex].sdaPin));
+            } else {
+                logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "NACK", "Error code: " + String(result), String(configuredSensors[op.sensorIndex].sdaPin));
+                if (++op.retryCount >= 3) {
+                    logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "ERR", "Max retries exceeded", String(configuredSensors[op.sensorIndex].sdaPin));
+                    // Move to next operation after 3 retries
+                    for(int i = 0; i < i2cQueueSize - 1; i++) {
+                        i2cQueue[i] = i2cQueue[i + 1];
+                    }
+                    i2cQueueSize--;
                 }
-                i2cQueueSize--;
             }
             break;
+        }
             
-        case BusOpState::REQUEST_SENT:
+        case BusOpState::REQUEST_SENT: {
             if (currentTime - op.startTime >= op.conversionTime) {
                 op.state = BusOpState::READY_TO_READ;
             }
             break;
+        }
             
-        case BusOpState::READY_TO_READ:
+        case BusOpState::READY_TO_READ: {
+            logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "REQ", "Requesting 32 bytes", String(configuredSensors[op.sensorIndex].sdaPin));
             Wire.requestFrom((int)configuredSensors[op.sensorIndex].i2cAddress, 32);
+            
             if (Wire.available()) {
                 char response[32] = {0};
+                String rawHex = "";
                 int idx = 0;
+                
                 while(Wire.available() && idx < 31) {
-                    response[idx++] = Wire.read();
+                    uint8_t byte = Wire.read();
+                    response[idx++] = byte;
+                    if (rawHex.length() > 0) rawHex += " ";
+                    rawHex += "0x" + String(byte, HEX);
                 }
                 response[idx] = '\0';
+                
+                // Log raw response
+                logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "RX", 
+                                "Raw: [" + rawHex + "] ASCII: \"" + String(response) + "\"", 
+                                String(configuredSensors[op.sensorIndex].sdaPin));
+                
                 strncpy(configuredSensors[op.sensorIndex].response, response, sizeof(configuredSensors[op.sensorIndex].response)-1);
                 configuredSensors[op.sensorIndex].lastReadTime = currentTime;
                 
                 // Process response based on sensor type
                 if (strcmp(configuredSensors[op.sensorIndex].type, "EZO-PH") == 0) {
                     configuredSensors[op.sensorIndex].rawValue = atof(response);
+                    logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "VAL", "pH: " + String(configuredSensors[op.sensorIndex].rawValue), String(configuredSensors[op.sensorIndex].sdaPin));
                 } else if (strcmp(configuredSensors[op.sensorIndex].type, "EZO-EC") == 0) {
                     configuredSensors[op.sensorIndex].rawValue = atof(response);
+                    logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "VAL", "EC: " + String(configuredSensors[op.sensorIndex].rawValue), String(configuredSensors[op.sensorIndex].sdaPin));
                 }
                 
                 // Move queue forward
@@ -203,16 +304,25 @@ void processI2CQueue() {
                     i2cQueue[i] = i2cQueue[i + 1];
                 }
                 i2cQueueSize--;
+            } else {
+                logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "TIMEOUT", "No response received", String(configuredSensors[op.sensorIndex].sdaPin));
+                // Move to next operation on timeout
+                for(int i = 0; i < i2cQueueSize - 1; i++) {
+                    i2cQueue[i] = i2cQueue[i + 1];
+                }
+                i2cQueueSize--;
             }
             break;
+        }
             
-        case BusOpState::ERROR:
+        case BusOpState::ERROR: {
             // Move to next operation
             for(int i = 0; i < i2cQueueSize - 1; i++) {
                 i2cQueue[i] = i2cQueue[i + 1];
             }
             i2cQueueSize--;
             break;
+        }
     }
 }
 
@@ -370,8 +480,9 @@ void updateBusQueues() {
         if (!configuredSensors[i].enabled) continue;
         
         // Add to queue if it's time for next reading
+        // Skip SHT30 sensors - they use binary commands handled by direct polling
         if (currentTime - configuredSensors[i].lastReadTime >= configuredSensors[i].updateInterval) {
-            if (strncmp(configuredSensors[i].protocol, "I2C", 3) == 0) {
+            if (strncmp(configuredSensors[i].protocol, "I2C", 3) == 0 && strcmp(configuredSensors[i].type, "SHT30") != 0) {
                 enqueueBusOperation(i, "I2C");
             } else if (strncmp(configuredSensors[i].protocol, "UART", 4) == 0) {
                 enqueueBusOperation(i, "UART");
@@ -391,7 +502,128 @@ void updateBusQueues() {
 Ezo_board* ezoSensors[MAX_SENSORS] = {nullptr};
 bool ezoSensorsInitialized = false;
 
+// Terminal monitoring variables
+bool terminalWatchActive = false;
+String watchedPin = "";
+String watchedProtocol = "";
+std::vector<String> terminalBuffer;
+const int MAX_TERMINAL_BUFFER = 100;
 
+// Bus traffic logging functions
+void addTerminalLog(String message) {
+    if (!terminalWatchActive) return;
+    
+    String timestamp = String(millis());
+    String logEntry = "[" + timestamp + "] " + message;
+    
+    terminalBuffer.push_back(logEntry);
+    if (terminalBuffer.size() > MAX_TERMINAL_BUFFER) {
+        terminalBuffer.erase(terminalBuffer.begin());
+    }
+    
+    // Also print to Serial for debugging
+    Serial.println(logEntry);
+}
+
+void logI2CTransaction(int address, String direction, String data, String pin) {
+    // Check if terminal is watching this transaction
+    bool shouldLog = false;
+    
+    if (terminalWatchActive) {
+        // Debug what we're checking
+        Serial.printf("DEBUG logI2C: addr=0x%02X, dir=%s, pin=%s, watchedPin=%s, watchedProtocol=%s\n", 
+                     address, direction.c_str(), pin.c_str(), watchedPin.c_str(), watchedProtocol.c_str());
+        
+        // Support both pin numbers and sensor names
+        if (watchedPin == "all" || watchedPin == pin) {
+            shouldLog = true;
+            Serial.printf("DEBUG logI2C: Direct match - shouldLog=true\n");
+        } else {
+            // Check if watchedPin is a sensor name that uses this pin
+            for (int i = 0; i < numConfiguredSensors; i++) {
+                if (configuredSensors[i].enabled && 
+                    strcmp(configuredSensors[i].name, watchedPin.c_str()) == 0 &&
+                    configuredSensors[i].i2cAddress == address) {
+                    shouldLog = true;
+                    Serial.printf("DEBUG logI2C: Sensor name match for %s - shouldLog=true\n", configuredSensors[i].name);
+                    break;
+                }
+            }
+        }
+        
+        // Check protocol (case insensitive)
+        String watchedProtocolUpper = watchedProtocol;
+        watchedProtocolUpper.toUpperCase();
+        if (watchedProtocolUpper == "I2C" && shouldLog) {
+            String logMsg = "I2C [0x" + String(address, HEX) + "] " + direction + ": " + data;
+            addTerminalLog(logMsg);
+            Serial.println("TERMINAL_LOG: " + logMsg);
+        } else {
+            Serial.printf("DEBUG logI2C: Protocol check failed or shouldLog=false (protocol=%s, shouldLog=%d)\n", 
+                         watchedProtocolUpper.c_str(), shouldLog);
+        }
+    } else {
+        Serial.println("DEBUG logI2C: terminalWatchActive=false");
+    }
+}
+
+void logOneWireTransaction(String pin, String direction, String data) {
+    bool shouldLog = false;
+    
+    if (terminalWatchActive) {
+        // Support both pin numbers and sensor names
+        if (watchedPin == "all" || watchedPin == pin) {
+            shouldLog = true;
+        } else {
+            // Check if watchedPin is a sensor name that uses this pin
+            for (int i = 0; i < numConfiguredSensors; i++) {
+                if (configuredSensors[i].enabled && 
+                    strcmp(configuredSensors[i].name, watchedPin.c_str()) == 0 &&
+                    configuredSensors[i].oneWirePin == pin.toInt()) {
+                    shouldLog = true;
+                    break;
+                }
+            }
+        }
+        
+        // Check protocol (case insensitive)
+        String watchedProtocolUpper = watchedProtocol;
+        watchedProtocolUpper.toUpperCase();
+        if ((watchedProtocolUpper == "ONE-WIRE" || watchedProtocolUpper == "ONEWIRE") && shouldLog) {
+            String logMsg = "1Wire [Pin " + pin + "] " + direction + ": " + data;
+            addTerminalLog(logMsg);
+        }
+    }
+}
+
+void logUARTTransaction(String pin, String direction, String data) {
+    bool shouldLog = false;
+    
+    if (terminalWatchActive) {
+        // Support both pin numbers and sensor names
+        if (watchedPin == "all" || watchedPin == pin) {
+            shouldLog = true;
+        } else {
+            // Check if watchedPin is a sensor name that uses UART
+            for (int i = 0; i < numConfiguredSensors; i++) {
+                if (configuredSensors[i].enabled && 
+                    strcmp(configuredSensors[i].name, watchedPin.c_str()) == 0 &&
+                    (configuredSensors[i].uartTxPin == pin.toInt() || configuredSensors[i].uartRxPin == pin.toInt())) {
+                    shouldLog = true;
+                    break;
+                }
+            }
+        }
+        
+        // Check protocol (case insensitive)
+        String watchedProtocolUpper = watchedProtocol;
+        watchedProtocolUpper.toUpperCase();
+        if (watchedProtocolUpper == "UART" && shouldLog) {
+            String logMsg = "UART [Pin " + pin + "] " + direction + ": " + data;
+            addTerminalLog(logMsg);
+        }
+    }
+}
 
 // Send JSON response helper
 void sendJSON(WiFiClient& client, String json) {
@@ -411,6 +643,52 @@ void send404(WiFiClient& client) {
     client.println("Connection: close");
     client.println();
     client.println("404 Not Found");
+}
+
+String executeTerminalCommand(String command, String pin, String protocol) {
+    String response = "No response";
+    
+    if (protocol == "I2C") {
+        int pinNum = pin.toInt();
+        int address = 0x48; // Default address, should be configurable
+        
+        // Log the outgoing command
+        logI2CTransaction(address, "TX", command, pin);
+        
+        Wire.beginTransmission(address);
+        Wire.print(command);
+        int result = Wire.endTransmission();
+        
+        if (result == 0) {
+            delay(100);
+            Wire.requestFrom(address, 32);
+            response = "";
+            while (Wire.available()) {
+                char c = Wire.read();
+                response += c;
+            }
+            
+            // Log the incoming response
+            if (response.length() > 0) {
+                logI2CTransaction(address, "RX", response, pin);
+            }
+        } else {
+            response = "I2C Error: " + String(result);
+            logI2CTransaction(address, "ERR", "EndTransmission failed: " + String(result), pin);
+        }
+    } else if (protocol == "One-Wire") {
+        // Add OneWire command handling with logging
+        logOneWireTransaction(pin, "TX", command);
+        response = "OneWire command sent: " + command;
+        logOneWireTransaction(pin, "RX", response);
+    } else if (protocol == "UART") {
+        // Add UART command handling with logging
+        logUARTTransaction(pin, "TX", command);
+        response = "UART command sent: " + command;
+        logUARTTransaction(pin, "RX", response);
+    }
+    
+    return response;
 }
 
 // Implementation of POST /api/sensor/calibration
@@ -483,7 +761,8 @@ void setup() {
             };
             
             // Add to appropriate command array
-            if (strncmp(configuredSensors[i].protocol, "I2C", 3) == 0) {
+            // Skip SHT30 sensors in queue - they use binary commands handled by direct polling
+            if (strncmp(configuredSensors[i].protocol, "I2C", 3) == 0 && strcmp(configuredSensors[i].type, "SHT30") != 0) {
                 i2cCommands.add(cmd);
                 // Queue initial bus operation
                 enqueueBusOperation(i, "I2C");
@@ -630,23 +909,193 @@ void updateSensorReadings() {
                          "GPIO:%s", state ? "HIGH" : "LOW");
             }
         } else if (protocol == "i2c") {
-            // Read I2C sensor
-            if (configuredSensors[i].i2cAddress > 0 && configuredSensors[i].i2cAddress < 128) {
-                Serial.printf("Reading I2C sensor %s at address 0x%02X...\n", 
-                              configuredSensors[i].name, configuredSensors[i].i2cAddress);
+            // Handle I2C sensors - check for specialized types first
+            if (strcmp(configuredSensors[i].type, "SHT30") == 0) {
+                // SHT30 specialized handler with comprehensive logging
+                Serial.printf("Reading sensor %s (SHT30) at I2C address 0x%02X\n", configuredSensors[i].name, configuredSensors[i].i2cAddress);
+                
+                // Debug: Show what values we're using for logging
+                Serial.printf("DEBUG SHT30: Sensor name='%s', sdaPin=%d, terminalWatchActive=%d, watchedPin='%s', watchedProtocol='%s'\n", 
+                             configuredSensors[i].name, configuredSensors[i].sdaPin, terminalWatchActive, 
+                             watchedPin.c_str(), watchedProtocol.c_str());
+                Serial.printf("DEBUG SHT30: About to call logI2CTransaction with pin='%s'\n", String(configuredSensors[i].name).c_str());
+                Serial.printf("DEBUG SHT30: About to call logI2CTransaction with pin='%s'\n", String(configuredSensors[i].name).c_str());
+                
+                // Log start of SHT30 transaction - use sensor name as identifier
+                logI2CTransaction(configuredSensors[i].i2cAddress, "START", "SHT30 measurement sequence", String(configuredSensors[i].name));
+                
+                // ALWAYS send the command so we can see what's happening on the bus
+                logI2CTransaction(configuredSensors[i].i2cAddress, "PREP", "About to send 0x2C 0x06 to address 0x44", String(configuredSensors[i].name));
+                
+                // Send measurement command (this will show up even if device doesn't respond)
+                Wire.beginTransmission(configuredSensors[i].i2cAddress);
+                Wire.write(0x2C); // Command to start measurement
+                Wire.write(0x06);
+                logI2CTransaction(configuredSensors[i].i2cAddress, "TX", "CMD: 0x2C 0x06 (start measurement)", String(configuredSensors[i].name));
+                
+                byte error = Wire.endTransmission();
+                if (error != 0) {
+                    Serial.printf("SHT30: Command transmission failed at address 0x%02X (error %d)\n", configuredSensors[i].i2cAddress, error);
+                    logI2CTransaction(configuredSensors[i].i2cAddress, "NACK", "Command failed, error: " + String(error) + " (2=NACK, 3=timeout)", String(configuredSensors[i].name));
+                    readSuccess = false;
+                    
+                    // Let's also try an I2C scan to see what devices are actually present
+                    logI2CTransaction(configuredSensors[i].i2cAddress, "SCAN", "Scanning I2C bus for devices...", String(configuredSensors[i].name));
+                } else {
+                    logI2CTransaction(configuredSensors[i].i2cAddress, "ACK", "Command sent successfully", String(configuredSensors[i].name));
+                    
+                    delay(15); // Wait for measurement
+                    logI2CTransaction(configuredSensors[i].i2cAddress, "WAIT", "Waiting 15ms for measurement", String(configuredSensors[i].name));
+    
+                    // Request data
+                    logI2CTransaction(configuredSensors[i].i2cAddress, "REQ", "Requesting 6 bytes (temp+hum+CRC)", String(configuredSensors[i].name));
+                    int bytesReceived = Wire.requestFrom(configuredSensors[i].i2cAddress, 6);
+                    
+                    if (bytesReceived == 6 && Wire.available() == 6) {
+                        uint8_t data[6];
+                        String rawHex = "";
+                        for (int j = 0; j < 6; j++) {
+                            data[j] = Wire.read();
+                            if (j > 0) rawHex += " ";
+                            rawHex += "0x" + String(data[j], HEX);
+                        }
+                        
+                        logI2CTransaction(configuredSensors[i].i2cAddress, "RX", "Raw: [" + rawHex + "]", String(configuredSensors[i].name));
+                        
+                        uint16_t temp_raw = (data[0] << 8) | data[1];
+                        uint16_t hum_raw = (data[3] << 8) | data[4];
+                        // data[2] and data[5] are CRC bytes
+                        
+                        float temperature = -45.0 + 175.0 * ((float)temp_raw / 65535.0);
+                        float humidity = 100.0 * ((float)hum_raw / 65535.0);
+        
+                        Serial.printf("SHT30: Temp=%.2f C, Hum=%.2f%%\n", temperature, humidity);
+                        logI2CTransaction(configuredSensors[i].i2cAddress, "VAL", "Temp: " + String(temperature) + "C, Hum: " + String(humidity) + "%", String(configuredSensors[i].name));
+                        
+                        rawValue = temperature; // Store temperature as raw value
+                        readSuccess = true;
+                        snprintf(configuredSensors[i].rawDataString, sizeof(configuredSensors[i].rawDataString), 
+                                 "SHT30:%.1fC,%.1f%%", temperature, humidity);
+                    } else {
+                        Serial.printf("SHT30: Failed to read data (got %d bytes, available %d)\n", bytesReceived, Wire.available());
+                        logI2CTransaction(configuredSensors[i].i2cAddress, "TIMEOUT", "Failed to read 6 bytes, got: " + String(bytesReceived), String(configuredSensors[i].name));
+                        readSuccess = false;
+                    }
+                }
+            } else if (strcmp(configuredSensors[i].type, "EZO-PH") == 0) {
+                // EZO-PH specialized handler
+                Serial.printf("Reading EZO-PH sensor %s at I2C address 0x%02X\n", configuredSensors[i].name, configuredSensors[i].i2cAddress);
+                logI2CTransaction(configuredSensors[i].i2cAddress, "START", "EZO-PH measurement sequence", String(configuredSensors[i].name));
+                
+                Wire.beginTransmission(configuredSensors[i].i2cAddress);
+                Wire.write("R\r"); // Command to read pH
+                logI2CTransaction(configuredSensors[i].i2cAddress, "TX", "CMD: 'R\\r' (read pH)", String(configuredSensors[i].name));
+                
+                byte error = Wire.endTransmission();
+                if (error == 0) {
+                    logI2CTransaction(configuredSensors[i].i2cAddress, "ACK", "Command sent, waiting 900ms", String(configuredSensors[i].name));
+                    delay(900); // Wait for measurement
+                    
+                    logI2CTransaction(configuredSensors[i].i2cAddress, "REQ", "Requesting 32 bytes response", String(configuredSensors[i].name));
+                    Wire.requestFrom(configuredSensors[i].i2cAddress, 32);
+                    
+                    if (Wire.available()) {
+                        char response[32];
+                        int index = 0;
+                        while (Wire.available() && index < 31) {
+                            response[index++] = Wire.read();
+                        }
+                        response[index] = '\0';
+                        
+                        logI2CTransaction(configuredSensors[i].i2cAddress, "RX", "Response: " + String(response), String(configuredSensors[i].name));
+                        
+                        float ph = atof(response);
+                        Serial.printf("EZO-PH: pH=%.2f\n", ph);
+                        logI2CTransaction(configuredSensors[i].i2cAddress, "VAL", "pH: " + String(ph), String(configuredSensors[i].name));
+                        
+                        rawValue = ph;
+                        readSuccess = true;
+                        snprintf(configuredSensors[i].rawDataString, sizeof(configuredSensors[i].rawDataString), 
+                                 "EZO-PH:%.2f", ph);
+                    } else {
+                        Serial.println("EZO-PH: Failed to read data");
+                        logI2CTransaction(configuredSensors[i].i2cAddress, "TIMEOUT", "No response data available", String(configuredSensors[i].name));
+                        readSuccess = false;
+                    }
+                } else {
+                    logI2CTransaction(configuredSensors[i].i2cAddress, "NACK", "Command failed, error: " + String(error), String(configuredSensors[i].name));
+                    readSuccess = false;
+                }
+            } else if (strcmp(configuredSensors[i].type, "EZO-EC") == 0) {
+                // EZO-EC specialized handler
+                Serial.printf("Reading EZO-EC sensor %s at I2C address 0x%02X\n", configuredSensors[i].name, configuredSensors[i].i2cAddress);
+                logI2CTransaction(configuredSensors[i].i2cAddress, "START", "EZO-EC measurement sequence", String(configuredSensors[i].name));
+                
+                Wire.beginTransmission(configuredSensors[i].i2cAddress);
+                Wire.write("R\r"); // Command to read EC
+                logI2CTransaction(configuredSensors[i].i2cAddress, "TX", "CMD: 'R\\r' (read EC)", String(configuredSensors[i].name));
+                
+                byte error = Wire.endTransmission();
+                if (error == 0) {
+                    logI2CTransaction(configuredSensors[i].i2cAddress, "ACK", "Command sent, waiting 900ms", String(configuredSensors[i].name));
+                    delay(900); // Wait for measurement
+                    
+                    logI2CTransaction(configuredSensors[i].i2cAddress, "REQ", "Requesting 32 bytes response", String(configuredSensors[i].name));
+                    Wire.requestFrom(configuredSensors[i].i2cAddress, 32);
+                    
+                    if (Wire.available()) {
+                        char response[32];
+                        int index = 0;
+                        while (Wire.available() && index < 31) {
+                            response[index++] = Wire.read();
+                        }
+                        response[index] = '\0';
+                        
+                        logI2CTransaction(configuredSensors[i].i2cAddress, "RX", "Response: " + String(response), String(configuredSensors[i].name));
+                        
+                        float ec = atof(response);
+                        Serial.printf("EZO-EC: EC=%.2f\n", ec);
+                        logI2CTransaction(configuredSensors[i].i2cAddress, "VAL", "EC: " + String(ec), String(configuredSensors[i].name));
+                        
+                        rawValue = ec;
+                        readSuccess = true;
+                        snprintf(configuredSensors[i].rawDataString, sizeof(configuredSensors[i].rawDataString), 
+                                 "EZO-EC:%.2f", ec);
+                    } else {
+                        Serial.println("EZO-EC: Failed to read data");
+                        logI2CTransaction(configuredSensors[i].i2cAddress, "TIMEOUT", "No response data available", String(configuredSensors[i].name));
+                        readSuccess = false;
+                    }
+                } else {
+                    logI2CTransaction(configuredSensors[i].i2cAddress, "NACK", "Command failed, error: " + String(error), String(configuredSensors[i].name));
+                    readSuccess = false;
+                }
+            } else {
+                // Generic I2C sensor handling
+                if (configuredSensors[i].i2cAddress > 0 && configuredSensors[i].i2cAddress < 128) {
+                    Serial.printf("Reading I2C sensor %s at address 0x%02X...\n", 
+                                  configuredSensors[i].name, configuredSensors[i].i2cAddress);
+                    
+                    // Log I2C transaction if terminal is watching
+                    logI2CTransaction(configuredSensors[i].i2cAddress, "START", "Basic I2C read attempt", String(configuredSensors[i].sdaPin));
                 
                 Wire.beginTransmission(configuredSensors[i].i2cAddress);
                 byte error = Wire.endTransmission();
                 
                 if (error == 0) {
+                    logI2CTransaction(configuredSensors[i].i2cAddress, "ACK", "Device responded", String(configuredSensors[i].sdaPin));
+                    
                     // Device is present, try to read from it
                     Wire.beginTransmission(configuredSensors[i].i2cAddress);
                     Wire.write(0x00); // Read from register 0 (most common)
+                    logI2CTransaction(configuredSensors[i].i2cAddress, "TX", "CMD: 0x00 (read register 0)", String(configuredSensors[i].sdaPin));
+                    
                     error = Wire.endTransmission();
                     
                     if (error == 0) {
                         int bytesRequested = Wire.requestFrom((int)configuredSensors[i].i2cAddress, 2);
                         Serial.printf("Requested %d bytes from I2C device\n", bytesRequested);
+                        logI2CTransaction(configuredSensors[i].i2cAddress, "REQ", "Requesting 2 bytes", String(configuredSensors[i].sdaPin));
                         
                         if (Wire.available() >= 2) {
                             uint8_t msb = Wire.read();
@@ -657,11 +1106,16 @@ void updateSensorReadings() {
                                      "I2C:0x%02X,0x%02X", msb, lsb);
                             Serial.printf("I2C read successful: MSB=0x%02X, LSB=0x%02X, Value=%.0f\n", 
                                           msb, lsb, rawValue);
+                            logI2CTransaction(configuredSensors[i].i2cAddress, "RX", 
+                                            "Raw: [0x" + String(msb, HEX) + " 0x" + String(lsb, HEX) + "] Value: " + String(rawValue), 
+                                            String(configuredSensors[i].sdaPin));
                         } else {
                             Serial.printf("I2C read failed: only %d bytes available\n", Wire.available());
+                            logI2CTransaction(configuredSensors[i].i2cAddress, "TIMEOUT", "Insufficient bytes received", String(configuredSensors[i].sdaPin));
                         }
                     } else {
                         Serial.printf("I2C write to register failed with error %d\n", error);
+                        logI2CTransaction(configuredSensors[i].i2cAddress, "NACK", "Write error: " + String(error), String(configuredSensors[i].sdaPin));
                     }
                 } else {
                     readSuccess = false;
@@ -669,7 +1123,9 @@ void updateSensorReadings() {
                              "I2C:NO_RESPONSE");
                     Serial.printf("I2C device at 0x%02X not responding (error %d)\n", 
                                   configuredSensors[i].i2cAddress, error);
+                    logI2CTransaction(configuredSensors[i].i2cAddress, "NACK", "Device not responding, error: " + String(error), String(configuredSensors[i].sdaPin));
                 }
+            }
             }
         } else if (protocol == "one-wire") {
             // Real One-Wire sensor handling with automatic commands
@@ -827,74 +1283,83 @@ void updateSensorReadings() {
                      "UART:NOT_IMPLEMENTED");
             Serial.printf("UART sensor protocol not yet implemented\n");
         } else if (strcmp(configuredSensors[i].type, "SHT30") == 0) {
-            // Initialize and poll SHT30 sensor
+            // Initialize and poll SHT30 sensor with comprehensive logging
+            Serial.printf("Reading sensor %s (SHT30) at I2C address 0x%02X\n", configuredSensors[i].name, configuredSensors[i].i2cAddress);
+            
+            // Debug: Show what values we're using for logging
+            Serial.printf("DEBUG: Sensor name='%s', sdaPin=%d, terminalWatchActive=%d, watchedPin='%s', watchedProtocol='%s'\n", 
+                         configuredSensors[i].name, configuredSensors[i].sdaPin, terminalWatchActive, 
+                         watchedPin.c_str(), watchedProtocol.c_str());
+            
+            // Log start of SHT30 transaction - use sensor name as identifier
+            logI2CTransaction(configuredSensors[i].i2cAddress, "START", "SHT30 measurement sequence (updateSensorReadings)", String(configuredSensors[i].name));
+            
+            // ALWAYS send the command so we can see what's happening on the bus
+            logI2CTransaction(configuredSensors[i].i2cAddress, "PREP", "About to send 0x2C 0x06 to address 0x44", String(configuredSensors[i].name));
+            
+            // Send measurement command (this will show up even if device doesn't respond)
             Wire.beginTransmission(configuredSensors[i].i2cAddress);
             Wire.write(0x2C); // Command to start measurement
             Wire.write(0x06);
-            Wire.endTransmission();
-            delay(15); // Wait for measurement
-
-            Wire.requestFrom(configuredSensors[i].i2cAddress, 6);
-            if (Wire.available() == 6) {
-                uint16_t temp_raw = (Wire.read() << 8) | Wire.read();
-                uint16_t hum_raw = (Wire.read() << 8) | Wire.read();
-                Wire.read(); // CRC byte, ignored
-                Wire.read(); // CRC byte, ignored
-
-                float temperature = -45.0 + 175.0 * ((float)temp_raw / 65535.0);
-                float humidity = 100.0 * ((float)hum_raw / 65535.0);
-
-                Serial.printf("SHT30: Temp=%.2f C, Hum=%.2f%%\n", temperature, humidity);
-                rawValue = temperature; // Example: store temperature as raw value
-                readSuccess = true;
+            logI2CTransaction(configuredSensors[i].i2cAddress, "TX", "CMD: 0x2C 0x06 (start measurement)", String(configuredSensors[i].name));
+            
+            byte error = Wire.endTransmission();
+            if (error != 0) {
+                Serial.printf("SHT30: Command transmission failed at address 0x%02X (error %d)\n", configuredSensors[i].i2cAddress, error);
+                logI2CTransaction(configuredSensors[i].i2cAddress, "NACK", "Command failed, error: " + String(error) + " (2=NACK, 3=timeout)", String(configuredSensors[i].name));
+                readSuccess = false;
+                
+                // Let's also try an I2C scan to see what devices are actually present
+                logI2CTransaction(configuredSensors[i].i2cAddress, "SCAN", "Scanning I2C bus for devices...", String(configuredSensors[i].name));
             } else {
-                Serial.println("SHT30: Failed to read data");
-            }
-        } else if (strcmp(configuredSensors[i].type, "EZO-PH") == 0) {
-            // Initialize and poll EZO-PH sensor
-            Wire.beginTransmission(configuredSensors[i].i2cAddress);
-            Wire.write("R\r"); // Command to read pH
-            Wire.endTransmission();
-            delay(900); // Wait for measurement
-
-            Wire.requestFrom(configuredSensors[i].i2cAddress, 32);
-            if (Wire.available()) {
-                char response[32];
-                int index = 0;
-                while (Wire.available() && index < 31) {
-                    response[index++] = Wire.read();
+                logI2CTransaction(configuredSensors[i].i2cAddress, "ACK", "Command sent successfully", String(configuredSensors[i].name));
+                
+                error = Wire.endTransmission();
+                if (error != 0) {
+                    Serial.printf("SHT30: Command failed (error %d)\n", error);
+                    logI2CTransaction(configuredSensors[i].i2cAddress, "NACK", "Command failed, error: " + String(error), String(configuredSensors[i].name));
+                    readSuccess = false;
+                } else {
+                    logI2CTransaction(configuredSensors[i].i2cAddress, "ACK", "Command sent successfully", String(configuredSensors[i].name));
+                    
+                    delay(15); // Wait for measurement
+                    logI2CTransaction(configuredSensors[i].i2cAddress, "WAIT", "Waiting 15ms for measurement", String(configuredSensors[i].name));
+    
+                    // Request data
+                    logI2CTransaction(configuredSensors[i].i2cAddress, "REQ", "Requesting 6 bytes (temp+hum+CRC)", String(configuredSensors[i].name));
+                    int bytesReceived = Wire.requestFrom(configuredSensors[i].i2cAddress, 6);
+                    
+                    if (bytesReceived == 6 && Wire.available() == 6) {
+                        uint8_t data[6];
+                        String rawHex = "";
+                        for (int j = 0; j < 6; j++) {
+                            data[j] = Wire.read();
+                            if (j > 0) rawHex += " ";
+                            rawHex += "0x" + String(data[j], HEX);
+                        }
+                        
+                        logI2CTransaction(configuredSensors[i].i2cAddress, "RX", "Raw: [" + rawHex + "]", String(configuredSensors[i].name));
+                        
+                        uint16_t temp_raw = (data[0] << 8) | data[1];
+                        uint16_t hum_raw = (data[3] << 8) | data[4];
+                        // data[2] and data[5] are CRC bytes
+                        
+                        float temperature = -45.0 + 175.0 * ((float)temp_raw / 65535.0);
+                        float humidity = 100.0 * ((float)hum_raw / 65535.0);
+        
+                        Serial.printf("SHT30: Temp=%.2f C, Hum=%.2f%%\n", temperature, humidity);
+                        logI2CTransaction(configuredSensors[i].i2cAddress, "VAL", "Temp: " + String(temperature) + "C, Hum: " + String(humidity) + "%", String(configuredSensors[i].name));
+                        
+                        rawValue = temperature; // Store temperature as raw value
+                        readSuccess = true;
+                        snprintf(configuredSensors[i].rawDataString, sizeof(configuredSensors[i].rawDataString), 
+                                 "SHT30:%.1fC,%.1f%%", temperature, humidity);
+                    } else {
+                        Serial.printf("SHT30: Failed to read data (got %d bytes, available %d)\n", bytesReceived, Wire.available());
+                        logI2CTransaction(configuredSensors[i].i2cAddress, "TIMEOUT", "Failed to read 6 bytes, got: " + String(bytesReceived), String(configuredSensors[i].name));
+                        readSuccess = false;
+                    }
                 }
-                response[index] = '\0';
-
-                float ph = atof(response);
-                Serial.printf("EZO-PH: pH=%.2f\n", ph);
-                rawValue = ph; // Store pH value as raw value
-                readSuccess = true;
-            } else {
-                Serial.println("EZO-PH: Failed to read data");
-            }
-        } else if (strcmp(configuredSensors[i].type, "EZO-EC") == 0) {
-            // Initialize and poll EZO-EC sensor
-            Wire.beginTransmission(configuredSensors[i].i2cAddress);
-            Wire.write("R\r"); // Command to read EC
-            Wire.endTransmission();
-            delay(900); // Wait for measurement
-
-            Wire.requestFrom(configuredSensors[i].i2cAddress, 32);
-            if (Wire.available()) {
-                char response[32];
-                int index = 0;
-                while (Wire.available() && index < 31) {
-                    response[index++] = Wire.read();
-                }
-                response[index] = '\0';
-
-                float ec = atof(response);
-                Serial.printf("EZO-EC: EC=%.2f\n", ec);
-                rawValue = ec; // Store EC value as raw value
-                readSuccess = true;
-            } else {
-                Serial.println("EZO-EC: Failed to read data");
             }
         }
         
@@ -2159,6 +2624,15 @@ void routeRequest(WiFiClient& client, String method, String path, String body) {
             sendJSONPinMap(client);
         } else if (path == "/api/sensors/status") {
             sendJSONSensorPinStatus(client);
+        } else if (path == "/terminal/logs") {
+            // Send terminal buffer for bus traffic monitoring
+            String response = "[";
+            for (size_t i = 0; i < terminalBuffer.size(); i++) {
+                if (i > 0) response += ",";
+                response += "\"" + terminalBuffer[i] + "\"";
+            }
+            response += "]";
+            sendJSON(client, response);
         } else {
             send404(client);
         }
@@ -2183,6 +2657,33 @@ void routeRequest(WiFiClient& client, String method, String path, String body) {
             handlePOSTSensorCalibration(client, body);
         } else if (path == "/terminal/command") {
             handlePOSTTerminalCommand(client, body);
+        } else if (path == "/terminal/start-watch") {
+            // Start watching bus traffic
+            StaticJsonDocument<128> doc;
+            deserializeJson(doc, body);
+            watchedPin = doc["pin"].as<String>();
+            watchedProtocol = doc["protocol"].as<String>();
+            terminalWatchActive = true;
+            terminalBuffer.clear();
+            
+            addTerminalLog("Started watching " + watchedProtocol + " on pin " + watchedPin);
+            sendJSON(client, "{\"status\":\"started\",\"pin\":\"" + watchedPin + "\",\"protocol\":\"" + watchedProtocol + "\"}");
+        } else if (path == "/terminal/stop-watch") {
+            // Stop watching bus traffic
+            terminalWatchActive = false;
+            addTerminalLog("Stopped watching");
+            sendJSON(client, "{\"status\":\"stopped\"}");
+        } else if (path == "/terminal/send-command") {
+            // Send command and log traffic
+            StaticJsonDocument<128> doc;
+            deserializeJson(doc, body);
+            String command = doc["command"];
+            String pin = doc["pin"];
+            String protocol = doc["protocol"];
+            
+            String response = executeTerminalCommand(command, pin, protocol);
+            
+            sendJSON(client, "{\"status\":\"sent\",\"response\":\"" + response + "\"}");
         } else {
             send404(client);
         }
@@ -3090,30 +3591,10 @@ void updateIOpins() {
                         Serial.printf("EZO sensor %s has error response\n", configuredSensors[i].type);
                     }
                 }
+                // SHT30 sensors are handled in updateSensorReadings() - skip here
                 else if (strcmp(configuredSensors[i].type, "SHT30") == 0) {
-                    // Initialize and poll SHT30 sensor
-                    Wire.beginTransmission(configuredSensors[i].i2cAddress);
-                    Wire.write(0x2C); // Command to start measurement
-                    Wire.write(0x06);
-                    Wire.endTransmission();
-                    delay(15); // Wait for measurement
-
-                    Wire.requestFrom(configuredSensors[i].i2cAddress, 6);
-                    if (Wire.available() == 6) {
-                        uint16_t temp_raw = (Wire.read() << 8) | Wire.read();
-                        uint16_t hum_raw = (Wire.read() << 8) | Wire.read();
-                        Wire.read(); // CRC byte, ignored
-                        Wire.read(); // CRC byte, ignored
-
-                        float temperature = -45.0 + 175.0 * ((float)temp_raw / 65535.0);
-                        float humidity = 100.0 * ((float)hum_raw / 65535.0);
-
-                        Serial.printf("SHT30: Temp=%.2f C, Hum=%.2f%%\n", temperature, humidity);
-                        ioStatus.rawValue[i] = temperature; // Example: store temperature as raw value
-                        bool readSuccess = true;
-                    } else {
-                        Serial.println("SHT30: Failed to read data");
-                    }
+                    // Skip - SHT30 sensors have dedicated handler in updateSensorReadings()
+                    Serial.printf("Skipping SHT30 sensor %s in updateIOpins() - handled by updateSensorReadings()\n", configuredSensors[i].name);
                 } else if (strcmp(configuredSensors[i].type, "EZO-PH") == 0) {
                     // Initialize and poll EZO-PH sensor
                     Wire.beginTransmission(configuredSensors[i].i2cAddress);

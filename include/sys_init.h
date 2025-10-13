@@ -182,10 +182,25 @@ struct SensorConfig {
     // Response data storage
     char response[64];
     char calibrationData[256];
-    // Current sensor values for dataflow
-    float rawValue;           // Raw sensor reading
-    float calibratedValue;    // After applying calibration
-    int modbusValue;          // Value written to Modbus register
+    // Current sensor values for dataflow - support multiple outputs
+    float rawValue;           // Primary raw sensor reading (rawValueA)
+    float rawValueB;          // Secondary raw reading (humidity for SHT30, pressure for BME280)
+    float rawValueC;          // Tertiary raw reading (pressure for BME280, etc.)
+    
+    float calibratedValue;    // Primary calibrated value (after applying calibration)
+    float calibratedValueB;   // Secondary calibrated value
+    float calibratedValueC;   // Tertiary calibrated value
+    
+    int modbusValue;          // Primary value written to Modbus register
+    int modbusValueB;         // Secondary value for next Modbus register
+    int modbusValueC;         // Tertiary value for next Modbus register
+    
+    // Calibration for multiple outputs
+    float calibrationOffsetB; // Calibration offset for rawValueB
+    float calibrationSlopeB;  // Calibration slope for rawValueB
+    float calibrationOffsetC; // Calibration offset for rawValueC  
+    float calibrationSlopeC;  // Calibration slope for rawValueC
+    
     char rawDataString[128];  // Raw data string for parsing (I2C/UART responses)
     unsigned long lastReadTime; // When last read was performed
     
