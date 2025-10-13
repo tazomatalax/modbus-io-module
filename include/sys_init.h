@@ -79,7 +79,7 @@ struct CommandArray {
 // Constants
 #define CONFIG_FILE "/config.json"
 #define SENSORS_FILE "/sensors.json"
-#define CONFIG_VERSION 6  // Increment this when config structure changes
+#define CONFIG_VERSION 7  // Increment this when config structure changes
 #define HOSTNAME_MAX_LENGTH 32
 #define MAX_MODBUS_CLIENTS 4  // Maximum number of concurrent Modbus clients
 #define MAX_SENSORS 10
@@ -176,6 +176,12 @@ struct SensorConfig {
     uint32_t updateInterval;
     uint8_t i2cMultiplexerChannel;
     char parsingConfig[128];  // JSON string for parsing configuration
+    
+    // Secondary parsing for multi-output sensors
+    char parsingMethodB[16];  // Parsing method for secondary value (rawValueB)
+    char parsingConfigB[128]; // JSON config for secondary parsing
+    char parsingMethodC[16];  // Parsing method for tertiary value (rawValueC)  
+    char parsingConfigC[128]; // JSON config for tertiary parsing
     // EZO sensor state tracking
     bool cmdPending;
     unsigned long lastCmdSent;

@@ -809,10 +809,35 @@ window.autoConfigureSensorType = function autoConfigureSensorType() {
     // Show multi-value configuration if applicable
     if (config.multiValue) {
         setTimeout(() => {
-            const multiValueSection = document.getElementById('multi-value-section');
-            if (multiValueSection) {
-                multiValueSection.style.display = 'block';
-                populateMultiValueFields(config.values);
+            // Enable multi-value checkbox
+            const multiValueCheckbox = document.getElementById('sensor-multi-value');
+            if (multiValueCheckbox) {
+                multiValueCheckbox.checked = true;
+                toggleMultiValueConfig(); // This will show the multi-value section
+            }
+            
+            // Populate the multi-value fields
+            populateMultiValueFields(config.values);
+            
+            // Hide single register field since we're using multi-value
+            const singleRegisterGroup = document.getElementById('sensor-modbus-register')?.parentElement;
+            if (singleRegisterGroup) {
+                singleRegisterGroup.style.display = 'none';
+            }
+        }, 100);
+    } else {
+        // For single-value sensors, ensure multi-value is disabled
+        setTimeout(() => {
+            const multiValueCheckbox = document.getElementById('sensor-multi-value');
+            if (multiValueCheckbox) {
+                multiValueCheckbox.checked = false;
+                toggleMultiValueConfig();
+            }
+            
+            // Show single register field
+            const singleRegisterGroup = document.getElementById('sensor-modbus-register')?.parentElement;
+            if (singleRegisterGroup) {
+                singleRegisterGroup.style.display = 'block';
             }
         }, 100);
     }
@@ -828,7 +853,17 @@ window.populateMultiValueFields = function populateMultiValueFields(values) {
     container.innerHTML = '';
     
     values.forEach((value, index) => {
-        const baseRegister = parseInt(document.getElementById('sensor-modbus-register').value) || getNextAvailableRegister();
+        // Get base register from single register field or calculate next available
+        let baseRegister = parseInt(document.getElementById('sensor-modbus-register')?.value);
+        if (!baseRegister || baseRegister === 0) {
+            baseRegister = getNextAvailableRegister();
+            // Update the single register field for reference
+            const singleRegField = document.getElementById('sensor-modbus-register');
+            if (singleRegField) {
+                singleRegField.value = baseRegister;
+            }
+        }
+        
         const register = value.register === 'auto' ? baseRegister : 
                         value.register.includes('+') ? baseRegister + parseInt(value.register.split('+')[1]) : 
                         parseInt(value.register);
@@ -1986,12 +2021,72 @@ function updateProtocolSensorFlow(protocol, sensors, containerId) {
             rawDataDisplay = `<div class="raw-data-string">Raw Data: ${sensor.raw_i2c_data}</div>`;
         }
         
-        // Check if this is a multi-value sensor
-        const isMultiValue = sensor.multiValues && sensor.multiValues.length > 0;
+        // Check if this is a multi-value sensor (either configured multiValues or has secondary values like SHT30)
+        const isMultiValue = (sensor.multiValues && sensor.multiValues.length > 0) || 
+                           sensor.raw_value_b !== undefined || 
+                           sensor.type === 'SHT30';
         
         let dataflowHTML = '';
         
-        if (isMultiValue) {
+        if (isMultiValue && sensor.type === 'SHT30') {
+            // Special handling for SHT30 dual output (temperature + humidity)
+            dataflowHTML = `<div class="multi-value-dataflow">`;
+            
+            // Temperature (primary value)
+            dataflowHTML += `
+                <div class="value-dataflow ${staleData ? 'stale-data' : ''}">
+                    <div class="value-label">Temperature (°C)</div>
+                    <div class="dataflow-chain">
+                        <div class="dataflow-step raw-step">
+                            <div class="step-label">Raw</div>
+                            <div class="step-value">${sensor.raw_value !== undefined ? sensor.raw_value.toFixed(2) : 'N/A'}</div>
+                        </div>
+                        <div class="dataflow-arrow">→</div>
+                        <div class="dataflow-step calibrated-step">
+                            <div class="step-label">Calibrated</div>
+                            <div class="step-value">${sensor.calibrated_value !== undefined ? sensor.calibrated_value.toFixed(2) : 'N/A'}</div>
+                            <div class="calibration-info">
+                                <small>×${sensor.calibration_slope || 1} + ${sensor.calibration_offset || 0}</small>
+                            </div>
+                        </div>
+                        <div class="dataflow-arrow">→</div>
+                        <div class="dataflow-step modbus-step">
+                            <div class="step-label">Modbus Reg ${sensor.modbus_register}</div>
+                            <div class="step-value">${sensor.modbus_value !== undefined ? sensor.modbus_value : 'N/A'}</div>
+                        </div>
+                    </div>
+                </div>`;
+            
+            // Humidity (secondary value)
+            if (sensor.raw_value_b !== undefined) {
+                dataflowHTML += `
+                    <div class="value-dataflow ${staleData ? 'stale-data' : ''}">
+                        <div class="value-label">Humidity (%RH)</div>
+                        <div class="dataflow-chain">
+                            <div class="dataflow-step raw-step">
+                                <div class="step-label">Raw</div>
+                                <div class="step-value">${sensor.raw_value_b.toFixed(2)}</div>
+                            </div>
+                            <div class="dataflow-arrow">→</div>
+                            <div class="dataflow-step calibrated-step">
+                                <div class="step-label">Calibrated</div>
+                                <div class="step-value">${sensor.calibrated_value_b !== undefined ? sensor.calibrated_value_b.toFixed(2) : 'N/A'}</div>
+                                <div class="calibration-info">
+                                    <small>×${sensor.calibration_slope_b || 1} + ${sensor.calibration_offset_b || 0}</small>
+                                </div>
+                            </div>
+                            <div class="dataflow-arrow">→</div>
+                            <div class="dataflow-step modbus-step">
+                                <div class="step-label">Modbus Reg ${sensor.modbus_register_b || (sensor.modbus_register + 1)}</div>
+                                <div class="step-value">${sensor.modbus_value_b !== undefined ? sensor.modbus_value_b : 'N/A'}</div>
+                            </div>
+                        </div>
+                    </div>`;
+            }
+            
+            dataflowHTML += `</div>`;
+            
+        } else if (isMultiValue) {
             // Multi-value sensor: show each value's dataflow
             dataflowHTML = `<div class="multi-value-dataflow">`;
             sensor.multiValues.forEach((valueConfig, index) => {
@@ -2299,19 +2394,31 @@ window.updateTerminalInterface = function updateTerminalInterface() {
             break;
             
         case 'i2c':
-            // Always provide independent I2C access options
-            pinSelector.innerHTML += '<option value="I2C0">I2C0 - SDA: GP4 (Pin 6), SCL: GP5 (Pin 7)</option>';
-            pinSelector.innerHTML += '<option value="Any">Any - For scan/probe operations</option>';
+            // Add scan option for all pins
+            pinSelector.innerHTML += '<option value="all">All I2C Pins (Scan Mode)</option>';
             
-            // Add configured I2C sensors as additional options
+            // Add all possible I2C pin pairs (for bus-level monitoring)
+            pinSelector.innerHTML += '<option value="4">GP4/GP5 (SDA/SCL)</option>';
+            pinSelector.innerHTML += '<option value="6">GP6/GP7 (SDA/SCL)</option>';
+            pinSelector.innerHTML += '<option value="8">GP8/GP9 (SDA/SCL)</option>';
+            pinSelector.innerHTML += '<option value="10">GP10/GP11 (SDA/SCL)</option>';
+            pinSelector.innerHTML += '<option value="12">GP12/GP13 (SDA/SCL)</option>';
+            pinSelector.innerHTML += '<option value="14">GP14/GP15 (SDA/SCL)</option>';
+            pinSelector.innerHTML += '<option value="16">GP16/GP17 (SDA/SCL)</option>';
+            pinSelector.innerHTML += '<option value="18">GP18/GP19 (SDA/SCL)</option>';
+            pinSelector.innerHTML += '<option value="20">GP20/GP21 (SDA/SCL)</option>';
+            pinSelector.innerHTML += '<option value="26">GP26/GP27 (SDA/SCL)</option>';
+            
+            // Add all configured sensors (both generic and auto-configured)
             if (sensorConfigData && sensorConfigData.length > 0) {
                 sensorConfigData.forEach((sensor, index) => {
-                    if (sensor.protocol === 'I2C' && sensor.enabled) {
-                        pinSelector.innerHTML += `<option value="${sensor.name}">${sensor.name} (SDA:${sensor.sdaPin || 4}, SCL:${sensor.sclPin || 5}) - 0x${sensor.i2cAddress.toString(16).toUpperCase()}</option>`;
+                    if (sensor.protocol === 'I2C' && sensor.enabled && sensor.name) {
+                        const address = sensor.i2cAddress ? `0x${sensor.i2cAddress.toString(16).toUpperCase()}` : 'Unknown';
+                        pinSelector.innerHTML += `<option value="${sensor.name}">${sensor.name} (${sensor.type}) - ${address}</option>`;
                     }
                 });
             }
-            commandInput.placeholder = 'Commands: scan, probe, read [reg], write [reg] [data]';
+            commandInput.placeholder = 'Commands: scan, probe [address], read [reg], write [reg] [data]';
             break;
             
         case 'uart':
