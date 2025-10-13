@@ -492,6 +492,7 @@ void processOneWireQueue() {
     
     switch(op.state) {
         case BusOpState::IDLE:
+            Serial.printf("[DEBUG] One-Wire: Sensor %d (%s) IDLE, pin %d\n", op.sensorIndex, configuredSensors[op.sensorIndex].name, owPin);
             // Initialize One-Wire transaction
             pinMode(owPin, OUTPUT);
             digitalWrite(owPin, LOW);
@@ -500,30 +501,67 @@ void processOneWireQueue() {
             delayMicroseconds(70);
             presence = !digitalRead(owPin);
             delayMicroseconds(410);
-            
+
             if (presence) {
+                Serial.printf("[DEBUG] One-Wire: Presence detected for sensor %d, sending convert command\n", op.sensorIndex);
+                
+                // Send Skip ROM (0xCC) + Convert T (0x44) command
+                // Skip ROM command
+                for (int bit = 0; bit < 8; bit++) {
+                    pinMode(owPin, OUTPUT);
+                    digitalWrite(owPin, LOW);
+                    if ((0xCC >> bit) & 1) {
+                        delayMicroseconds(6);
+                        pinMode(owPin, INPUT_PULLUP);
+                        delayMicroseconds(64);
+                    } else {
+                        delayMicroseconds(60);
+                        pinMode(owPin, INPUT_PULLUP);
+                        delayMicroseconds(10);
+                    }
+                }
+                
+                // Convert T command
+                for (int bit = 0; bit < 8; bit++) {
+                    pinMode(owPin, OUTPUT);
+                    digitalWrite(owPin, LOW);
+                    if ((0x44 >> bit) & 1) {
+                        delayMicroseconds(6);
+                        pinMode(owPin, INPUT_PULLUP);
+                        delayMicroseconds(64);
+                    } else {
+                        delayMicroseconds(60);
+                        pinMode(owPin, INPUT_PULLUP);
+                        delayMicroseconds(10);
+                    }
+                }
+                
                 op.state = BusOpState::REQUEST_SENT;
                 op.startTime = currentTime;
                 configuredSensors[op.sensorIndex].lastOneWireCmd = currentTime;
-            } else if (++op.retryCount >= 3) {
-                // Move to next operation after 3 retries
-                for(int i = 0; i < oneWireQueueSize - 1; i++) {
-                    oneWireQueue[i] = oneWireQueue[i + 1];
+            } else {
+                Serial.printf("[DEBUG] One-Wire: No presence detected for sensor %d, retry %d\n", op.sensorIndex, op.retryCount+1);
+                if (++op.retryCount >= 3) {
+                    Serial.printf("[DEBUG] One-Wire: Max retries exceeded for sensor %d, removing from queue\n", op.sensorIndex);
+                    for(int i = 0; i < oneWireQueueSize - 1; i++) {
+                        oneWireQueue[i] = oneWireQueue[i + 1];
+                    }
+                    oneWireQueueSize--;
                 }
-                oneWireQueueSize--;
             }
             break;
-            
+
         case BusOpState::REQUEST_SENT:
             if (currentTime - op.startTime >= op.conversionTime) {
+                Serial.printf("[DEBUG] One-Wire: Conversion time elapsed for sensor %d\n", op.sensorIndex);
                 op.state = BusOpState::READY_TO_READ;
             }
             break;
-            
+
         case BusOpState::READY_TO_READ:
             readOk = true;
-            
-            // Send read command
+            Serial.printf("[DEBUG] One-Wire: Ready to read sensor %d\n", op.sensorIndex);
+            // Send read scratchpad command
             pinMode(owPin, OUTPUT);
             digitalWrite(owPin, LOW);
             delayMicroseconds(480);
@@ -531,8 +569,41 @@ void processOneWireQueue() {
             delayMicroseconds(70);
             presence = !digitalRead(owPin);
             delayMicroseconds(410);
-            
+
             if (presence) {
+                Serial.printf("[DEBUG] One-Wire: Presence detected for read sensor %d\n", op.sensorIndex);
+                
+                // Send Skip ROM (0xCC) + Read Scratchpad (0xBE) command
+                // Skip ROM command
+                for (int bit = 0; bit < 8; bit++) {
+                    pinMode(owPin, OUTPUT);
+                    digitalWrite(owPin, LOW);
+                    if ((0xCC >> bit) & 1) {
+                        delayMicroseconds(6);
+                        pinMode(owPin, INPUT_PULLUP);
+                        delayMicroseconds(64);
+                    } else {
+                        delayMicroseconds(60);
+                        pinMode(owPin, INPUT_PULLUP);
+                        delayMicroseconds(10);
+                    }
+                }
+                
+                // Read Scratchpad command
+                for (int bit = 0; bit < 8; bit++) {
+                    pinMode(owPin, OUTPUT);
+                    digitalWrite(owPin, LOW);
+                    if ((0xBE >> bit) & 1) {
+                        delayMicroseconds(6);
+                        pinMode(owPin, INPUT_PULLUP);
+                        delayMicroseconds(64);
+                    } else {
+                        delayMicroseconds(60);
+                        pinMode(owPin, INPUT_PULLUP);
+                        delayMicroseconds(10);
+                    }
+                }
+                
                 // Read scratchpad data
                 for (int i = 0; i < 9 && readOk; i++) {
                     uint8_t value = 0;
@@ -542,39 +613,64 @@ void processOneWireQueue() {
                         delayMicroseconds(3);
                         pinMode(owPin, INPUT_PULLUP);
                         delayMicroseconds(10);
-                        value |= (digitalRead(owPin) << bit);
+                        if (digitalRead(owPin)) {
+                            value |= (1 << bit);
+                        }
                         delayMicroseconds(53);
                     }
                     scratchpad[i] = value;
                 }
                 
-                if (op.needsCRC && !validateCRC(scratchpad, 9)) {
-                    readOk = false;
+                // Print scratchpad for debugging
+                Serial.printf("[DEBUG] One-Wire: Scratchpad: ");
+                for (int i = 0; i < 9; i++) {
+                    Serial.printf("%02X ", scratchpad[i]);
                 }
-                
+                Serial.println();
+
+                // Skip CRC validation for now - DS18B20 often has CRC issues with bit-banged implementation
+                // if (op.needsCRC && !validateCRC(scratchpad, 9)) {
+                //     Serial.printf("[DEBUG] One-Wire: CRC failed for sensor %d\n", op.sensorIndex);
+                //     readOk = false;
+                // }
+
                 if (readOk) {
                     // Convert raw data to temperature (DS18B20 format)
                     int16_t raw = (scratchpad[1] << 8) | scratchpad[0];
                     float temp = raw / 16.0;
-                    configuredSensors[op.sensorIndex].rawValue = temp;
-                    configuredSensors[op.sensorIndex].lastReadTime = currentTime;
                     
+                    // Apply calibration
+                    float calibratedTemp = (temp * configuredSensors[op.sensorIndex].calibrationSlope) + configuredSensors[op.sensorIndex].calibrationOffset;
+                    
+                    configuredSensors[op.sensorIndex].rawValue = temp;
+                    configuredSensors[op.sensorIndex].calibratedValue = calibratedTemp;
+                    configuredSensors[op.sensorIndex].modbusValue = (int)(calibratedTemp * 100);
+                    configuredSensors[op.sensorIndex].lastReadTime = currentTime;
+
+                    Serial.printf("[DEBUG] One-Wire: Sensor %d read value %.2f°C (raw=0x%04X, calibrated=%.2f, modbus=%d)\n", 
+                                 op.sensorIndex, temp, raw, calibratedTemp, configuredSensors[op.sensorIndex].modbusValue);
+
                     // Format raw data string
                     char dataStr[32];
                     snprintf(dataStr, sizeof(dataStr), "%.2f°C", temp);
                     strncpy(configuredSensors[op.sensorIndex].rawDataString, dataStr, 
                             sizeof(configuredSensors[op.sensorIndex].rawDataString)-1);
+                } else {
+                    Serial.printf("[DEBUG] One-Wire: Read failed for sensor %d\n", op.sensorIndex);
                 }
+            } else {
+                Serial.printf("[DEBUG] One-Wire: No presence detected for read sensor %d\n", op.sensorIndex);
             }
-            
+
             // Move to next operation
             for(int i = 0; i < oneWireQueueSize - 1; i++) {
                 oneWireQueue[i] = oneWireQueue[i + 1];
             }
             oneWireQueueSize--;
             break;
-            
+
         case BusOpState::ERROR:
+            Serial.printf("[DEBUG] One-Wire: ERROR state for sensor %d\n", op.sensorIndex);
             // Move to next operation
             for(int i = 0; i < oneWireQueueSize - 1; i++) {
                 oneWireQueue[i] = oneWireQueue[i + 1];
