@@ -361,7 +361,16 @@ void processI2CQueue() {
                                 "Raw: [" + rawHex + "] ASCII: \"" + String(response) + "\"", 
                                 String(configuredSensors[op.sensorIndex].name));
                 
-                strncpy(configuredSensors[op.sensorIndex].response, response, sizeof(configuredSensors[op.sensorIndex].response)-1);
+                // Store response for web interface (clean for JSON compatibility)
+                String cleanResponse = "";
+                for (int j = 0; j < idx; j++) {
+                    char c = response[j];
+                    if (c >= 32 && c <= 126) { // Only printable ASCII
+                        cleanResponse += c;
+                    }
+                }
+                strncpy(configuredSensors[op.sensorIndex].response, cleanResponse.c_str(), sizeof(configuredSensors[op.sensorIndex].response)-1);
+                configuredSensors[op.sensorIndex].response[sizeof(configuredSensors[op.sensorIndex].response)-1] = '\0';
                 configuredSensors[op.sensorIndex].lastReadTime = currentTime;
                 
                 // Process response based on sensor type
@@ -475,8 +484,54 @@ void processI2CQueue() {
 }
 
 void processUARTQueue() {
-    // Similar structure to I2C queue but for UART operations
-    // Not yet implemented - placeholder for future UART support
+    if (uartQueueSize == 0) return;
+    
+    unsigned long currentTime = millis();
+    BusOperation& op = uartQueue[0];
+    
+    Serial.printf("[DEBUG] UART: Processing sensor %d (%s) - state %d\n", 
+                 op.sensorIndex, configuredSensors[op.sensorIndex].name, (int)op.state);
+    
+    switch(op.state) {
+        case BusOpState::IDLE:
+            Serial.printf("[DEBUG] UART: Sensor %d (%s) IDLE, TX:%d RX:%d\n", 
+                         op.sensorIndex, configuredSensors[op.sensorIndex].name,
+                         configuredSensors[op.sensorIndex].uartTxPin, 
+                         configuredSensors[op.sensorIndex].uartRxPin);
+            
+            // For now, simulate UART read with placeholder data
+            // In a real implementation, you would:
+            // 1. Configure UART pins and baud rate
+            // 2. Send command if needed
+            // 3. Read response
+            
+            configuredSensors[op.sensorIndex].rawValue = 25.5; // Placeholder
+            configuredSensors[op.sensorIndex].calibratedValue = 25.5;
+            configuredSensors[op.sensorIndex].modbusValue = 2550;
+            configuredSensors[op.sensorIndex].lastReadTime = currentTime;
+            
+            strncpy(configuredSensors[op.sensorIndex].rawDataString, "UART:25.5", 
+                   sizeof(configuredSensors[op.sensorIndex].rawDataString)-1);
+            
+            Serial.printf("[DEBUG] UART: Sensor %d simulated value 25.5\n", op.sensorIndex);
+            
+            // Move to next operation
+            for(int i = 0; i < uartQueueSize - 1; i++) {
+                uartQueue[i] = uartQueue[i + 1];
+            }
+            uartQueueSize--;
+            break;
+            
+        case BusOpState::REQUEST_SENT:
+        case BusOpState::READY_TO_READ:
+        case BusOpState::ERROR:
+            // Move to next operation
+            for(int i = 0; i < uartQueueSize - 1; i++) {
+                uartQueue[i] = uartQueue[i + 1];
+            }
+            uartQueueSize--;
+            break;
+    }
 }
 
 void processOneWireQueue() {
@@ -952,12 +1007,12 @@ String executeTerminalCommand(String command, String pin, String protocol) {
             response = "I2C Error: " + String(result);
             logI2CTransaction(address, "ERR", "EndTransmission failed: " + String(result), pin);
         }
-    } else if (protocol == "One-Wire") {
+    } else if (protocol == "onewire") {
         // Add OneWire command handling with logging
         logOneWireTransaction(pin, "TX", command);
         response = "OneWire command sent: " + command;
         logOneWireTransaction(pin, "RX", response);
-    } else if (protocol == "UART") {
+    } else if (protocol == "uart") {
         // Add UART command handling with logging
         logUARTTransaction(pin, "TX", command);
         response = "UART command sent: " + command;
@@ -1738,6 +1793,92 @@ void handlePOSTTerminalCommand(WiFiClient& client, String body) {
             success = false;
             response = "Error: Unknown One-Wire command. Use 'scan', 'read', 'convert', 'rom', 'cmd', 'reset', 'power', 'info', or 'crc'";
         }
+    } else if (protocol == "uart") {
+        // Extract pin numbers from pin string (e.g., "GP8,GP9" for TX,RX)
+        int txPin = -1;
+        int rxPin = -1;
+        
+        if (pin.indexOf(',') > 0) {
+            // Parse "GP8,GP9" format
+            int commaPos = pin.indexOf(',');
+            String txPinStr = pin.substring(0, commaPos);
+            String rxPinStr = pin.substring(commaPos + 1);
+            if (txPinStr.startsWith("GP")) txPin = txPinStr.substring(2).toInt();
+            if (rxPinStr.startsWith("GP")) rxPin = rxPinStr.substring(2).toInt();
+        } else {
+            // Try to find from configured sensor
+            for (int i = 0; i < numConfiguredSensors; i++) {
+                if (String(configuredSensors[i].name) == pin && strcmp(configuredSensors[i].protocol, "uart") == 0) {
+                    txPin = configuredSensors[i].uartTxPin;
+                    rxPin = configuredSensors[i].uartRxPin;
+                    break;
+                }
+            }
+        }
+        
+        if (txPin < 0 || rxPin < 0 || txPin > 28 || rxPin > 28) {
+            success = false;
+            response = "Error: Invalid UART pins. Use 'GP<tx>,GP<rx>' format or configured sensor name";
+        } else if (command == "info") {
+            response = "UART Information for TX:GP" + String(txPin) + ", RX:GP" + String(rxPin) + ":\\n";
+            response += "Protocol: Universal Asynchronous Receiver-Transmitter\\n";
+            response += "Common baud rates: 9600, 19200, 38400, 57600, 115200\\n";
+            response += "Default: 8 data bits, no parity, 1 stop bit\\n";
+            response += "Voltage: 3.3V logic level\\n\\n";
+            response += "Available Commands:\\n";
+            response += "• send <data> - Send data to UART device\\n";
+            response += "• read - Read available data from UART\\n";
+            response += "• config - Show UART configuration\\n";
+            response += "• test - Send test command and read response\\n";
+            response += "• info - Show this information";
+        } else if (command == "config") {
+            response = "UART Configuration:\\n";
+            response += "TX Pin: GP" + String(txPin) + "\\n";
+            response += "RX Pin: GP" + String(rxPin) + "\\n";
+            response += "Baud Rate: 9600 (default)\\n";
+            response += "Data Bits: 8\\n";
+            response += "Parity: None\\n";
+            response += "Stop Bits: 1\\n";
+            response += "Note: Use PlatformIO Serial2 for hardware UART on these pins";
+        } else if (command.startsWith("send ")) {
+            String data = command.substring(5);
+            if (data.length() > 0) {
+                // Log the outgoing command
+                logUARTTransaction("GP" + String(txPin) + ",GP" + String(rxPin), "TX", data);
+                
+                // For now, simulate UART send (hardware UART setup would be needed)
+                response = "UART TX (GP" + String(txPin) + "): " + data;
+                response += "\\nNote: Hardware UART implementation needed for actual transmission";
+                
+                // Simulate response for testing
+                String simResponse = "OK\\r\\n";
+                logUARTTransaction("GP" + String(txPin) + ",GP" + String(rxPin), "RX", simResponse);
+                response += "\\nSimulated RX: " + simResponse;
+            } else {
+                success = false;
+                response = "Error: No data to send. Use 'send <data>'";
+            }
+        } else if (command == "read") {
+            // Simulate reading from UART
+            String simData = "25.5,60.2\\r\\n"; // Example sensor data
+            response = "UART RX (GP" + String(rxPin) + "): " + simData;
+            response += "\\nNote: Hardware UART implementation needed for actual reception";
+            logUARTTransaction("GP" + String(txPin) + ",GP" + String(rxPin), "RX", simData);
+        } else if (command == "test") {
+            // Send test command and wait for response
+            String testCmd = "R\\r\\n";
+            logUARTTransaction("GP" + String(txPin) + ",GP" + String(rxPin), "TX", testCmd);
+            response = "UART Test Command Sent: " + testCmd;
+            
+            // Simulate response
+            String testResp = "Temperature: 25.5C\\r\\n";
+            logUARTTransaction("GP" + String(txPin) + ",GP" + String(rxPin), "RX", testResp);
+            response += "\\nSimulated Response: " + testResp;
+            response += "\\nNote: Hardware UART implementation needed for actual communication";
+        } else {
+            success = false;
+            response = "Error: Unknown UART command. Use 'info', 'config', 'send <data>', 'read', or 'test'";
+        }
     } else {
         success = false;
         response = "Error: Unknown protocol. Use 'digital', 'analog', 'i2c', 'uart', 'onewire', 'system', or 'network'";
@@ -2374,12 +2515,29 @@ void routeRequest(WiFiClient& client, String method, String path, String body) {
             sendJSONSensorPinStatus(client);
         } else if (path == "/terminal/logs") {
             // Send terminal buffer for bus traffic monitoring
-            String response = "[";
+            StaticJsonDocument<2048> terminalDoc;
+            JsonArray terminalArray = terminalDoc.to<JsonArray>();
+            
             for (size_t i = 0; i < terminalBuffer.size(); i++) {
-                if (i > 0) response += ",";
-                response += "\"" + terminalBuffer[i] + "\"";
+                // Clean each log entry to prevent JSON corruption
+                String cleanEntry = "";
+                for (int j = 0; j < terminalBuffer[i].length(); j++) {
+                    char c = terminalBuffer[i][j];
+                    if (c >= 32 && c <= 126) { // Only printable ASCII
+                        cleanEntry += c;
+                    } else if (c == '\n') {
+                        cleanEntry += "\\n";
+                    } else if (c == '\r') {
+                        cleanEntry += "\\r";
+                    } else if (c == '\t') {
+                        cleanEntry += "\\t";
+                    }
+                }
+                terminalArray.add(cleanEntry);
             }
-            response += "]";
+            
+            String response;
+            serializeJson(terminalDoc, response);
             sendJSON(client, response);
         } else {
             send404(client);
@@ -2750,7 +2908,16 @@ void sendJSONSensorConfig(WiFiClient& client) {
         sensor["protocol"] = configuredSensors[i].protocol;
         sensor["i2cAddress"] = configuredSensors[i].i2cAddress;
         sensor["modbusRegister"] = configuredSensors[i].modbusRegister;
-        sensor["response"] = configuredSensors[i].response;
+        
+        // Clean response field to prevent JSON corruption from binary data
+        String cleanResponse = "";
+        for (int j = 0; j < strlen(configuredSensors[i].response); j++) {
+            char c = configuredSensors[i].response[j];
+            if (c >= 32 && c <= 126) { // Only printable ASCII
+                cleanResponse += c;
+            }
+        }
+        sensor["response"] = cleanResponse;
         
         // Include pin assignments
         sensor["sdaPin"] = configuredSensors[i].sdaPin;
@@ -2838,7 +3005,16 @@ void sendJSONSensorData(WiFiClient& client) {
             // Raw sensor data
             sensor["raw_value"] = configuredSensors[i].rawValue;
             sensor["raw_data_string"] = configuredSensors[i].rawDataString;
-            sensor["response"] = configuredSensors[i].response;
+            
+            // Clean response field to prevent JSON corruption from binary data
+            String cleanResponse = "";
+            for (int j = 0; j < strlen(configuredSensors[i].response); j++) {
+                char c = configuredSensors[i].response[j];
+                if (c >= 32 && c <= 126) { // Only printable ASCII
+                    cleanResponse += c;
+                }
+            }
+            sensor["response"] = cleanResponse;
             
             // Calibrated values
             sensor["calibrated_value"] = configuredSensors[i].calibratedValue;
@@ -3552,29 +3728,8 @@ void updateIOpins() {
         // Initialize sensor values - only temperature is used by EZO_RTD if configured
         ioStatus.temperature = 0.0;  // Only used by EZO_RTD sensors for pH compensation
         
-        // Read from configured sensors
-        for (int i = 0; i < numConfiguredSensors; i++) {
-            if (configuredSensors[i].enabled) {
-                Serial.printf("Reading sensor %s (%s) at I2C address 0x%02X\n", 
-                    configuredSensors[i].name,
-                    configuredSensors[i].type,
-                    configuredSensors[i].i2cAddress
-                );
-                
-                // All configured sensors (SHT30, EZO, etc.) are now handled in the unified queue system
-                // No duplicate sensor handling needed here - sensors are polled via I2C queue
-            }
-        }
-        
-        // No built-in sensors - all sensor data comes from configured I2C sensors
-        if (numConfiguredSensors == 0) {
-            // Only print this message once every 60 seconds to avoid spam
-            static unsigned long lastSensorMessage = 0;
-            if (millis() - lastSensorMessage > 60000) {
-                Serial.println("No I2C sensors configured");
-                lastSensorMessage = millis();
-            }
-        }
+        // All configured sensors are now handled by the unified queue system
+        // No legacy sensor handling needed here - sensors are polled via their respective queues
         
         // Print IP address every 30 seconds for easy reference
         static uint32_t ipPrintTime = 0;

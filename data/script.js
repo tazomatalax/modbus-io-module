@@ -1252,9 +1252,9 @@ window.saveSensor = function saveSensor() {
         }
     }
     
-    // Validate Modbus register range - system reserves 0-2 for built-in I/O
-    if (modbusRegister < 3) {
-        showToast('Modbus register must be 3 or higher (0-2 are reserved for system I/O)', 'error');
+    // Validate Modbus register range
+    if (modbusRegister < 0) {
+        showToast('Modbus register must be 0 or higher', 'error');
         return;
     }
     
