@@ -208,6 +208,8 @@ struct SensorConfig {
     float calibrationSlopeB;  // Calibration slope for rawValueB
     float calibrationOffsetC; // Calibration offset for rawValueC  
     float calibrationSlopeC;  // Calibration slope for rawValueC
+    char calibrationExpressionB[128];  // Mathematical expression for calibrating rawValueB
+    char calibrationExpressionC[128];  // Mathematical expression for calibrating rawValueC
     
     char rawDataString[128];  // Raw data string for parsing (I2C/UART responses)
     unsigned long lastReadTime; // When last read was performed

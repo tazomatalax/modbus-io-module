@@ -910,22 +910,10 @@ window.populateMultiValueFields = function populateMultiValueFields(values) {
                            value="${register}" 
                            min="3" max="65535">
                 </div>
-                <div class="form-group">
-                    <label>Scale Factor</label>
-                    <input type="number" 
-                           id="multi-scale-${index}" 
-                           value="1.0" 
-                           step="0.001" 
-                           min="0.001">
-                </div>
-                <div class="form-group">
-                    <label>Offset</label>
-                    <input type="number" 
-                           id="multi-offset-${index}" 
-                           value="0.0" 
-                           step="0.01">
-                </div>
                 <div class="multi-value-units">${value.units}</div>
+                <div class="calibration-note">
+                    <small>📊 Configure calibration for this output in the Calibration section below</small>
+                </div>
             </div>
         `;
         container.appendChild(item);
@@ -1178,10 +1166,11 @@ window.editSensor = function editSensor(index) {
             document.getElementById(`multi-name-${index}`).value = value.name || `Value ${index + 1}`;
             document.getElementById(`multi-position-${index}`).value = value.position || '';
             document.getElementById(`multi-register-${index}`).value = value.register || (sensor.modbusRegister + index);
-            document.getElementById(`multi-scale-${index}`).value = value.scale || 1.0;
-            document.getElementById(`multi-offset-${index}`).value = value.offset || 0.0;
             document.getElementById(`multi-units-${index}`).value = value.units || '';
         });
+        
+        // Load existing calibration data for multi-output sensors
+        loadMultiOutputCalibrationData(sensor);
     } else {
         document.getElementById('sensor-multi-value').checked = false;
         toggleMultiValueConfig();
@@ -1399,11 +1388,51 @@ window.saveSensor = function saveSensor() {
     }
     
     // Get calibration data based on selected method
-    const selectedCalibrationMethod = document.querySelector('input[name="sensor-calibration-method"]:checked').value;
+    const isMultiOutput = document.getElementById('sensor-multi-value').checked;
     let calibration = {};
     
-    try {
-        switch (selectedCalibrationMethod) {
+    if (isMultiOutput) {
+        // Multi-output calibration: collect calibration for each output
+        const multiValueFields = document.querySelectorAll('.multi-value-item');
+        calibration = { offset: 0, scale: 1, expression: '', polynomialStr: '' }; // Primary output defaults
+        
+        // Collect calibration for each output (A, B, C)
+        multiValueFields.forEach((field, index) => {
+            const outputLetter = index === 0 ? '' : (index === 1 ? 'B' : 'C'); // Primary has no suffix
+            const methodRadio = document.querySelector(`input[name="multi-calibration-method-${index}"]:checked`);
+            const method = methodRadio ? methodRadio.value : 'linear';
+            
+            if (method === 'linear') {
+                const offset = parseFloat(document.getElementById(`multi-calibration-offset-${index}`)?.value) || 0;
+                const scale = parseFloat(document.getElementById(`multi-calibration-scale-${index}`)?.value) || 1;
+                
+                if (index === 0) {
+                    // Primary output
+                    calibration.offset = offset;
+                    calibration.scale = scale;
+                } else {
+                    // Secondary/tertiary outputs
+                    calibration[`offset${outputLetter}`] = offset;
+                    calibration[`scale${outputLetter}`] = scale;
+                }
+            } else if (method === 'expression') {
+                const expression = document.getElementById(`multi-calibration-expression-${index}`)?.value?.trim() || '';
+                
+                if (index === 0) {
+                    // Primary output
+                    calibration.expression = expression;
+                } else {
+                    // Secondary/tertiary outputs
+                    calibration[`expression${outputLetter}`] = expression;
+                }
+            }
+        });
+    } else {
+        // Single-output calibration (existing logic)
+        const selectedCalibrationMethod = document.querySelector('input[name="sensor-calibration-method"]:checked').value;
+        
+        try {
+            switch (selectedCalibrationMethod) {
             case 'linear':
                 const offset = parseFloat(document.getElementById('sensor-calibration-offset').value) || 0;
                 const scale = parseFloat(document.getElementById('sensor-calibration-scale').value) || 1;
@@ -1460,10 +1489,11 @@ window.saveSensor = function saveSensor() {
                 return;
         }
         
-    } catch (error) {
-        console.error('Error processing calibration:', error);
-        showToast('Error processing calibration: ' + error.message, 'error');
-        return;
+        } catch (error) {
+            console.error('Error processing calibration:', error);
+            showToast('Error processing calibration: ' + error.message, 'error');
+            return;
+        }
     }
     
     // Capture pin assignments based on protocol
@@ -1585,16 +1615,12 @@ window.saveSensor = function saveSensor() {
                 const name = document.getElementById(`multi-name-${index}`)?.value?.trim() || `Value ${index + 1}`;
                 const position = document.getElementById(`multi-position-${index}`)?.value?.trim() || '';
                 const register = parseInt(document.getElementById(`multi-register-${index}`)?.value) || (modbusRegister + index);
-                const scale = parseFloat(document.getElementById(`multi-scale-${index}`)?.value) || 1.0;
-                const offset = parseFloat(document.getElementById(`multi-offset-${index}`)?.value) || 0.0;
                 const units = document.getElementById(`multi-units-${index}`)?.value?.trim() || '';
 
                 multiValues.push({
                     name: name,
                     position: position,
                     register: register,
-                    scale: scale,
-                    offset: offset,
                     units: units
                 });
             });
@@ -1640,6 +1666,38 @@ window.saveSensor = function saveSensor() {
         ...pinAssignments,
         ...(sensorCommand && { command: sensorCommand })
     };
+    
+    // Collect multi-output calibration data if multi-value is enabled
+    if (document.getElementById('sensor-multi-value').checked) {
+        const multiValueFields = document.querySelectorAll('.multi-value-item');
+        if (multiValueFields.length > 0) {
+            // Collect calibration for output B (humidity for SHT30, etc.)
+            if (multiValueFields.length > 1) {
+                const offsetB = parseFloat(document.getElementById('multi-calibration-offset-1')?.value) || 0;
+                const scaleB = parseFloat(document.getElementById('multi-calibration-scale-1')?.value) || 1;
+                const expressionB = document.getElementById('multi-calibration-expression-1')?.value?.trim() || '';
+                
+                sensor.calibrationOffsetB = offsetB;
+                sensor.calibrationSlopeB = scaleB;
+                if (expressionB) {
+                    sensor.calibrationExpressionB = expressionB;
+                }
+            }
+            
+            // Collect calibration for output C if it exists
+            if (multiValueFields.length > 2) {
+                const offsetC = parseFloat(document.getElementById('multi-calibration-offset-2')?.value) || 0;
+                const scaleC = parseFloat(document.getElementById('multi-calibration-scale-2')?.value) || 1;
+                const expressionC = document.getElementById('multi-calibration-expression-2')?.value?.trim() || '';
+                
+                sensor.calibrationOffsetC = offsetC;
+                sensor.calibrationSlopeC = scaleC;
+                if (expressionC) {
+                    sensor.calibrationExpressionC = expressionC;
+                }
+            }
+        }
+    }
     
     // Add multi-value config if it exists
     if (multiValues && multiValues.length > 0) {
@@ -1963,6 +2021,54 @@ window.deleteSensor = function deleteSensor(index) {
     }
 }
 
+// Helper function to generate calibration equation display text
+window.getCalibrationEquationDisplay = function getCalibrationEquationDisplay(sensor, outputIndex = 0) {
+    // Defensive check - make sure sensor object exists
+    if (!sensor || typeof sensor !== 'object') {
+        return 'No calibration info';
+    }
+    
+    try {
+        // Find the sensor configuration by name
+        const sensorConfig = window.sensorConfigData.find(config => config.name === sensor.name);
+        if (!sensorConfig) {
+            return 'Config not found';
+        }
+        
+        let offset, scale, expression;
+        
+        // Get calibration data based on output index
+        if (outputIndex === 0) {
+            // Primary output (A)
+            offset = sensorConfig.calibrationOffset || 0;
+            scale = sensorConfig.calibrationSlope || 1;
+            expression = sensorConfig.calibrationExpression || '';
+        } else if (outputIndex === 1) {
+            // Secondary output (B)
+            offset = sensorConfig.calibrationOffsetB || 0;
+            scale = sensorConfig.calibrationSlopeB || 1;
+            expression = sensorConfig.calibrationExpressionB || '';
+        } else if (outputIndex === 2) {
+            // Tertiary output (C)
+            offset = sensorConfig.calibrationOffsetC || 0;
+            scale = sensorConfig.calibrationSlopeC || 1;
+            expression = sensorConfig.calibrationExpressionC || '';
+        }
+        
+        // Determine what calibration is being used
+        if (expression && expression.trim() !== '') {
+            return `Equation: ${expression}`;
+        } else if (scale !== 1 || offset !== 0) {
+            return `Linear: (x × ${scale}) + ${offset}`;
+        } else {
+            return 'No calibration (1:1)';
+        }
+    } catch (error) {
+        console.warn('Error in getCalibrationEquationDisplay:', error);
+        return 'Calibration info unavailable';
+    }
+};
+
 // Update IO Status data and refresh displays
 let consecutiveErrors = 0;
 let lastSuccessfulUpdate = Date.now();
@@ -2115,7 +2221,7 @@ function updateProtocolSensorFlow(protocol, sensors, containerId) {
                             <div class="step-label">Calibrated</div>
                             <div class="step-value">${sensor.calibrated_value !== undefined ? sensor.calibrated_value.toFixed(2) : 'N/A'}</div>
                             <div class="calibration-info">
-                                <small>×${sensor.calibration_slope || 1} + ${sensor.calibration_offset || 0}</small>
+                                <small>${getCalibrationEquationDisplay(sensor, 0)}</small>
                             </div>
                         </div>
                         <div class="dataflow-arrow">→</div>
@@ -2141,7 +2247,7 @@ function updateProtocolSensorFlow(protocol, sensors, containerId) {
                                 <div class="step-label">Calibrated</div>
                                 <div class="step-value">${sensor.calibrated_value_b !== undefined ? sensor.calibrated_value_b.toFixed(2) : 'N/A'}</div>
                                 <div class="calibration-info">
-                                    <small>×${sensor.calibration_slope_b || 1} + ${sensor.calibration_offset_b || 0}</small>
+                                    <small>${getCalibrationEquationDisplay(sensor, 1)}</small>
                                 </div>
                             </div>
                             <div class="dataflow-arrow">→</div>
@@ -2177,8 +2283,7 @@ function updateProtocolSensorFlow(protocol, sensors, containerId) {
                                 <div class="step-label">Calibrated</div>
                                 <div class="step-value">${calibratedValue !== undefined ? calibratedValue.toFixed(2) : 'N/A'}</div>
                                 <div class="calibration-info">
-                                    Offset: ${valueConfig.offset || 0}, 
-                                    Scale: ${valueConfig.scale || 1}
+                                    <small>${getCalibrationEquationDisplay(sensor, index)}</small>
                                 </div>
                             </div>
                             <div class="dataflow-arrow">→</div>
@@ -2204,8 +2309,7 @@ function updateProtocolSensorFlow(protocol, sensors, containerId) {
                         <div class="step-label">Calibrated</div>
                         <div class="step-value">${sensor.calibrated_value !== undefined ? sensor.calibrated_value.toFixed(2) : 'N/A'}</div>
                         <div class="calibration-info">
-                            Offset: ${sensor.calibration_offset || 0}, 
-                            Slope: ${sensor.calibration_slope || 1}
+                            <small>${getCalibrationEquationDisplay(sensor, 0)}</small>
                         </div>
                     </div>
                     <div class="dataflow-arrow">→</div>
@@ -3292,15 +3396,49 @@ document.addEventListener('DOMContentLoaded', function() {
 window.toggleMultiValueConfig = function toggleMultiValueConfig() {
     const checkbox = document.getElementById('sensor-multi-value');
     const section = document.getElementById('multi-value-section');
+    const singleCalibrationSection = document.querySelector('.form-section:has(#sensor-linear-calibration)') || 
+                                   document.getElementById('sensor-linear-calibration').closest('.form-section');
+    const multiCalibration = document.getElementById('multi-output-calibration');
     
-    if (checkbox.checked) {
+    console.log('toggleMultiValueConfig called, checkbox checked:', checkbox.checked);
+    console.log('multiCalibration element:', multiCalibration);
+    
+    if (checkbox && checkbox.checked) {
         section.style.display = 'block';
+        
+        // Hide single-output calibration components and show multi-output calibration
+        const calibrationMethodSelector = document.querySelector('.sensor-calibration-method-selector');
+        const linearCalibration = document.getElementById('sensor-linear-calibration');
+        const polynomialCalibration = document.getElementById('sensor-polynomial-calibration');
+        const expressionCalibration = document.getElementById('sensor-expression-calibration');
+        
+        if (calibrationMethodSelector) calibrationMethodSelector.style.display = 'none';
+        if (linearCalibration) linearCalibration.style.display = 'none';
+        if (polynomialCalibration) polynomialCalibration.style.display = 'none';
+        if (expressionCalibration) expressionCalibration.style.display = 'none';
+        if (multiCalibration) multiCalibration.style.display = 'block';
+        
         // Add default value field if none exist
         if (document.getElementById('multi-value-fields').children.length === 0) {
             addMultiValueField();
         }
+        
+        // Update multi-output calibration fields
+        setTimeout(() => updateMultiOutputCalibration(), 100);
     } else {
         section.style.display = 'none';
+        
+        // Show single-output calibration components and hide multi-output calibration
+        const calibrationMethodSelector = document.querySelector('.sensor-calibration-method-selector');
+        const linearCalibration = document.getElementById('sensor-linear-calibration');
+        const polynomialCalibration = document.getElementById('sensor-polynomial-calibration');
+        const expressionCalibration = document.getElementById('sensor-expression-calibration');
+        
+        if (calibrationMethodSelector) calibrationMethodSelector.style.display = 'block';
+        if (linearCalibration) linearCalibration.style.display = 'block';
+        if (polynomialCalibration) polynomialCalibration.style.display = 'none';
+        if (expressionCalibration) expressionCalibration.style.display = 'none';
+        if (multiCalibration) multiCalibration.style.display = 'none';
     }
 };
 
@@ -3364,6 +3502,9 @@ window.addMultiValueField = function addMultiValueField() {
         </div>
     `;
     container.appendChild(item);
+    
+    // Update multi-output calibration when adding a field
+    updateMultiOutputCalibration();
 };
 
 // Remove a multi-value field
@@ -3382,6 +3523,156 @@ window.removeMultiValueField = function removeMultiValueField(button) {
             nameField.value = `Value ${index + 1}`;
         }
     });
+    
+    // Update multi-output calibration when removing a field
+    updateMultiOutputCalibration();
+};
+
+// Update multi-output calibration controls based on configured outputs
+window.updateMultiOutputCalibration = function updateMultiOutputCalibration() {
+    const container = document.getElementById('multi-calibration-outputs');
+    const multiValueFields = document.querySelectorAll('.multi-value-item');
+    
+    if (!container) return;
+    
+    // Clear existing calibration controls
+    container.innerHTML = '';
+    
+    // Create calibration controls for each output
+    multiValueFields.forEach((field, index) => {
+        const nameField = field.querySelector(`#multi-name-${index}`);
+        const outputName = nameField ? nameField.value || `Value ${index + 1}` : `Value ${index + 1}`;
+        const outputLetter = index === 0 ? 'A' : (index === 1 ? 'B' : 'C');
+        
+        const calibrationSection = document.createElement('div');
+        calibrationSection.className = 'multi-output-calibration-item';
+        calibrationSection.innerHTML = `
+            <h5>📊 ${outputName} Calibration (Output ${outputLetter})</h5>
+            <div class="calibration-method-selector">
+                <label class="method-option">
+                    <input type="radio" name="multi-calibration-method-${index}" value="linear" checked>
+                    <span>Linear</span>
+                </label>
+                <label class="method-option">
+                    <input type="radio" name="multi-calibration-method-${index}" value="expression">
+                    <span>Expression</span>
+                </label>
+            </div>
+            
+            <div id="multi-linear-calibration-${index}" class="calibration-fields">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Offset</label>
+                        <input type="number" id="multi-calibration-offset-${index}" step="0.01" value="0" placeholder="0.0">
+                    </div>
+                    <div class="form-group">
+                        <label>Scale Factor</label>
+                        <input type="number" id="multi-calibration-scale-${index}" step="0.001" value="1" placeholder="1.0" min="0.001">
+                    </div>
+                </div>
+                <small class="form-help">Final value = (Raw × Scale) + Offset</small>
+            </div>
+            
+            <div id="multi-expression-calibration-${index}" class="calibration-fields" style="display: none;">
+                <div class="form-group">
+                    <label>Mathematical Expression</label>
+                    <input type="text" id="multi-calibration-expression-${index}" placeholder="x * 1.8 + 32" value="">
+                    <small class="form-help">Mathematical expression (x = raw reading)</small>
+                </div>
+            </div>
+        `;
+        
+        container.appendChild(calibrationSection);
+        
+        // Add event listeners for calibration method switching
+        const methodRadios = calibrationSection.querySelectorAll(`input[name="multi-calibration-method-${index}"]`);
+        methodRadios.forEach(radio => {
+            radio.addEventListener('change', function() {
+                if (this.checked) {
+                    showMultiCalibrationMethod(index, this.value);
+                }
+            });
+        });
+    });
+};
+
+// Show the appropriate calibration method for a specific output
+window.showMultiCalibrationMethod = function showMultiCalibrationMethod(index, method) {
+    const linearSection = document.getElementById(`multi-linear-calibration-${index}`);
+    const expressionSection = document.getElementById(`multi-expression-calibration-${index}`);
+    
+    if (linearSection) linearSection.style.display = method === 'linear' ? 'block' : 'none';
+    if (expressionSection) expressionSection.style.display = method === 'expression' ? 'block' : 'none';
+};
+
+// Load calibration data for multi-output sensors
+window.loadMultiOutputCalibrationData = function loadMultiOutputCalibrationData(sensor) {
+    // Load primary calibration (output A)
+    if (sensor.calibration) {
+        if (sensor.calibration.expression && sensor.calibration.expression.length > 0) {
+            // Has expression calibration
+            const expressionRadio = document.querySelector('input[name="multi-calibration-method-0"][value="expression"]');
+            if (expressionRadio) {
+                expressionRadio.checked = true;
+                showMultiCalibrationMethod(0, 'expression');
+                const expressionField = document.getElementById('multi-calibration-expression-0');
+                if (expressionField) expressionField.value = sensor.calibration.expression;
+            }
+        } else {
+            // Has linear calibration
+            const linearRadio = document.querySelector('input[name="multi-calibration-method-0"][value="linear"]');
+            if (linearRadio) {
+                linearRadio.checked = true;
+                showMultiCalibrationMethod(0, 'linear');
+                const offsetField = document.getElementById('multi-calibration-offset-0');
+                const scaleField = document.getElementById('multi-calibration-scale-0');
+                if (offsetField) offsetField.value = sensor.calibration.offset || 0;
+                if (scaleField) scaleField.value = sensor.calibration.scale || 1;
+            }
+        }
+    }
+    
+    // Load secondary calibration (output B) from backend fields
+    if (sensor.calibrationExpressionB && sensor.calibrationExpressionB.length > 0) {
+        const expressionRadio = document.querySelector('input[name="multi-calibration-method-1"][value="expression"]');
+        if (expressionRadio) {
+            expressionRadio.checked = true;
+            showMultiCalibrationMethod(1, 'expression');
+            const expressionField = document.getElementById('multi-calibration-expression-1');
+            if (expressionField) expressionField.value = sensor.calibrationExpressionB;
+        }
+    } else if (sensor.calibrationOffsetB !== undefined || sensor.calibrationSlopeB !== undefined) {
+        const linearRadio = document.querySelector('input[name="multi-calibration-method-1"][value="linear"]');
+        if (linearRadio) {
+            linearRadio.checked = true;
+            showMultiCalibrationMethod(1, 'linear');
+            const offsetField = document.getElementById('multi-calibration-offset-1');
+            const scaleField = document.getElementById('multi-calibration-scale-1');
+            if (offsetField) offsetField.value = sensor.calibrationOffsetB || 0;
+            if (scaleField) scaleField.value = sensor.calibrationSlopeB || 1;
+        }
+    }
+    
+    // Load tertiary calibration (output C) from backend fields
+    if (sensor.calibrationExpressionC && sensor.calibrationExpressionC.length > 0) {
+        const expressionRadio = document.querySelector('input[name="multi-calibration-method-2"][value="expression"]');
+        if (expressionRadio) {
+            expressionRadio.checked = true;
+            showMultiCalibrationMethod(2, 'expression');
+            const expressionField = document.getElementById('multi-calibration-expression-2');
+            if (expressionField) expressionField.value = sensor.calibrationExpressionC;
+        }
+    } else if (sensor.calibrationOffsetC !== undefined || sensor.calibrationSlopeC !== undefined) {
+        const linearRadio = document.querySelector('input[name="multi-calibration-method-2"][value="linear"]');
+        if (linearRadio) {
+            linearRadio.checked = true;
+            showMultiCalibrationMethod(2, 'linear');
+            const offsetField = document.getElementById('multi-calibration-offset-2');
+            const scaleField = document.getElementById('multi-calibration-scale-2');
+            if (offsetField) offsetField.value = sensor.calibrationOffsetC || 0;
+            if (scaleField) scaleField.value = sensor.calibrationSlopeC || 1;
+        }
+    }
 };
 
 // Send terminal data to sensor config

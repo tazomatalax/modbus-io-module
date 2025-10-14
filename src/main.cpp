@@ -17,6 +17,8 @@ bool readEZOEC(uint8_t sensorIndex, float& conductivity);
 float parseSensorData(const char* rawData, const SensorConfig& sensor);
 float evaluateCalibrationExpression(float x, const SensorConfig& sensor);
 float applyCalibration(float rawValue, const SensorConfig& sensor);
+float applyCalibrationB(float rawValue, const SensorConfig& sensor);
+float applyCalibrationC(float rawValue, const SensorConfig& sensor);
 // Use ANALOG_INPUTS from sys_init.h instead of ADC_PINS
 #include "Ezo_i2c.h"
 
@@ -400,9 +402,9 @@ void processI2CQueue() {
                         
                         Serial.printf("[DEBUG] SHT30 parsed: Temp=%.2f°C, Hum=%.2f%%\n", temperature, humidity);
                         
-                        // Apply calibration to both values using new expression-capable function
+                        // Apply calibration to both values using new expression-capable functions
                         float calibratedTemp = applyCalibration(temperature, configuredSensors[op.sensorIndex]);
-                        float calibratedHum = (humidity * configuredSensors[op.sensorIndex].calibrationSlopeB) + configuredSensors[op.sensorIndex].calibrationOffsetB;
+                        float calibratedHum = applyCalibrationB(humidity, configuredSensors[op.sensorIndex]);
                         
                         configuredSensors[op.sensorIndex].calibratedValue = calibratedTemp;
                         configuredSensors[op.sensorIndex].calibratedValueB = calibratedHum;
@@ -449,8 +451,8 @@ void processI2CQueue() {
                         float secondaryValue = parseSensorData(response, tempConfig);
                         configuredSensors[op.sensorIndex].rawValueB = secondaryValue;
                         
-                        // Apply secondary calibration
-                        float calibratedSecondary = (secondaryValue * configuredSensors[op.sensorIndex].calibrationSlopeB) + configuredSensors[op.sensorIndex].calibrationOffsetB;
+                        // Apply secondary calibration using expression-capable function
+                        float calibratedSecondary = applyCalibrationB(secondaryValue, configuredSensors[op.sensorIndex]);
                         configuredSensors[op.sensorIndex].calibratedValueB = calibratedSecondary;
                         configuredSensors[op.sensorIndex].modbusValueB = (int)(calibratedSecondary * 100);
                         
@@ -2357,6 +2359,17 @@ void saveSensorConfig() {
         sensor["calibrationOffsetC"] = configuredSensors[i].calibrationOffsetC;
         sensor["calibrationSlopeC"] = configuredSensors[i].calibrationSlopeC;
         
+        // Include expression fields for all output channels
+        if (strlen(configuredSensors[i].calibrationExpression) > 0) {
+            sensor["calibrationExpression"] = configuredSensors[i].calibrationExpression;
+        }
+        if (strlen(configuredSensors[i].calibrationExpressionB) > 0) {
+            sensor["calibrationExpressionB"] = configuredSensors[i].calibrationExpressionB;
+        }
+        if (strlen(configuredSensors[i].calibrationExpressionC) > 0) {
+            sensor["calibrationExpressionC"] = configuredSensors[i].calibrationExpressionC;
+        }
+        
         // Data parsing configuration
         if (strlen(configuredSensors[i].parsingConfig) > 0) {
             StaticJsonDocument<256> parsingDoc;
@@ -2963,8 +2976,8 @@ float evaluateCalibrationExpression(float x, const SensorConfig& sensor) {
     String expr = String(sensor.calibrationExpression);
     
     if (expr.length() == 0) {
-        // No expression, use linear calibration
-        return sensor.calibrationOffset + (sensor.calibrationSlope * x);
+        // No expression, use linear calibration: y = slope*x + offset
+        return (sensor.calibrationSlope * x) + sensor.calibrationOffset;
     }
     
     // Replace 'x' with actual value in the expression
@@ -3059,28 +3072,119 @@ float evaluateCalibrationExpression(float x, const SensorConfig& sensor) {
         } else break;
     }
     
-    // Try to evaluate the final expression as a simple arithmetic operation
-    // This handles cases like "2.5 * 3.7 + 1.2" after substitutions
-    float result = expr.toFloat();
+    // Simple arithmetic expression evaluator
+    // Handle basic operations in proper order: *, /, +, -
+    String workingExpr = expr;
     
-    // If the expression contains operators, try basic evaluation
-    if (expr.indexOf("+") >= 0 || expr.indexOf("-") >= 0 || expr.indexOf("*") >= 0 || expr.indexOf("/") >= 0) {
-        // For complex expressions, use a simple evaluator
-        // This is a basic implementation - for production, consider a proper math parser
-        
-        // Handle multiplication and division first (order of operations)
-        String workingExpr = expr;
-        
-        // For now, if it's too complex, fall back to linear calibration
-        if (workingExpr.indexOf("(") >= 0 || workingExpr.indexOf(")") >= 0) {
-            return sensor.calibrationOffset + (sensor.calibrationSlope * x);
-        }
-        
-        // Try to parse simple "a * b + c" or "a + b" patterns
-        return expr.toFloat(); // This will work for simple numeric results
+    // Remove spaces for easier parsing
+    workingExpr.replace(" ", "");
+    
+    // If it's just a number after substitutions, return it
+    if (workingExpr.indexOf("+") < 0 && workingExpr.indexOf("-") < 0 && 
+        workingExpr.indexOf("*") < 0 && workingExpr.indexOf("/") < 0) {
+        return workingExpr.toFloat();
     }
     
-    return result;
+    // Simple expression parser for basic arithmetic
+    // This handles expressions like "3.5*1.8+32" or "24*0.75-5"
+    
+    // First handle multiplication and division (left to right)
+    while (workingExpr.indexOf("*") >= 0 || workingExpr.indexOf("/") >= 0) {
+        int multPos = workingExpr.indexOf("*");
+        int divPos = workingExpr.indexOf("/");
+        
+        // Find which operation comes first
+        int opPos = -1;
+        char op = ' ';
+        if (multPos >= 0 && divPos >= 0) {
+            if (multPos < divPos) {
+                opPos = multPos;
+                op = '*';
+            } else {
+                opPos = divPos;
+                op = '/';
+            }
+        } else if (multPos >= 0) {
+            opPos = multPos;
+            op = '*';
+        } else if (divPos >= 0) {
+            opPos = divPos;
+            op = '/';
+        }
+        
+        if (opPos < 0) break;
+        
+        // Find the numbers before and after the operator
+        int leftStart = opPos - 1;
+        while (leftStart > 0 && (isdigit(workingExpr.charAt(leftStart - 1)) || workingExpr.charAt(leftStart - 1) == '.')) {
+            leftStart--;
+        }
+        
+        int rightEnd = opPos + 2;
+        while (rightEnd < workingExpr.length() && (isdigit(workingExpr.charAt(rightEnd)) || workingExpr.charAt(rightEnd) == '.')) {
+            rightEnd++;
+        }
+        
+        float leftNum = workingExpr.substring(leftStart, opPos).toFloat();
+        float rightNum = workingExpr.substring(opPos + 1, rightEnd).toFloat();
+        float result = (op == '*') ? leftNum * rightNum : leftNum / rightNum;
+        
+        // Replace the operation with the result
+        workingExpr = workingExpr.substring(0, leftStart) + String(result, 6) + workingExpr.substring(rightEnd);
+    }
+    
+    // Then handle addition and subtraction (left to right)
+    while (workingExpr.indexOf("+") >= 0 || workingExpr.indexOf("-") >= 0) {
+        int addPos = workingExpr.indexOf("+");
+        int subPos = workingExpr.indexOf("-");
+        
+        // Find which operation comes first (but skip negative numbers at start)
+        int opPos = -1;
+        char op = ' ';
+        
+        // Skip initial negative sign
+        if (subPos == 0) {
+            subPos = workingExpr.indexOf("-", 1);
+        }
+        
+        if (addPos >= 0 && subPos >= 0) {
+            if (addPos < subPos) {
+                opPos = addPos;
+                op = '+';
+            } else {
+                opPos = subPos;
+                op = '-';
+            }
+        } else if (addPos >= 0) {
+            opPos = addPos;
+            op = '+';
+        } else if (subPos >= 0) {
+            opPos = subPos;
+            op = '-';
+        }
+        
+        if (opPos < 0) break;
+        
+        // Find the numbers before and after the operator
+        int leftStart = opPos - 1;
+        while (leftStart > 0 && (isdigit(workingExpr.charAt(leftStart - 1)) || workingExpr.charAt(leftStart - 1) == '.')) {
+            leftStart--;
+        }
+        
+        int rightEnd = opPos + 2;
+        while (rightEnd < workingExpr.length() && (isdigit(workingExpr.charAt(rightEnd)) || workingExpr.charAt(rightEnd) == '.')) {
+            rightEnd++;
+        }
+        
+        float leftNum = workingExpr.substring(leftStart, opPos).toFloat();
+        float rightNum = workingExpr.substring(opPos + 1, rightEnd).toFloat();
+        float result = (op == '+') ? leftNum + rightNum : leftNum - rightNum;
+        
+        // Replace the operation with the result
+        workingExpr = workingExpr.substring(0, leftStart) + String(result, 6) + workingExpr.substring(rightEnd);
+    }
+    
+    return workingExpr.toFloat();
 }
 
 // Apply calibration to raw sensor value
@@ -3090,8 +3194,36 @@ float applyCalibration(float rawValue, const SensorConfig& sensor) {
         return evaluateCalibrationExpression(rawValue, sensor);
     }
     
-    // Default linear calibration: y = mx + b (where m=slope, b=offset)
-    return sensor.calibrationOffset + (sensor.calibrationSlope * rawValue);
+    // Default linear calibration: y = slope*x + offset
+    return (sensor.calibrationSlope * rawValue) + sensor.calibrationOffset;
+}
+
+// Apply calibration to secondary sensor value (rawValueB)
+float applyCalibrationB(float rawValue, const SensorConfig& sensor) {
+    // Check if mathematical expression calibration is configured for channel B
+    if (strlen(sensor.calibrationExpressionB) > 0) {
+        // Create a temporary sensor config for expression evaluation
+        SensorConfig tempSensor = sensor;
+        strncpy(tempSensor.calibrationExpression, sensor.calibrationExpressionB, sizeof(tempSensor.calibrationExpression));
+        return evaluateCalibrationExpression(rawValue, tempSensor);
+    }
+    
+    // Default linear calibration for channel B: y = slope*x + offset
+    return (sensor.calibrationSlopeB * rawValue) + sensor.calibrationOffsetB;
+}
+
+// Apply calibration to tertiary sensor value (rawValueC)
+float applyCalibrationC(float rawValue, const SensorConfig& sensor) {
+    // Check if mathematical expression calibration is configured for channel C
+    if (strlen(sensor.calibrationExpressionC) > 0) {
+        // Create a temporary sensor config for expression evaluation
+        SensorConfig tempSensor = sensor;
+        strncpy(tempSensor.calibrationExpression, sensor.calibrationExpressionC, sizeof(tempSensor.calibrationExpression));
+        return evaluateCalibrationExpression(rawValue, tempSensor);
+    }
+    
+    // Default linear calibration for channel C: y = slope*x + offset
+    return (sensor.calibrationSlopeC * rawValue) + sensor.calibrationOffsetC;
 }
 
 // Data parsing function - converts raw sensor data based on parsing configuration
@@ -3710,6 +3842,17 @@ void handlePOSTSensorConfig(WiFiClient& client, String body) {
         configuredSensors[numConfiguredSensors].calibrationSlopeB = sensor["calibrationSlopeB"] | 1.0;
         configuredSensors[numConfiguredSensors].calibrationOffsetC = sensor["calibrationOffsetC"] | 0.0;
         configuredSensors[numConfiguredSensors].calibrationSlopeC = sensor["calibrationSlopeC"] | 1.0;
+        
+        // Multi-output expression calibration
+        const char* expressionB = sensor["calibrationExpressionB"] | "";
+        strncpy(configuredSensors[numConfiguredSensors].calibrationExpressionB, expressionB, 
+                sizeof(configuredSensors[numConfiguredSensors].calibrationExpressionB) - 1);
+        configuredSensors[numConfiguredSensors].calibrationExpressionB[sizeof(configuredSensors[numConfiguredSensors].calibrationExpressionB) - 1] = '\0';
+        
+        const char* expressionC = sensor["calibrationExpressionC"] | "";
+        strncpy(configuredSensors[numConfiguredSensors].calibrationExpressionC, expressionC, 
+                sizeof(configuredSensors[numConfiguredSensors].calibrationExpressionC) - 1);
+        configuredSensors[numConfiguredSensors].calibrationExpressionC[sizeof(configuredSensors[numConfiguredSensors].calibrationExpressionC) - 1] = '\0';
         
         // Data parsing configuration
         if (sensor.containsKey("dataParsing") && sensor["dataParsing"].is<JsonObject>()) {
