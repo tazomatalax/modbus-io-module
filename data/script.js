@@ -235,9 +235,22 @@ window.showAddSensorModal = function showAddSensorModal() {
     document.getElementById('sensor-form').reset();
     document.getElementById('sensor-enabled').checked = true;
     
+    // Clear the user-set flag for register field to allow auto-suggestion
+    const modbusRegField = document.getElementById('sensor-modbus-register');
+    if (modbusRegField) {
+        modbusRegField.removeAttribute('data-user-set');
+        modbusRegField.value = ''; // Clear any previous value
+    }
+    
     // Reset multi-value option
     document.getElementById('sensor-multi-value').checked = false;
     toggleMultiValueConfig();
+    
+    // Ensure single register field is visible when opening new sensor modal
+    const singleRegisterGroup = document.getElementById('sensor-modbus-register')?.parentElement;
+    if (singleRegisterGroup) {
+        singleRegisterGroup.style.display = 'block';
+    }
 
     // Setup sensor calibration method listeners
     setupSensorCalibrationMethodListeners();
@@ -566,9 +579,9 @@ window.updateSensorFormFields = function updateSensorFormFields() {
         dataParsingSection.style.display = 'none';
     }
     
-    // Set default modbus register if not already set
+    // Set default modbus register only if field is empty AND not manually set
     const modbusRegField = document.getElementById('sensor-modbus-register');
-    if (!modbusRegField.value) {
+    if (!modbusRegField.value && !modbusRegField.hasAttribute('data-user-set')) {
         const nextRegister = getNextAvailableRegister();
         modbusRegField.value = nextRegister;
     }
@@ -755,7 +768,24 @@ window.autoConfigureSensorType = function autoConfigureSensorType() {
     };
     
     const config = sensorConfigs[sensorType];
-    if (!config) return; // No auto-config for this sensor type
+    if (!config) {
+        // No auto-config for this sensor type (e.g., GENERIC_* sensors)
+        // Ensure single register field is visible and multi-value is disabled
+        setTimeout(() => {
+            const multiValueCheckbox = document.getElementById('sensor-multi-value');
+            if (multiValueCheckbox) {
+                multiValueCheckbox.checked = false;
+                toggleMultiValueConfig();
+            }
+            
+            // Always show single register field for generic sensors
+            const singleRegisterGroup = document.getElementById('sensor-modbus-register')?.parentElement;
+            if (singleRegisterGroup) {
+                singleRegisterGroup.style.display = 'block';
+            }
+        }, 100);
+        return;
+    }
     
     // Apply protocol if different
     if (config.protocol !== protocol) {
@@ -826,7 +856,7 @@ window.autoConfigureSensorType = function autoConfigureSensorType() {
             }
         }, 100);
     } else {
-        // For single-value sensors, ensure multi-value is disabled
+        // For single-value sensors, ensure multi-value is disabled and single register is visible
         setTimeout(() => {
             const multiValueCheckbox = document.getElementById('sensor-multi-value');
             if (multiValueCheckbox) {
@@ -834,7 +864,7 @@ window.autoConfigureSensorType = function autoConfigureSensorType() {
                 toggleMultiValueConfig();
             }
             
-            // Show single register field
+            // Ensure single register field is visible for single-value sensors
             const singleRegisterGroup = document.getElementById('sensor-modbus-register')?.parentElement;
             if (singleRegisterGroup) {
                 singleRegisterGroup.style.display = 'block';
@@ -853,14 +883,14 @@ window.populateMultiValueFields = function populateMultiValueFields(values) {
     container.innerHTML = '';
     
     values.forEach((value, index) => {
-        // Get base register from single register field or calculate next available
+        // Get base register from single register field - only auto-assign if field is empty
         let baseRegister = parseInt(document.getElementById('sensor-modbus-register')?.value);
-        if (!baseRegister || baseRegister === 0) {
+        const regField = document.getElementById('sensor-modbus-register');
+        if (isNaN(baseRegister) && regField && !regField.hasAttribute('data-user-set')) {
             baseRegister = getNextAvailableRegister();
             // Update the single register field for reference
-            const singleRegField = document.getElementById('sensor-modbus-register');
-            if (singleRegField) {
-                singleRegField.value = baseRegister;
+            if (regField) {
+                regField.value = baseRegister;
             }
         }
         
@@ -1026,6 +1056,13 @@ window.editSensor = function editSensor(index) {
     }
     document.getElementById('sensor-i2c-address').value = sensor.i2cAddress ? `0x${sensor.i2cAddress.toString(16).toUpperCase().padStart(2, '0')}` : '';
     document.getElementById('sensor-modbus-register').value = sensor.modbusRegister || '';
+    
+    // Mark register field as user-set since it's pre-filled with existing data
+    const modbusRegField = document.getElementById('sensor-modbus-register');
+    if (modbusRegField) {
+        modbusRegField.setAttribute('data-user-set', 'true');
+    }
+    
     document.getElementById('sensor-enabled').checked = sensor.enabled;
 
     // Setup sensor calibration method listeners
@@ -1320,12 +1357,44 @@ window.saveSensor = function saveSensor() {
         }
     }
     
-    // Check for duplicate Modbus registers (excluding the sensor being edited)
-    const duplicateModbus = sensorConfigData.some((sensor, index) => 
-        index !== editingSensorIndex && sensor.modbusRegister === modbusRegister
-    );
-    if (duplicateModbus) {
-        showToast('Modbus register already in use by another sensor', 'error');
+    // Check for modbus register conflicts (including multi-output sensors)
+    const conflictingSensor = sensorConfigData.find((sensor, index) => {
+        if (index === editingSensorIndex) return false; // Skip self when editing
+        
+        // Check if the new register conflicts with existing sensor's primary register
+        if (sensor.modbusRegister === modbusRegister) {
+            return true;
+        }
+        
+        // Check if the new register conflicts with multi-output sensor's secondary registers
+        if (sensor.multiValues && Array.isArray(sensor.multiValues)) {
+            for (const value of sensor.multiValues) {
+                if (value.register === modbusRegister) {
+                    return true;
+                }
+            }
+        }
+        
+        // Check if current sensor's multi-output registers conflict with existing sensor
+        const isMultiValue = document.getElementById('sensor-multi-value').checked;
+        if (isMultiValue) {
+            // Get the actual number of multi-value fields configured
+            const multiValueContainer = document.getElementById('multi-value-fields');
+            const outputCount = multiValueContainer ? multiValueContainer.children.length : 1;
+            for (let i = 0; i < outputCount; i++) {
+                const registerValue = modbusRegister + i;
+                if (sensor.modbusRegister === registerValue || 
+                    (sensor.multiValues && sensor.multiValues.some(mv => mv.register === registerValue))) {
+                    return true;
+                }
+            }
+        }
+        
+        return false;
+    });
+    
+    if (conflictingSensor) {
+        showToast(`Modbus register conflict with sensor "${conflictingSensor.name}"`, 'error');
         return;
     }
     
@@ -3239,7 +3308,9 @@ window.toggleMultiValueConfig = function toggleMultiValueConfig() {
 window.addMultiValueField = function addMultiValueField() {
     const container = document.getElementById('multi-value-fields');
     const index = container.children.length;
-    const baseRegister = parseInt(document.getElementById('sensor-modbus-register').value) || getNextAvailableRegister();
+    const regField = document.getElementById('sensor-modbus-register');
+    const baseRegister = !isNaN(parseInt(regField.value)) ? parseInt(regField.value) : 
+                        (!regField.hasAttribute('data-user-set') ? getNextAvailableRegister() : 0);
     
     const item = document.createElement('div');
     item.className = 'multi-value-item';
@@ -3370,4 +3441,35 @@ window.sendDataToConfig = function sendDataToConfig() {
         
         showToast('Data imported from terminal - configure parsing below', 'success');
     }, 100);
+}
+
+// Add event listener to track manual register field changes
+document.addEventListener('DOMContentLoaded', function() {
+    const modbusRegField = document.getElementById('sensor-modbus-register');
+    if (modbusRegField) {
+        // Mark field as user-set when user manually types or changes value
+        modbusRegField.addEventListener('input', function() {
+            this.setAttribute('data-user-set', 'true');
+        });
+        
+        // Also mark as user-set when field gains focus and user interacts
+        modbusRegField.addEventListener('focus', function() {
+            this.setAttribute('data-user-set', 'true');
+        });
+    }
+});
+
+// Clear user-set flag when opening new sensor modal
+const originalShowSensorModal = window.showSensorModal;
+if (typeof originalShowSensorModal === 'function') {
+    window.showSensorModal = function() {
+        // Call original function
+        originalShowSensorModal.apply(this, arguments);
+        
+        // Clear the user-set flag for new sensors
+        const modbusRegField = document.getElementById('sensor-modbus-register');
+        if (modbusRegField && !arguments[0]) { // Only for new sensors (no index passed)
+            modbusRegField.removeAttribute('data-user-set');
+        }
+    };
 };
