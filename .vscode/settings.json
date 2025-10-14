@@ -14,7 +14,8 @@
         "type_traits": "cpp",
         "utility": "cpp",
         "variant": "cpp",
-        "compare": "cpp"
+        "compare": "cpp",
+        "cmath": "cpp"
     },
     "files.encoding": "utf8",
     "files.autoGuessEncoding": false,

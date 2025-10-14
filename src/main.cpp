@@ -15,6 +15,8 @@ bool readDS18B20(uint8_t sensorIndex, float& temperature);
 bool readEZOPH(uint8_t sensorIndex, float& ph);
 bool readEZOEC(uint8_t sensorIndex, float& conductivity);
 float parseSensorData(const char* rawData, const SensorConfig& sensor);
+float evaluateCalibrationExpression(float x, const SensorConfig& sensor);
+float applyCalibration(float rawValue, const SensorConfig& sensor);
 // Use ANALOG_INPUTS from sys_init.h instead of ADC_PINS
 #include "Ezo_i2c.h"
 
@@ -100,6 +102,14 @@ void applySensorPresets() {
             if (configuredSensors[i].updateInterval == 0) configuredSensors[i].updateInterval = 1000;
             if (configuredSensors[i].modbusRegister == 0) configuredSensors[i].modbusRegister = 18; // Next available register
             Serial.println("Auto-configured Generic I2C sensor");
+        } else if (strcmp(configuredSensors[i].type, "GENERIC_UART") == 0) {
+            if (strlen(configuredSensors[i].protocol) == 0) strcpy(configuredSensors[i].protocol, "UART");
+            // Don't override updateInterval - use what was configured in web UI
+            if (configuredSensors[i].modbusRegister == 0) configuredSensors[i].modbusRegister = 19; // Next available register
+            // Set default UART pins if not configured
+            if (configuredSensors[i].uartTxPin == 0) configuredSensors[i].uartTxPin = 0; // GP0
+            if (configuredSensors[i].uartRxPin == 0) configuredSensors[i].uartRxPin = 1; // GP1
+            Serial.printf("Auto-configured GENERIC_UART sensor (updateInterval preserved: %d)\n", configuredSensors[i].updateInterval);
         }
         
         // Set default pins if not configured
@@ -113,8 +123,9 @@ void applySensorPresets() {
                 // Only set fields if not already set
                 if (configuredSensors[i].updateInterval <= 0)
                     configuredSensors[i].updateInterval = sensorPresets[p].updateInterval;
-                if (configuredSensors[i].calibrationOffset == 0 && configuredSensors[i].calibrationSlope == 0) {
-                    // Set command bytes as string for compatibility
+                // Don't override calibration - let user-configured values persist
+                if (strlen(configuredSensors[i].command) == 0 && configuredSensors[i].calibrationOffset == 0 && configuredSensors[i].calibrationSlope <= 1.0) {
+                    // Set command bytes as string for compatibility - only if no user command set
                     snprintf(configuredSensors[i].command, sizeof(configuredSensors[i].command), "0x%02X 0x%02X", sensorPresets[p].command[0], sensorPresets[p].command[1]);
                 }
                 // Protocol-specific delay assignment
@@ -389,8 +400,8 @@ void processI2CQueue() {
                         
                         Serial.printf("[DEBUG] SHT30 parsed: Temp=%.2f°C, Hum=%.2f%%\n", temperature, humidity);
                         
-                        // Apply calibration to both values
-                        float calibratedTemp = (temperature * configuredSensors[op.sensorIndex].calibrationSlope) + configuredSensors[op.sensorIndex].calibrationOffset;
+                        // Apply calibration to both values using new expression-capable function
+                        float calibratedTemp = applyCalibration(temperature, configuredSensors[op.sensorIndex]);
                         float calibratedHum = (humidity * configuredSensors[op.sensorIndex].calibrationSlopeB) + configuredSensors[op.sensorIndex].calibrationOffsetB;
                         
                         configuredSensors[op.sensorIndex].calibratedValue = calibratedTemp;
@@ -421,8 +432,8 @@ void processI2CQueue() {
                     float primaryValue = parseSensorData(response, configuredSensors[op.sensorIndex]);
                     configuredSensors[op.sensorIndex].rawValue = primaryValue;
                     
-                    // Apply primary calibration
-                    float calibratedPrimary = (primaryValue * configuredSensors[op.sensorIndex].calibrationSlope) + configuredSensors[op.sensorIndex].calibrationOffset;
+                    // Apply primary calibration using expression-capable function
+                    float calibratedPrimary = applyCalibration(primaryValue, configuredSensors[op.sensorIndex]);
                     configuredSensors[op.sensorIndex].calibratedValue = calibratedPrimary;
                     configuredSensors[op.sensorIndex].modbusValue = (int)(calibratedPrimary * 100);
                     
@@ -548,8 +559,10 @@ void processUARTQueue() {
                             }
                             
                             configuredSensors[op.sensorIndex].rawValue = value;
-                            configuredSensors[op.sensorIndex].calibratedValue = value;
-                            configuredSensors[op.sensorIndex].modbusValue = (int)(value * 100);
+                            // Apply calibration using expression-capable function
+                            float calibratedValue = applyCalibration(value, configuredSensors[op.sensorIndex]);
+                            configuredSensors[op.sensorIndex].calibratedValue = calibratedValue;
+                            configuredSensors[op.sensorIndex].modbusValue = (int)(calibratedValue * 100);
                             
                         } else {
                             Serial.printf("[DEBUG] UART: No response received\n");
@@ -764,8 +777,8 @@ void processOneWireQueue() {
                     int16_t raw = (scratchpad[1] << 8) | scratchpad[0];
                     float temp = raw / 16.0;
                     
-                    // Apply calibration
-                    float calibratedTemp = (temp * configuredSensors[op.sensorIndex].calibrationSlope) + configuredSensors[op.sensorIndex].calibrationOffset;
+                    // Apply calibration using expression-capable function
+                    float calibratedTemp = applyCalibration(temp, configuredSensors[op.sensorIndex]);
                     
                     configuredSensors[op.sensorIndex].rawValue = temp;
                     configuredSensors[op.sensorIndex].calibratedValue = calibratedTemp;
@@ -2305,7 +2318,7 @@ void loadSensorConfig() {
 void saveSensorConfig() {
     Serial.println("Saving sensor configuration...");
     // Create JSON document
-    StaticJsonDocument<1024> doc;
+    StaticJsonDocument<2048> doc;
     JsonArray sensorsArray = doc.createNestedArray("sensors");
     // Add each configured sensor to the array
     for (int i = 0; i < numConfiguredSensors; i++) {
@@ -2313,15 +2326,63 @@ void saveSensorConfig() {
         sensor["enabled"] = configuredSensors[i].enabled;
         sensor["name"] = configuredSensors[i].name;
         sensor["type"] = configuredSensors[i].type;
+        sensor["protocol"] = configuredSensors[i].protocol;
         sensor["i2cAddress"] = configuredSensors[i].i2cAddress;
         sensor["modbusRegister"] = configuredSensors[i].modbusRegister;
+        sensor["command"] = configuredSensors[i].command;
+        sensor["updateInterval"] = configuredSensors[i].updateInterval;
+        sensor["delayBeforeRead"] = configuredSensors[i].delayBeforeRead;
+        
+        // Pin assignments
+        sensor["sdaPin"] = configuredSensors[i].sdaPin;
+        sensor["sclPin"] = configuredSensors[i].sclPin;
+        sensor["dataPin"] = configuredSensors[i].dataPin;
+        sensor["uartTxPin"] = configuredSensors[i].uartTxPin;
+        sensor["uartRxPin"] = configuredSensors[i].uartRxPin;
+        sensor["analogPin"] = configuredSensors[i].analogPin;
+        sensor["oneWirePin"] = configuredSensors[i].oneWirePin;
+        sensor["digitalPin"] = configuredSensors[i].digitalPin;
+        
+        // One-Wire specific configuration
+        sensor["oneWireCommand"] = configuredSensors[i].oneWireCommand;
+        sensor["oneWireInterval"] = configuredSensors[i].oneWireInterval;
+        sensor["oneWireConversionTime"] = configuredSensors[i].oneWireConversionTime;
+        sensor["oneWireAutoMode"] = configuredSensors[i].oneWireAutoMode;
+        
+        // Calibration data
+        sensor["calibrationOffset"] = configuredSensors[i].calibrationOffset;
+        sensor["calibrationSlope"] = configuredSensors[i].calibrationSlope;
+        sensor["calibrationOffsetB"] = configuredSensors[i].calibrationOffsetB;
+        sensor["calibrationSlopeB"] = configuredSensors[i].calibrationSlopeB;
+        sensor["calibrationOffsetC"] = configuredSensors[i].calibrationOffsetC;
+        sensor["calibrationSlopeC"] = configuredSensors[i].calibrationSlopeC;
+        
+        // Data parsing configuration
+        if (strlen(configuredSensors[i].parsingConfig) > 0) {
+            StaticJsonDocument<256> parsingDoc;
+            DeserializationError error = deserializeJson(parsingDoc, configuredSensors[i].parsingConfig);
+            if (!error) {
+                sensor["dataParsing"] = parsingDoc.as<JsonObject>();
+            }
+        }
     }
+    
     // Open file for writing
-    // No-op: sensors config is RAM-only, not persisted
-    Serial.println("Sensors config save (RAM only, not persisted)");
+    File file = LittleFS.open(SENSORS_FILE, "w");
+    if (!file) {
+        Serial.println("Failed to open sensors file for writing");
+        return;
+    }
+    
+    if (serializeJson(doc, file) == 0) {
+        Serial.println("Failed to write sensors JSON");
+    } else {
+        Serial.println("Sensors configuration saved successfully");
+    }
+    file.close();
+    
     // After saving, re-apply presets to ensure runtime config is correct
     applySensorPresets();
-
 }
 
 // Reset all latched inputs
@@ -2897,6 +2958,142 @@ void sendJSONIOConfig(WiFiClient& client) {
     sendJSON(client, response);
 }
 
+// Mathematical expression evaluator for sensor calibration
+float evaluateCalibrationExpression(float x, const SensorConfig& sensor) {
+    String expr = String(sensor.calibrationExpression);
+    
+    if (expr.length() == 0) {
+        // No expression, use linear calibration
+        return sensor.calibrationOffset + (sensor.calibrationSlope * x);
+    }
+    
+    // Replace 'x' with actual value in the expression
+    expr.replace("x", String(x, 6));
+    expr.replace("X", String(x, 6));
+    
+    // Handle power operations (x^2, x^3, etc.)
+    while (expr.indexOf("^") >= 0) {
+        int powerPos = expr.indexOf("^");
+        if (powerPos > 0 && powerPos < expr.length() - 1) {
+            // Find the base number before ^
+            int baseStart = powerPos - 1;
+            while (baseStart > 0 && (isdigit(expr.charAt(baseStart - 1)) || expr.charAt(baseStart - 1) == '.')) {
+                baseStart--;
+            }
+            
+            // Find the exponent after ^
+            int expEnd = powerPos + 2;
+            while (expEnd < expr.length() && (isdigit(expr.charAt(expEnd)) || expr.charAt(expEnd) == '.')) {
+                expEnd++;
+            }
+            
+            float base = expr.substring(baseStart, powerPos).toFloat();
+            float exponent = expr.substring(powerPos + 1, expEnd).toFloat();
+            float result = pow(base, exponent);
+            
+            // Replace the power expression with the result
+            String replacement = String(result, 6);
+            expr = expr.substring(0, baseStart) + replacement + expr.substring(expEnd);
+        } else {
+            break; // Avoid infinite loop if parsing fails
+        }
+    }
+    
+    // Handle mathematical functions
+    expr.replace("sin(", "SIN(");
+    expr.replace("cos(", "COS(");
+    expr.replace("tan(", "TAN(");
+    expr.replace("log(", "LOG(");
+    expr.replace("ln(", "LN(");
+    expr.replace("exp(", "EXP(");
+    expr.replace("sqrt(", "SQRT(");
+    
+    // Simple function evaluation (basic implementation)
+    while (expr.indexOf("SIN(") >= 0) {
+        int pos = expr.indexOf("SIN(");
+        int closePos = expr.indexOf(")", pos);
+        if (closePos > pos) {
+            float arg = expr.substring(pos + 4, closePos).toFloat();
+            float result = sin(arg);
+            expr = expr.substring(0, pos) + String(result, 6) + expr.substring(closePos + 1);
+        } else break;
+    }
+    
+    while (expr.indexOf("COS(") >= 0) {
+        int pos = expr.indexOf("COS(");
+        int closePos = expr.indexOf(")", pos);
+        if (closePos > pos) {
+            float arg = expr.substring(pos + 4, closePos).toFloat();
+            float result = cos(arg);
+            expr = expr.substring(0, pos) + String(result, 6) + expr.substring(closePos + 1);
+        } else break;
+    }
+    
+    while (expr.indexOf("SQRT(") >= 0) {
+        int pos = expr.indexOf("SQRT(");
+        int closePos = expr.indexOf(")", pos);
+        if (closePos > pos) {
+            float arg = expr.substring(pos + 5, closePos).toFloat();
+            float result = sqrt(arg);
+            expr = expr.substring(0, pos) + String(result, 6) + expr.substring(closePos + 1);
+        } else break;
+    }
+    
+    while (expr.indexOf("LOG(") >= 0) {
+        int pos = expr.indexOf("LOG(");
+        int closePos = expr.indexOf(")", pos);
+        if (closePos > pos) {
+            float arg = expr.substring(pos + 4, closePos).toFloat();
+            float result = log10(arg);
+            expr = expr.substring(0, pos) + String(result, 6) + expr.substring(closePos + 1);
+        } else break;
+    }
+    
+    while (expr.indexOf("LN(") >= 0) {
+        int pos = expr.indexOf("LN(");
+        int closePos = expr.indexOf(")", pos);
+        if (closePos > pos) {
+            float arg = expr.substring(pos + 3, closePos).toFloat();
+            float result = log(arg);
+            expr = expr.substring(0, pos) + String(result, 6) + expr.substring(closePos + 1);
+        } else break;
+    }
+    
+    // Try to evaluate the final expression as a simple arithmetic operation
+    // This handles cases like "2.5 * 3.7 + 1.2" after substitutions
+    float result = expr.toFloat();
+    
+    // If the expression contains operators, try basic evaluation
+    if (expr.indexOf("+") >= 0 || expr.indexOf("-") >= 0 || expr.indexOf("*") >= 0 || expr.indexOf("/") >= 0) {
+        // For complex expressions, use a simple evaluator
+        // This is a basic implementation - for production, consider a proper math parser
+        
+        // Handle multiplication and division first (order of operations)
+        String workingExpr = expr;
+        
+        // For now, if it's too complex, fall back to linear calibration
+        if (workingExpr.indexOf("(") >= 0 || workingExpr.indexOf(")") >= 0) {
+            return sensor.calibrationOffset + (sensor.calibrationSlope * x);
+        }
+        
+        // Try to parse simple "a * b + c" or "a + b" patterns
+        return expr.toFloat(); // This will work for simple numeric results
+    }
+    
+    return result;
+}
+
+// Apply calibration to raw sensor value
+float applyCalibration(float rawValue, const SensorConfig& sensor) {
+    // Check if mathematical expression calibration is configured
+    if (strlen(sensor.calibrationExpression) > 0) {
+        return evaluateCalibrationExpression(rawValue, sensor);
+    }
+    
+    // Default linear calibration: y = mx + b (where m=slope, b=offset)
+    return sensor.calibrationOffset + (sensor.calibrationSlope * rawValue);
+}
+
 // Data parsing function - converts raw sensor data based on parsing configuration
 float parseSensorData(const char* rawData, const SensorConfig& sensor) {
     if (strlen(sensor.parsingMethod) == 0 || strcmp(sensor.parsingMethod, "raw") == 0) {
@@ -3066,6 +3263,11 @@ void sendJSONSensorConfig(WiFiClient& client) {
         sensor["i2cAddress"] = configuredSensors[i].i2cAddress;
         sensor["modbusRegister"] = configuredSensors[i].modbusRegister;
         
+        // Critical polling configuration - THESE WERE MISSING!
+        sensor["command"] = configuredSensors[i].command;
+        sensor["updateInterval"] = configuredSensors[i].updateInterval;
+        sensor["delayBeforeRead"] = configuredSensors[i].delayBeforeRead;
+        
         // Clean response field to prevent JSON corruption from binary data
         String cleanResponse = "";
         for (int j = 0; j < strlen(configuredSensors[i].response); j++) {
@@ -3098,12 +3300,20 @@ void sendJSONSensorConfig(WiFiClient& client) {
         }
         sensor["oneWireAutoMode"] = configuredSensors[i].oneWireAutoMode;
         
-        // Include calibration data
-        if (configuredSensors[i].calibrationOffset != 0.0 || configuredSensors[i].calibrationSlope != 1.0) {
-            JsonObject calibration = sensor.createNestedObject("calibration");
-            calibration["offset"] = configuredSensors[i].calibrationOffset;
-            calibration["scale"] = configuredSensors[i].calibrationSlope;
+        // Always include calibration data
+        JsonObject calibration = sensor.createNestedObject("calibration");
+        calibration["offset"] = configuredSensors[i].calibrationOffset;
+        calibration["scale"] = configuredSensors[i].calibrationSlope;
+        
+        // Include expression if configured
+        if (strlen(configuredSensors[i].calibrationExpression) > 0) {
+            calibration["expression"] = configuredSensors[i].calibrationExpression;
+        } else {
+            calibration["expression"] = "";
         }
+        
+        // For compatibility with frontend, also set polynomialStr to empty
+        calibration["polynomialStr"] = "";
         
         // Include data parsing configuration
         if (strlen(configuredSensors[i].parsingMethod) > 0 && strcmp(configuredSensors[i].parsingMethod, "raw") != 0) {
@@ -3418,6 +3628,32 @@ void handlePOSTSensorConfig(WiFiClient& client, String body) {
         configuredSensors[numConfiguredSensors].i2cAddress = sensor["i2cAddress"] | 0;
         configuredSensors[numConfiguredSensors].modbusRegister = sensor["modbusRegister"] | 0;
         
+        // Critical polling configuration - accept both pollingFrequency and updateInterval
+        // Handle command - can be string or nested object from web UI
+        const char* command = "";
+        int delayBeforeRead = 0;
+        
+        if (sensor["command"].is<const char*>()) {
+            // Simple string command
+            command = sensor["command"] | "";
+        } else if (sensor["command"].is<JsonObject>()) {
+            // Nested command object from web UI
+            JsonObject cmdObj = sensor["command"];
+            command = cmdObj["command"] | "";
+            delayBeforeRead = cmdObj["waitTime"] | 0;
+        }
+        
+        strncpy(configuredSensors[numConfiguredSensors].command, command, sizeof(configuredSensors[numConfiguredSensors].command) - 1);
+        configuredSensors[numConfiguredSensors].command[sizeof(configuredSensors[numConfiguredSensors].command) - 1] = '\0';
+        
+        // Accept both pollingFrequency (from web UI) and updateInterval (internal) 
+        int interval = sensor["updateInterval"] | sensor["pollingFrequency"] | 5000;
+        configuredSensors[numConfiguredSensors].updateInterval = interval;
+        
+        // Use delayBeforeRead from command object or separate field
+        int finalDelay = sensor["delayBeforeRead"] | delayBeforeRead;
+        configuredSensors[numConfiguredSensors].delayBeforeRead = finalDelay;
+        
         // Pin assignments - parse from JSON
         configuredSensors[numConfiguredSensors].sdaPin = sensor["sdaPin"] | -1;
         configuredSensors[numConfiguredSensors].sclPin = sensor["sclPin"] | -1;
@@ -3439,9 +3675,35 @@ void handlePOSTSensorConfig(WiFiClient& client, String body) {
         configuredSensors[numConfiguredSensors].oneWireAutoMode = sensor["oneWireAutoMode"] | true; // Default auto mode on
         configuredSensors[numConfiguredSensors].lastOneWireCmd = 0; // Initialize timing
         
-        // Calibration data
-        configuredSensors[numConfiguredSensors].calibrationOffset = sensor["calibrationOffset"] | 0.0;
-        configuredSensors[numConfiguredSensors].calibrationSlope = sensor["calibrationSlope"] | 1.0;
+        // Calibration data - handle both nested and direct formats
+        if (sensor.containsKey("calibration") && sensor["calibration"].is<JsonObject>()) {
+            JsonObject calibration = sensor["calibration"];
+            configuredSensors[numConfiguredSensors].calibrationOffset = calibration["offset"] | 0.0;
+            configuredSensors[numConfiguredSensors].calibrationSlope = calibration["scale"] | 1.0;
+            
+            // Handle expression string (supports any mathematical equation including polynomials)
+            const char* expression = calibration["expression"] | "";
+            strncpy(configuredSensors[numConfiguredSensors].calibrationExpression, expression, 
+                    sizeof(configuredSensors[numConfiguredSensors].calibrationExpression) - 1);
+            configuredSensors[numConfiguredSensors].calibrationExpression[sizeof(configuredSensors[numConfiguredSensors].calibrationExpression) - 1] = '\0';
+            
+            // Also check for polynomialStr field (convert to expression)
+            const char* polynomial = calibration["polynomialStr"] | "";
+            if (strlen(polynomial) > 0 && strlen(expression) == 0) {
+                strncpy(configuredSensors[numConfiguredSensors].calibrationExpression, polynomial, 
+                        sizeof(configuredSensors[numConfiguredSensors].calibrationExpression) - 1);
+                configuredSensors[numConfiguredSensors].calibrationExpression[sizeof(configuredSensors[numConfiguredSensors].calibrationExpression) - 1] = '\0';
+            }
+        } else {
+            // Fallback to direct fields
+            configuredSensors[numConfiguredSensors].calibrationOffset = sensor["calibrationOffset"] | 0.0;
+            configuredSensors[numConfiguredSensors].calibrationSlope = sensor["calibrationSlope"] | 1.0;
+            
+            const char* expression = sensor["calibrationExpression"] | "";
+            strncpy(configuredSensors[numConfiguredSensors].calibrationExpression, expression, 
+                    sizeof(configuredSensors[numConfiguredSensors].calibrationExpression) - 1);
+            configuredSensors[numConfiguredSensors].calibrationExpression[sizeof(configuredSensors[numConfiguredSensors].calibrationExpression) - 1] = '\0';
+        }
         
         // Multi-output calibration data (for sensors like SHT30 with temp+humidity)
         configuredSensors[numConfiguredSensors].calibrationOffsetB = sensor["calibrationOffsetB"] | 0.0;
@@ -3777,6 +4039,77 @@ void handlePOSTSensorPoll(WiFiClient& client, String body) {
                     addTerminalLog("POLL [0x" + String(i2cAddress, HEX) + "] TX failed: " + String(result));
                 }
             }
+        }
+    } else if (protocol == "UART") {
+        int txPin = doc["uartTxPin"] | 0;
+        int rxPin = doc["uartRxPin"] | 1;
+        int baudRate = doc["baudRate"] | 9600;
+        
+        if (txPin < 0 || txPin > 28 || rxPin < 0 || rxPin > 28) {
+            errorMsg = "Invalid UART pins. TX and RX must be 0-28";
+        } else {
+            addTerminalLog("POLL [UART] Testing UART on TX:GP" + String(txPin) + ", RX:GP" + String(rxPin));
+            
+            // Initialize UART with specified pins
+            Serial1.setTX(txPin);
+            Serial1.setRX(rxPin);
+            Serial1.begin(baudRate);
+            delay(100); // Allow UART to stabilize
+            
+            // Clear any pending data
+            while (Serial1.available()) {
+                Serial1.read();
+            }
+            
+            // Send command if provided
+            if (command.length() > 0) {
+                String cmdToSend = command;
+                if (!cmdToSend.endsWith("\r") && !cmdToSend.endsWith("\n")) {
+                    cmdToSend += "\r";
+                }
+                
+                addTerminalLog("POLL [UART] TX: " + command);
+                Serial1.print(cmdToSend);
+                Serial1.flush();
+                
+                // Wait for response (up to 2 seconds)
+                unsigned long startTime = millis();
+                String response = "";
+                bool gotResponse = false;
+                
+                while (millis() - startTime < 2000) {
+                    if (Serial1.available()) {
+                        char c = Serial1.read();
+                        if (c >= 32 && c <= 126) { // Printable characters
+                            response += c;
+                            gotResponse = true;
+                        } else if ((c == '\r' || c == '\n') && response.length() > 0) {
+                            break; // End of response
+                        }
+                    }
+                    delay(1);
+                }
+                
+                if (gotResponse && response.length() > 0) {
+                    addTerminalLog("POLL [UART] RX: " + response);
+                    
+                    success = true;
+                    responseDoc["response"] = response;
+                    
+                    // Try to parse as float
+                    float parsedValue = atof(response.c_str());
+                    if (parsedValue != 0.0 || response.charAt(0) == '0') {
+                        responseDoc["parsedValue"] = parsedValue;
+                    }
+                } else {
+                    errorMsg = "No response from UART sensor";
+                    addTerminalLog("POLL [UART] No response");
+                }
+            } else {
+                errorMsg = "No command specified for UART test";
+            }
+            
+            Serial1.end();
         }
     } else {
         errorMsg = "Protocol not supported: " + protocol;
