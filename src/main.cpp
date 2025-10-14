@@ -148,6 +148,10 @@ void applySensorPresets() {
     }
 }
 
+// Constants
+#define MAX_TERMINAL_BUFFER 100
+#define HTTP_PORT 80
+
 // Global object definitions
 Config config; // Define the actual config object
 IOStatus ioStatus = {};
@@ -232,6 +236,7 @@ void addTerminalLog(String message);
 void logI2CTransaction(int address, String direction, String data, String pin);
 void logOneWireTransaction(String pin, String direction, String data);
 void logUARTTransaction(String pin, String direction, String data);
+void logNetworkTransaction(String protocol, String direction, String localAddr, String remoteAddr, String data);
 String executeTerminalCommand(String command, String pin, String protocol);
 
 // Bus operation management functions
@@ -531,6 +536,10 @@ void processUARTQueue() {
                         Serial1.print("\r\n");
                         Serial.printf("[DEBUG] UART: Sent command '%s' to TX:%d\n", command, txPin);
                         
+                        // Log the UART transaction for terminal watch
+                        String pinStr = String(txPin) + "," + String(rxPin);
+                        logUARTTransaction(pinStr, "TX", String(command));
+                        
                         // Wait for response
                         delay(100);
                         
@@ -546,6 +555,10 @@ void processUARTQueue() {
                         
                         if (response.length() > 0) {
                             response.trim();
+                            
+                            // Log the UART response for terminal watch
+                            logUARTTransaction(pinStr, "RX", response);
+                            
                             strncpy(configuredSensors[op.sensorIndex].rawDataString, response.c_str(), 
                                    sizeof(configuredSensors[op.sensorIndex].rawDataString)-1);
                             Serial.printf("[DEBUG] UART: Received response '%s'\n", response.c_str());
@@ -644,6 +657,9 @@ void processOneWireQueue() {
 
             if (presence) {
                 Serial.printf("[DEBUG] One-Wire: Presence detected for sensor %d, sending convert command\n", op.sensorIndex);
+                
+                // Log the One-Wire transaction for terminal watch
+                logOneWireTransaction(String(owPin), "TX", "0xCC 0x44 (Skip ROM + Convert T)");
                 
                 // Send Skip ROM (0xCC) + Convert T (0x44) command
                 // Skip ROM command
@@ -779,6 +795,13 @@ void processOneWireQueue() {
                     int16_t raw = (scratchpad[1] << 8) | scratchpad[0];
                     float temp = raw / 16.0;
                     
+                    // Log the One-Wire read for terminal watch
+                    char readData[64];
+                    snprintf(readData, sizeof(readData), "Scratchpad: %02X %02X %02X %02X %02X %02X %02X %02X %02X (%.2f°C)", 
+                             scratchpad[0], scratchpad[1], scratchpad[2], scratchpad[3], scratchpad[4], 
+                             scratchpad[5], scratchpad[6], scratchpad[7], scratchpad[8], temp);
+                    logOneWireTransaction(String(owPin), "RX", String(readData));
+                    
                     // Apply calibration using expression-capable function
                     float calibratedTemp = applyCalibration(temp, configuredSensors[op.sensorIndex]);
                     
@@ -904,7 +927,6 @@ bool terminalWatchActive = false;
 String watchedPin = "";
 String watchedProtocol = "";
 std::vector<String> terminalBuffer;
-const int MAX_TERMINAL_BUFFER = 100;
 
 // Bus traffic logging functions
 void addTerminalLog(String message) {
@@ -987,15 +1009,21 @@ void logOneWireTransaction(String pin, String direction, String data) {
     bool shouldLog = false;
     
     if (terminalWatchActive) {
+        // Extract pin number from pin string (handle both "28" and "GP28" formats)
+        int pinNumber = pin.toInt();
+        if (pinNumber == 0 && pin.startsWith("GP")) {
+            pinNumber = pin.substring(2).toInt();
+        }
+        
         // Support both pin numbers and sensor names
-        if (watchedPin == "all" || watchedPin == pin) {
+        if (watchedPin == "all" || watchedPin == pin || watchedPin == String(pinNumber) || watchedPin == ("GP" + String(pinNumber))) {
             shouldLog = true;
         } else {
             // Check if watchedPin is a sensor name that uses this pin
             for (int i = 0; i < numConfiguredSensors; i++) {
                 if (configuredSensors[i].enabled && 
                     strcmp(configuredSensors[i].name, watchedPin.c_str()) == 0 &&
-                    configuredSensors[i].oneWirePin == pin.toInt()) {
+                    configuredSensors[i].oneWirePin == pinNumber) {
                     shouldLog = true;
                     break;
                 }
@@ -1006,7 +1034,7 @@ void logOneWireTransaction(String pin, String direction, String data) {
         String watchedProtocolUpper = watchedProtocol;
         watchedProtocolUpper.toUpperCase();
         if ((watchedProtocolUpper == "ONE-WIRE" || watchedProtocolUpper == "ONEWIRE") && shouldLog) {
-            String logMsg = "1Wire [Pin " + pin + "] " + direction + ": " + data;
+            String logMsg = "1Wire [Pin " + String(pinNumber) + "] " + direction + ": " + data;
             addTerminalLog(logMsg);
         }
     }
@@ -1020,11 +1048,20 @@ void logUARTTransaction(String pin, String direction, String data) {
         if (watchedPin == "all" || watchedPin == pin) {
             shouldLog = true;
         } else {
+            // Extract pin numbers from pin string (handle "0,1" or "GP0,GP1" formats)
+            int txPin = -1, rxPin = -1;
+            if (pin.indexOf(',') > 0) {
+                String txStr = pin.substring(0, pin.indexOf(','));
+                String rxStr = pin.substring(pin.indexOf(',') + 1);
+                txPin = txStr.startsWith("GP") ? txStr.substring(2).toInt() : txStr.toInt();
+                rxPin = rxStr.startsWith("GP") ? rxStr.substring(2).toInt() : rxStr.toInt();
+            }
+            
             // Check if watchedPin is a sensor name that uses UART
             for (int i = 0; i < numConfiguredSensors; i++) {
                 if (configuredSensors[i].enabled && 
                     strcmp(configuredSensors[i].name, watchedPin.c_str()) == 0 &&
-                    (configuredSensors[i].uartTxPin == pin.toInt() || configuredSensors[i].uartRxPin == pin.toInt())) {
+                    (configuredSensors[i].uartTxPin == txPin || configuredSensors[i].uartRxPin == rxPin)) {
                     shouldLog = true;
                     break;
                 }
@@ -1041,8 +1078,31 @@ void logUARTTransaction(String pin, String direction, String data) {
     }
 }
 
+// Log network transaction for terminal watch
+void logNetworkTransaction(String protocol, String direction, String localAddr, String remoteAddr, String data) {
+    if (!terminalWatchActive) return;
+    
+    // Check protocol (case insensitive)
+    String watchedProtocolUpper = watchedProtocol;
+    watchedProtocolUpper.toUpperCase();
+    String protocolUpper = protocol;
+    protocolUpper.toUpperCase();
+    
+    if ((watchedProtocolUpper == "NETWORK" || watchedProtocolUpper == protocolUpper) && 
+        (watchedPin == "all" || watchedPin == "ethernet" || watchedPin == "eth0")) {
+        String logMsg = protocolUpper + " [" + localAddr + " <-> " + remoteAddr + "] " + direction + ": " + data;
+        addTerminalLog(logMsg);
+    }
+}
+
 // Send JSON response helper
 void sendJSON(WiFiClient& client, String json) {
+    // Log HTTP response for network monitoring
+    String remoteIP = client.remoteIP().toString();
+    String localIP = eth.localIP().toString() + ":" + String(HTTP_PORT);
+    String responseData = "200 OK (JSON: " + json.substring(0, min(50, (int)json.length())) + (json.length() > 50 ? "..." : "") + ")";
+    logNetworkTransaction("HTTP", "TX", localIP, remoteIP, responseData);
+    
     client.println("HTTP/1.1 200 OK");
     client.println("Content-Type: application/json");
     client.println("Connection: close");
@@ -1054,6 +1114,11 @@ void sendJSON(WiFiClient& client, String json) {
 
 // Send 404 response helper
 void send404(WiFiClient& client) {
+    // Log HTTP response for network monitoring
+    String remoteIP = client.remoteIP().toString();
+    String localIP = eth.localIP().toString() + ":" + String(HTTP_PORT);
+    logNetworkTransaction("HTTP", "TX", localIP, remoteIP, "404 Not Found");
+    
     client.println("HTTP/1.1 404 Not Found");
     client.println("Content-Type: text/plain");
     client.println("Connection: close");
@@ -2125,6 +2190,11 @@ void loop() {
                 modbusClients[i].server.accept(modbusClients[i].client);
                 Serial.println("Modbus server accepted client connection");
                 
+                // Log Modbus connection for network monitoring
+                String remoteIP = modbusClients[i].clientIP.toString();
+                String localIP = eth.localIP().toString() + ":" + String(config.modbusPort);
+                logNetworkTransaction("MODBUS", "CONNECT", localIP, remoteIP, "New Modbus TCP connection established");
+                
                 // Initialize coil states for this client to match current output states
                 for (int j = 0; j < 8; j++) {
                     modbusClients[i].server.coilWrite(j, ioStatus.dOut[j]);
@@ -2150,6 +2220,11 @@ void loop() {
                 // Poll this client's Modbus server
                 if (modbusClients[i].server.poll()) {
                     Serial.println("Modbus server recieved new request");
+                    
+                    // Log Modbus request for network monitoring
+                    String remoteIP = modbusClients[i].clientIP.toString();
+                    String localIP = eth.localIP().toString() + ":" + String(config.modbusPort);
+                    logNetworkTransaction("MODBUS", "RX", localIP, remoteIP, "Modbus Request (Function Code Processing)");
                 }
                 // Update IO for this specific client
                 updateIOForClient(i);
@@ -2157,6 +2232,12 @@ void loop() {
                 // Client disconnected
                 Serial.print("Client disconnected from slot ");
                 Serial.println(i);
+                
+                // Log Modbus disconnection for network monitoring
+                String remoteIP = modbusClients[i].clientIP.toString();
+                String localIP = eth.localIP().toString() + ":" + String(config.modbusPort);
+                logNetworkTransaction("MODBUS", "DISCONNECT", localIP, remoteIP, "Modbus TCP connection closed");
+                
                 modbusClients[i].connected = false;
                 modbusClients[i].client.stop();
                 connectedClients--;
@@ -2636,6 +2717,15 @@ void handleSimpleHTTP() {
             bodyBuffer[bytesRead] = '\0';
             body = String(bodyBuffer);
         }
+
+        // Log HTTP request for network monitoring
+        String remoteIP = client.remoteIP().toString();
+        String localIP = eth.localIP().toString() + ":" + String(HTTP_PORT);
+        String requestData = method + " " + path;
+        if (body.length() > 0) {
+            requestData += " (Body: " + body.substring(0, min(50, (int)body.length())) + (body.length() > 50 ? "..." : "") + ")";
+        }
+        logNetworkTransaction("HTTP", "RX", localIP, remoteIP, requestData);
 
         // Route the request to existing handlers
         Serial.println("Routing request...");
