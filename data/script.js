@@ -2032,6 +2032,7 @@ window.getCalibrationEquationDisplay = function getCalibrationEquationDisplay(se
         // Find the sensor configuration by name
         const sensorConfig = window.sensorConfigData.find(config => config.name === sensor.name);
         if (!sensorConfig) {
+            console.warn('Sensor config not found for:', sensor.name, 'Available configs:', window.sensorConfigData);
             return 'Config not found';
         }
         
@@ -2040,9 +2041,9 @@ window.getCalibrationEquationDisplay = function getCalibrationEquationDisplay(se
         // Get calibration data based on output index
         if (outputIndex === 0) {
             // Primary output (A)
-            offset = sensorConfig.calibrationOffset || 0;
-            scale = sensorConfig.calibrationSlope || 1;
-            expression = sensorConfig.calibrationExpression || '';
+            offset = sensorConfig.calibrationOffset || sensorConfig.calibration?.offset || 0;
+            scale = sensorConfig.calibrationSlope || sensorConfig.calibration?.scale || 1;
+            expression = sensorConfig.calibrationExpression || sensorConfig.calibration?.expression || '';
         } else if (outputIndex === 1) {
             // Secondary output (B)
             offset = sensorConfig.calibrationOffsetB || 0;
