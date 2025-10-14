@@ -489,31 +489,101 @@ void processUARTQueue() {
     unsigned long currentTime = millis();
     BusOperation& op = uartQueue[0];
     
+    // Declare variables outside switch to avoid 'crosses initialization' error
+    int txPin, rxPin;
+    
     Serial.printf("[DEBUG] UART: Processing sensor %d (%s) - state %d\n", 
                  op.sensorIndex, configuredSensors[op.sensorIndex].name, (int)op.state);
     
     switch(op.state) {
         case BusOpState::IDLE:
-            Serial.printf("[DEBUG] UART: Sensor %d (%s) IDLE, TX:%d RX:%d\n", 
-                         op.sensorIndex, configuredSensors[op.sensorIndex].name,
-                         configuredSensors[op.sensorIndex].uartTxPin, 
-                         configuredSensors[op.sensorIndex].uartRxPin);
+            txPin = configuredSensors[op.sensorIndex].uartTxPin;
+            rxPin = configuredSensors[op.sensorIndex].uartRxPin;
             
-            // For now, simulate UART read with placeholder data
-            // In a real implementation, you would:
-            // 1. Configure UART pins and baud rate
-            // 2. Send command if needed
-            // 3. Read response
+            // Initialize UART if pins are valid
+            if (txPin >= 0 && rxPin >= 0 && txPin <= 28 && rxPin <= 28) {
+                // Configure hardware UART (RP2040 has UART0 and UART1)
+                if ((txPin == 0 && rxPin == 1) || (txPin == 12 && rxPin == 13) || 
+                    (txPin == 16 && rxPin == 17) || (txPin == 4 && rxPin == 5)) {
+                    
+                    // Use Serial1 for UART communication
+                    Serial1.setTX(txPin);
+                    Serial1.setRX(rxPin);
+                    Serial1.begin(9600); // Default baud rate
+                    
+                    // Send command if configured
+                    const char* command = configuredSensors[op.sensorIndex].command;
+                    if (strlen(command) > 0) {
+                        Serial1.print(command);
+                        Serial1.print("\r\n");
+                        Serial.printf("[DEBUG] UART: Sent command '%s' to TX:%d\n", command, txPin);
+                        
+                        // Wait for response
+                        delay(100);
+                        
+                        String response = "";
+                        unsigned long timeout = millis() + 1000; // 1 second timeout
+                        while (millis() < timeout && response.length() < 120) {
+                            if (Serial1.available()) {
+                                char c = Serial1.read();
+                                response += c;
+                                if (c == '\n' || c == '\r') break; // End of line
+                            }
+                        }
+                        
+                        if (response.length() > 0) {
+                            response.trim();
+                            strncpy(configuredSensors[op.sensorIndex].rawDataString, response.c_str(), 
+                                   sizeof(configuredSensors[op.sensorIndex].rawDataString)-1);
+                            Serial.printf("[DEBUG] UART: Received response '%s'\n", response.c_str());
+                            
+                            // Parse the response to extract numeric value
+                            float value = 0.0;
+                            // Try to extract first number from response
+                            for (int i = 0; i < response.length(); i++) {
+                                if (isdigit(response[i]) || response[i] == '.' || response[i] == '-') {
+                                    value = response.substring(i).toFloat();
+                                    break;
+                                }
+                            }
+                            
+                            configuredSensors[op.sensorIndex].rawValue = value;
+                            configuredSensors[op.sensorIndex].calibratedValue = value;
+                            configuredSensors[op.sensorIndex].modbusValue = (int)(value * 100);
+                            
+                        } else {
+                            Serial.printf("[DEBUG] UART: No response received\n");
+                            configuredSensors[op.sensorIndex].rawValue = 0.0;
+                            strcpy(configuredSensors[op.sensorIndex].rawDataString, "NO_RESPONSE");
+                        }
+                    } else {
+                        Serial.printf("[DEBUG] UART: No command configured, reading available data\n");
+                        // Just read any available data
+                        String response = "";
+                        while (Serial1.available() && response.length() < 120) {
+                            char c = Serial1.read();
+                            response += c;
+                        }
+                        if (response.length() > 0) {
+                            response.trim();
+                            strncpy(configuredSensors[op.sensorIndex].rawDataString, response.c_str(), 
+                                   sizeof(configuredSensors[op.sensorIndex].rawDataString)-1);
+                        }
+                    }
+                    
+                    Serial1.end(); // Close UART to free pins for other sensors
+                } else {
+                    Serial.printf("[DEBUG] UART: Invalid pin combination TX:%d RX:%d\n", txPin, rxPin);
+                    configuredSensors[op.sensorIndex].rawValue = 0.0;
+                    strcpy(configuredSensors[op.sensorIndex].rawDataString, "INVALID_PINS");
+                }
+            } else {
+                Serial.printf("[DEBUG] UART: Invalid pins TX:%d RX:%d\n", txPin, rxPin);
+                configuredSensors[op.sensorIndex].rawValue = 0.0;
+                strcpy(configuredSensors[op.sensorIndex].rawDataString, "INVALID_PINS");
+            }
             
-            configuredSensors[op.sensorIndex].rawValue = 25.5; // Placeholder
-            configuredSensors[op.sensorIndex].calibratedValue = 25.5;
-            configuredSensors[op.sensorIndex].modbusValue = 2550;
             configuredSensors[op.sensorIndex].lastReadTime = currentTime;
-            
-            strncpy(configuredSensors[op.sensorIndex].rawDataString, "UART:25.5", 
-                   sizeof(configuredSensors[op.sensorIndex].rawDataString)-1);
-            
-            Serial.printf("[DEBUG] UART: Sensor %d simulated value 25.5\n", op.sensorIndex);
             
             // Move to next operation
             for(int i = 0; i < uartQueueSize - 1; i++) {
@@ -1808,12 +1878,16 @@ void handlePOSTTerminalCommand(WiFiClient& client, String body) {
         } else {
             // Try to find from configured sensor
             for (int i = 0; i < numConfiguredSensors; i++) {
-                if (String(configuredSensors[i].name) == pin && strcmp(configuredSensors[i].protocol, "uart") == 0) {
+                Serial.printf("[DEBUG] Checking sensor %d: name='%s', protocol='%s', pin query='%s'\n", 
+                             i, configuredSensors[i].name, configuredSensors[i].protocol, pin.c_str());
+                if (String(configuredSensors[i].name) == pin && strcmp(configuredSensors[i].protocol, "UART") == 0) {
                     txPin = configuredSensors[i].uartTxPin;
                     rxPin = configuredSensors[i].uartRxPin;
+                    Serial.printf("[DEBUG] Found UART sensor: TX=%d, RX=%d\n", txPin, rxPin);
                     break;
                 }
             }
+            Serial.printf("[DEBUG] Final UART pins: TX=%d, RX=%d\n", txPin, rxPin);
         }
         
         if (txPin < 0 || rxPin < 0 || txPin > 28 || rxPin > 28) {
@@ -1846,35 +1920,118 @@ void handlePOSTTerminalCommand(WiFiClient& client, String body) {
                 // Log the outgoing command
                 logUARTTransaction("GP" + String(txPin) + ",GP" + String(rxPin), "TX", data);
                 
-                // For now, simulate UART send (hardware UART setup would be needed)
-                response = "UART TX (GP" + String(txPin) + "): " + data;
-                response += "\\nNote: Hardware UART implementation needed for actual transmission";
-                
-                // Simulate response for testing
-                String simResponse = "OK\\r\\n";
-                logUARTTransaction("GP" + String(txPin) + ",GP" + String(rxPin), "RX", simResponse);
-                response += "\\nSimulated RX: " + simResponse;
+                // Real UART implementation
+                if ((txPin == 0 && rxPin == 1) || (txPin == 12 && rxPin == 13) || 
+                    (txPin == 16 && rxPin == 17) || (txPin == 4 && rxPin == 5)) {
+                    
+                    // Configure and send via hardware UART
+                    Serial1.setTX(txPin);
+                    Serial1.setRX(rxPin);
+                    Serial1.begin(9600);
+                    
+                    Serial1.print(data);
+                    Serial1.print("\r\n");
+                    
+                    response = "UART TX (GP" + String(txPin) + "): " + data;
+                    
+                    // Wait for response
+                    delay(100);
+                    String uartResponse = "";
+                    unsigned long timeout = millis() + 1000;
+                    while (millis() < timeout && uartResponse.length() < 100) {
+                        if (Serial1.available()) {
+                            char c = Serial1.read();
+                            uartResponse += c;
+                            if (c == '\n' || c == '\r') break;
+                        }
+                    }
+                    
+                    if (uartResponse.length() > 0) {
+                        uartResponse.trim();
+                        response += "\nRX: " + uartResponse;
+                        logUARTTransaction("GP" + String(txPin) + ",GP" + String(rxPin), "RX", uartResponse);
+                    } else {
+                        response += "\nRX: (no response)";
+                    }
+                    
+                    Serial1.end();
+                } else {
+                    success = false;
+                    response = "Error: Invalid UART pin combination for hardware UART";
+                }
             } else {
                 success = false;
                 response = "Error: No data to send. Use 'send <data>'";
             }
         } else if (command == "read") {
-            // Simulate reading from UART
-            String simData = "25.5,60.2\\r\\n"; // Example sensor data
-            response = "UART RX (GP" + String(rxPin) + "): " + simData;
-            response += "\\nNote: Hardware UART implementation needed for actual reception";
-            logUARTTransaction("GP" + String(txPin) + ",GP" + String(rxPin), "RX", simData);
+            // Real UART read
+            if ((txPin == 0 && rxPin == 1) || (txPin == 12 && rxPin == 13) || 
+                (txPin == 16 && rxPin == 17) || (txPin == 4 && rxPin == 5)) {
+                
+                Serial1.setTX(txPin);
+                Serial1.setRX(rxPin);
+                Serial1.begin(9600);
+                
+                String readData = "";
+                while (Serial1.available() && readData.length() < 100) {
+                    char c = Serial1.read();
+                    readData += c;
+                }
+                
+                if (readData.length() > 0) {
+                    response = "UART RX (GP" + String(rxPin) + "): " + readData;
+                    logUARTTransaction("GP" + String(txPin) + ",GP" + String(rxPin), "RX", readData);
+                } else {
+                    response = "UART RX (GP" + String(rxPin) + "): (no data available)";
+                }
+                
+                Serial1.end();
+            } else {
+                success = false;
+                response = "Error: Invalid UART pin combination for hardware UART";
+            }
         } else if (command == "test") {
             // Send test command and wait for response
-            String testCmd = "R\\r\\n";
+            String testCmd = "R";
             logUARTTransaction("GP" + String(txPin) + ",GP" + String(rxPin), "TX", testCmd);
-            response = "UART Test Command Sent: " + testCmd;
             
-            // Simulate response
-            String testResp = "Temperature: 25.5C\\r\\n";
-            logUARTTransaction("GP" + String(txPin) + ",GP" + String(rxPin), "RX", testResp);
-            response += "\\nSimulated Response: " + testResp;
-            response += "\\nNote: Hardware UART implementation needed for actual communication";
+            if ((txPin == 0 && rxPin == 1) || (txPin == 12 && rxPin == 13) || 
+                (txPin == 16 && rxPin == 17) || (txPin == 4 && rxPin == 5)) {
+                
+                Serial1.setTX(txPin);
+                Serial1.setRX(rxPin);
+                Serial1.begin(9600);
+                
+                Serial1.print(testCmd);
+                Serial1.print("\r\n");
+                
+                response = "UART Test Command Sent: " + testCmd;
+                
+                // Wait for response
+                delay(500); // Longer wait for test
+                String testResp = "";
+                unsigned long timeout = millis() + 2000;
+                while (millis() < timeout && testResp.length() < 100) {
+                    if (Serial1.available()) {
+                        char c = Serial1.read();
+                        testResp += c;
+                        if (c == '\n' || c == '\r') break;
+                    }
+                }
+                
+                if (testResp.length() > 0) {
+                    testResp.trim();
+                    response += "\nResponse: " + testResp;
+                    logUARTTransaction("GP" + String(txPin) + ",GP" + String(rxPin), "RX", testResp);
+                } else {
+                    response += "\nResponse: (timeout - no response)";
+                }
+                
+                Serial1.end();
+            } else {
+                success = false;
+                response = "Error: Invalid UART pin combination for hardware UART";
+            }
         } else {
             success = false;
             response = "Error: Unknown UART command. Use 'info', 'config', 'send <data>', 'read', or 'test'";
