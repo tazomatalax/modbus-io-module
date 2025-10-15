@@ -1105,6 +1105,9 @@ void sendJSON(WiFiClient& client, String json) {
     
     client.println("HTTP/1.1 200 OK");
     client.println("Content-Type: application/json");
+    client.println("Access-Control-Allow-Origin: *");
+    client.println("Access-Control-Allow-Methods: GET, POST, OPTIONS");
+    client.println("Access-Control-Allow-Headers: Content-Type");
     client.println("Connection: close");
     client.print("Content-Length: ");
     client.println(json.length());
@@ -1121,6 +1124,9 @@ void send404(WiFiClient& client) {
     
     client.println("HTTP/1.1 404 Not Found");
     client.println("Content-Type: text/plain");
+    client.println("Access-Control-Allow-Origin: *");
+    client.println("Access-Control-Allow-Methods: GET, POST, OPTIONS");
+    client.println("Access-Control-Allow-Headers: Content-Type");
     client.println("Connection: close");
     client.println();
     client.println("404 Not Found");
@@ -1130,8 +1136,17 @@ String executeTerminalCommand(String command, String pin, String protocol) {
     String response = "No response";
     
     if (protocol == "I2C") {
-        int pinNum = pin.toInt();
-        int address = 0x48; // Default address, should be configurable
+        // Parse I2C address from pin parameter
+        int address = 0x63; // Default EZO pH address
+        if (pin.startsWith("0x")) {
+            address = strtol(pin.c_str(), NULL, 16);
+        } else if (pin.toInt() > 0) {
+            address = pin.toInt();
+        }
+        
+        // Handle escape sequences in command
+        command.replace("\\r", "\r");
+        command.replace("\\n", "\n");
         
         // Log the outgoing command
         logI2CTransaction(address, "TX", command, pin);
@@ -1141,13 +1156,17 @@ String executeTerminalCommand(String command, String pin, String protocol) {
         int result = Wire.endTransmission();
         
         if (result == 0) {
-            delay(100);
+            delay(300); // EZO sensors need more time to process
             Wire.requestFrom(address, 32);
             response = "";
             while (Wire.available()) {
                 char c = Wire.read();
-                response += c;
+                // Filter out non-printable characters except CR/LF
+                if ((c >= 32 && c <= 126) || c == '\r' || c == '\n') {
+                    response += c;
+                }
             }
+            response.trim(); // Remove leading/trailing whitespace
             
             // Log the incoming response
             if (response.length() > 0) {
@@ -1357,8 +1376,9 @@ void handlePOSTTerminalCommand(WiFiClient& client, String body) {
     String response = "";
     bool success = true;
     
-    protocol.toLowerCase();
-    command.toLowerCase();
+    // Note: Don't convert to lowercase - EZO sensors are case-sensitive
+    // protocol.toLowerCase();
+    // command.toLowerCase();
     
     if (protocol == "digital") {
         if (command == "read") {
@@ -1996,6 +2016,17 @@ void handlePOSTTerminalCommand(WiFiClient& client, String body) {
             response += "Note: Use PlatformIO Serial2 for hardware UART on these pins";
         } else if (command.startsWith("send ")) {
             String data = command.substring(5);
+            
+            // Handle angle bracket format: send <data>
+            if (data.startsWith("<") && data.endsWith(">")) {
+                data = data.substring(1, data.length() - 1);
+            }
+            
+            // Handle escape sequences
+            data.replace("\\r", "\r");
+            data.replace("\\n", "\n");
+            data.replace("\\t", "\t");
+            
             if (data.length() > 0) {
                 // Log the outgoing command
                 logUARTTransaction("GP" + String(txPin) + ",GP" + String(rxPin), "TX", data);
@@ -2009,8 +2040,8 @@ void handlePOSTTerminalCommand(WiFiClient& client, String body) {
                     Serial1.setRX(rxPin);
                     Serial1.begin(9600);
                     
+                    // Send data as-is (don't add extra CR/LF if already present)
                     Serial1.print(data);
-                    Serial1.print("\r\n");
                     
                     response = "UART TX (GP" + String(txPin) + "): " + data;
                     
@@ -2251,7 +2282,7 @@ void loop() {
     
     updateIOpins();
     // updateSensorReadings();  // DISABLED - SHT30 sensors now handled in queue system
-    // handleEzoSensors(); // Commented out for now
+    handleEzoSensors(); // Handle EZO sensor communications with logging
     
     // Debug: Web server check (every 30 seconds)
     static unsigned long lastWebDebug = 0;
@@ -2354,6 +2385,12 @@ void handleEzoSensors() {
         
         unsigned long currentTime = millis();
         
+        // Check if we should log for terminal watch
+        bool shouldLog = terminalWatchActive && 
+                        (watchedProtocol.equalsIgnoreCase("I2C") || watchedProtocol.equalsIgnoreCase("EZO")) &&
+                        (watchedPin == "all" || watchedPin == String(configuredSensors[i].i2cAddress, HEX) || 
+                         watchedPin == String(configuredSensors[i].name));
+        
         if (configuredSensors[i].cmdPending && (currentTime - configuredSensors[i].lastCmdSent > 1000)) {
             ezoSensors[i]->receive_read_cmd();
             
@@ -2361,13 +2398,32 @@ void handleEzoSensors() {
                 float reading = ezoSensors[i]->get_last_received_reading();
                 snprintf(configuredSensors[i].response, sizeof(configuredSensors[i].response), "%.2f", reading);
                 Serial.printf("EZO sensor %s reading: %s\n", configuredSensors[i].name, configuredSensors[i].response);
+                
+                // Log for terminal watch
+                if (shouldLog) {
+                    logI2CTransaction(configuredSensors[i].i2cAddress, "RX", 
+                                    String(reading), String(configuredSensors[i].i2cAddress, HEX));
+                }
             } else {
                 Serial.printf("EZO sensor %s error: %d\n", configuredSensors[i].name, ezoSensors[i]->get_error());
+                
+                // Log error for terminal watch
+                if (shouldLog) {
+                    logI2CTransaction(configuredSensors[i].i2cAddress, "ERR", 
+                                    "Error: " + String(ezoSensors[i]->get_error()), 
+                                    String(configuredSensors[i].i2cAddress, HEX));
+                }
             }
             
             configuredSensors[i].cmdPending = false;
         } 
         else if (!configuredSensors[i].cmdPending && (currentTime - configuredSensors[i].lastCmdSent > 5000)) {
+            // Log command being sent for terminal watch
+            if (shouldLog) {
+                logI2CTransaction(configuredSensors[i].i2cAddress, "TX", 
+                                "READ", String(configuredSensors[i].i2cAddress, HEX));
+            }
+            
             ezoSensors[i]->send_read_cmd();
             configuredSensors[i].lastCmdSent = currentTime;
             configuredSensors[i].cmdPending = true;
@@ -2729,6 +2785,7 @@ void handleSimpleHTTP() {
 
         // Route the request to existing handlers
         Serial.println("Routing request...");
+        Serial.println("DEBUG: Method='" + method + "' Path='" + path + "'");
         routeRequest(client, method, path, body);
         client.stop();
         Serial.println("=== WEB CLIENT DISCONNECTED ===");
@@ -2794,6 +2851,17 @@ void routeRequest(WiFiClient& client, String method, String path, String body) {
     Serial.println("Method: " + method);
     Serial.println("Path: " + path);
     
+    // Handle OPTIONS requests for CORS preflight
+    if (method == "OPTIONS") {
+        client.println("HTTP/1.1 200 OK");
+        client.println("Access-Control-Allow-Origin: *");
+        client.println("Access-Control-Allow-Methods: GET, POST, OPTIONS");
+        client.println("Access-Control-Allow-Headers: Content-Type");
+        client.println("Connection: close");
+        client.println();
+        return;
+    }
+    
     // Simple routing to existing handler functions
     if (method == "GET") {
         if (path == "/" || path == "/index.html") {
@@ -2823,7 +2891,9 @@ void routeRequest(WiFiClient& client, String method, String path, String body) {
         } else if (path == "/config") {
             sendJSONConfig(client);
         } else if (path == "/iostatus") {
+            Serial.println("DEBUG: Routing to sendJSONIOStatus");
             sendJSONIOStatus(client);
+            Serial.println("DEBUG: sendJSONIOStatus completed");
         } else if (path == "/ioconfig") {
             sendJSONIOConfig(client);
         } else if (path == "/sensors/config") {
@@ -2930,6 +3000,8 @@ void sendJSONIOStatus(WiFiClient& client) {
     static unsigned long lastCall = 0;
     unsigned long now = millis();
     
+    Serial.println("DEBUG: sendJSONIOStatus called");
+    
     // Debug timing between calls
     if (lastCall != 0) {
         unsigned long delta = now - lastCall;
@@ -2942,6 +3014,11 @@ void sendJSONIOStatus(WiFiClient& client) {
     lastCall = now;
     
     Serial.printf("[DEBUG] Generating IOStatus JSON for %d sensors\n", numConfiguredSensors);
+    
+    if (!client.connected()) {
+        Serial.println("ERROR: Client not connected in sendJSONIOStatus");
+        return;
+    }
     
     StaticJsonDocument<2048> doc;
     
@@ -3995,8 +4072,13 @@ void handlePOSTSensorConfig(WiFiClient& client, String body) {
         numConfiguredSensors++;
     }
     saveSensorConfig();
+    
+    // Small delay to ensure file save completes before response
+    delay(100);
+    
     client.println("HTTP/1.1 200 OK");
     client.println("Content-Type: application/json");
+    client.println("Access-Control-Allow-Origin: *");
     client.println("Connection: close");
     client.println();
     client.println("{\"success\":true}");
