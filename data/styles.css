@@ -1651,8 +1651,23 @@ button:hover {
     margin-bottom: 20px;
 }
 
+.command-input-row {
+    display: flex;
+    gap: 15px;
+    margin-bottom: 15px;
+    align-items: end;
+}
+
+.command-input-group {
+    flex: 1;
+}
+
+.encoding-group {
+    min-width: 140px;
+}
+
 .terminal-command-area .control-group {
-    margin-bottom: 10px;
+    margin-bottom: 0;
 }
 
 .terminal-command-area input {
@@ -1662,6 +1677,16 @@ button:hover {
     font-size: 0.9em;
     border: 1px solid #ddd;
     border-radius: 4px;
+}
+
+.terminal-command-area select {
+    width: 100%;
+    padding: 10px;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 0.9em;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    background-color: white;
 }
 
 .terminal-buttons {
@@ -2567,4 +2592,48 @@ button:hover {
 .parsed-data {
     color: #28a745;
     font-weight: 500;
+}
+
+/* Multi-Output Calibration Styling */
+.multi-output-calibration-item {
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 15px;
+    margin-bottom: 15px;
+    background: #f8f9fa;
+}
+
+.multi-output-calibration-item h5 {
+    margin: 0 0 12px 0;
+    color: var(--primary-color);
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.calibration-method-selector {
+    display: flex;
+    gap: 15px;
+    margin-bottom: 15px;
+}
+
+.calibration-method-selector .method-option {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.calibration-fields {
+    margin-top: 10px;
+}
+
+.calibration-note {
+    font-style: italic;
+    color: #666;
+    text-align: center;
+    padding: 8px;
+    background: #e8f4f8;
+    border-radius: 4px;
+    border-left: 3px solid var(--primary-color);
 }

@@ -1,7 +1,7 @@
 {
   "_comment": "SIMULATOR SENSOR CONFIGURATION - This file simulates the LittleFS /sensors.json that will exist on your Raspberry Pi Pico. The simulator reads/writes this file exactly like the real device reads/writes LittleFS. Changes made via the web interface will be saved here and persist across simulator restarts.",
   "_architecture": "Simulator uses this file <-> Real device uses LittleFS /sensors.json",
-  "_registers_note": "Registers 0-4 are reserved for system I/O (AI1-3, Temp, Humidity). Use register 5+ for sensors.",
+  "_registers_note": "Any register 0-65535 can be used. Registers 0-2 are also used for analog inputs if enabled.",
   "sensors": [
     {
       "enabled": true,

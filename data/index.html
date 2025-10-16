@@ -246,9 +246,20 @@
             </div>
             
             <div class="terminal-command-area">
-                <div class="control-group">
-                    <label for="terminal-command">Command</label>
-                    <input type="text" id="terminal-command" placeholder="Enter command..." onkeypress="handleTerminalKeypress(event)">
+                <div class="command-input-row">
+                    <div class="control-group command-input-group">
+                        <label for="terminal-command">Command</label>
+                        <input type="text" id="terminal-command" placeholder="Enter command..." onkeypress="handleTerminalKeypress(event)">
+                    </div>
+                    <div class="control-group encoding-group">
+                        <label for="terminal-encoding">Encoding</label>
+                        <select id="terminal-encoding">
+                            <option value="text">Text</option>
+                            <option value="ascii">ASCII Bytes</option>
+                            <option value="hex">Hex Bytes</option>
+                            <option value="decimal">Decimal Bytes</option>
+                        </select>
+                    </div>
                 </div>
                 
                 <div class="terminal-buttons">
@@ -532,8 +543,8 @@
                 <div class="form-row">
                     <div class="form-group">
                         <label for="sensor-modbus-register">Modbus Register</label>
-                        <input type="number" id="sensor-modbus-register" min="3" max="65535" placeholder="100" required>
-                        <small class="form-help">Registers 0-2 reserved for system I/O. Use 3 or higher.</small>
+                        <input type="number" id="sensor-modbus-register" min="0" max="65535" placeholder="Enter register (0-65535)" required>
+                        <small class="form-help">Modbus input register (0-65535). Multi-output sensors use consecutive registers.</small>
                     </div>
                 </div>
                 <div class="form-group">
@@ -715,6 +726,17 @@
                             <label for="sensor-calibration-expression">Expression</label>
                             <input type="text" id="sensor-calibration-expression" placeholder="x * 1.8 + 32" value="">
                             <small class="form-help">Mathematical expression (x = raw reading)</small>
+                        </div>
+                    </div>
+                    
+                    <!-- Multi-output calibration section -->
+                    <div id="multi-output-calibration" style="display: none;">
+                        <div class="info-box">
+                            <span class="info-icon">ℹ️</span>
+                            <strong>Multi-Output Calibration:</strong> Configure separate calibration for each output value
+                        </div>
+                        <div id="multi-calibration-outputs">
+                            <!-- Dynamic calibration controls for each output will be inserted here -->
                         </div>
                     </div>
                 </div>

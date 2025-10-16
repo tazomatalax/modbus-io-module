@@ -161,6 +161,7 @@ struct SensorConfig {
     int modbusRegister;
     float calibrationOffset;
     float calibrationSlope;
+    char calibrationExpression[128];  // Mathematical expression for calibration (supports any equation)
     // Dynamic pin assignment
     int sdaPin;
     int sclPin;
@@ -174,6 +175,7 @@ struct SensorConfig {
     char parsingMethod[16];   // raw, custom_bits, bit_field, status_register, json_path, csv_column
     char command[32];
     uint32_t updateInterval;
+    int delayBeforeRead;      // Delay in ms before reading response (for UART, I2C timing)
     uint8_t i2cMultiplexerChannel;
     char parsingConfig[128];  // JSON string for parsing configuration
     
@@ -206,6 +208,8 @@ struct SensorConfig {
     float calibrationSlopeB;  // Calibration slope for rawValueB
     float calibrationOffsetC; // Calibration offset for rawValueC  
     float calibrationSlopeC;  // Calibration slope for rawValueC
+    char calibrationExpressionB[128];  // Mathematical expression for calibrating rawValueB
+    char calibrationExpressionC[128];  // Mathematical expression for calibrating rawValueC
     
     char rawDataString[128];  // Raw data string for parsing (I2C/UART responses)
     unsigned long lastReadTime; // When last read was performed
