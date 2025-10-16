@@ -1651,8 +1651,23 @@ button:hover {
     margin-bottom: 20px;
 }
 
+.command-input-row {
+    display: flex;
+    gap: 15px;
+    margin-bottom: 15px;
+    align-items: end;
+}
+
+.command-input-group {
+    flex: 1;
+}
+
+.encoding-group {
+    min-width: 140px;
+}
+
 .terminal-command-area .control-group {
-    margin-bottom: 10px;
+    margin-bottom: 0;
 }
 
 .terminal-command-area input {
@@ -1662,6 +1677,16 @@ button:hover {
     font-size: 0.9em;
     border: 1px solid #ddd;
     border-radius: 4px;
+}
+
+.terminal-command-area select {
+    width: 100%;
+    padding: 10px;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 0.9em;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    background-color: white;
 }
 
 .terminal-buttons {

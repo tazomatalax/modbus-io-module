@@ -246,9 +246,20 @@
             </div>
             
             <div class="terminal-command-area">
-                <div class="control-group">
-                    <label for="terminal-command">Command</label>
-                    <input type="text" id="terminal-command" placeholder="Enter command..." onkeypress="handleTerminalKeypress(event)">
+                <div class="command-input-row">
+                    <div class="control-group command-input-group">
+                        <label for="terminal-command">Command</label>
+                        <input type="text" id="terminal-command" placeholder="Enter command..." onkeypress="handleTerminalKeypress(event)">
+                    </div>
+                    <div class="control-group encoding-group">
+                        <label for="terminal-encoding">Encoding</label>
+                        <select id="terminal-encoding">
+                            <option value="text">Text</option>
+                            <option value="ascii">ASCII Bytes</option>
+                            <option value="hex">Hex Bytes</option>
+                            <option value="decimal">Decimal Bytes</option>
+                        </select>
+                    </div>
                 </div>
                 
                 <div class="terminal-buttons">

@@ -947,12 +947,39 @@ window.updateDataParsingFields = function updateDataParsingFields() {
 // Helper function to get the next available modbus register
 window.getNextAvailableRegister = function getNextAvailableRegister() {
     let maxRegister = 2; // System reserves 0-2
+    const usedRegisters = new Set();
+    
     sensorConfigData.forEach(sensor => {
-        if (sensor.modbusRegister > maxRegister) {
-            maxRegister = sensor.modbusRegister;
+        if (sensor.modbusRegister !== undefined) {
+            usedRegisters.add(sensor.modbusRegister);
+            
+            // For SHT30, also mark the next register as used
+            if (sensor.type === 'SHT30') {
+                usedRegisters.add(sensor.modbusRegister + 1);
+            }
+            
+            // For multi-value sensors, mark all their registers as used
+            if (sensor.multiValues && Array.isArray(sensor.multiValues)) {
+                sensor.multiValues.forEach(value => {
+                    if (value.register !== undefined) {
+                        usedRegisters.add(value.register);
+                    }
+                });
+            }
+            
+            if (sensor.modbusRegister > maxRegister) {
+                maxRegister = sensor.modbusRegister;
+            }
         }
     });
-    return maxRegister + 1;
+    
+    // Find the first available register starting from maxRegister + 1
+    let candidate = maxRegister + 1;
+    while (usedRegisters.has(candidate) || usedRegisters.has(candidate + 1)) {
+        candidate++;
+    }
+    
+    return candidate;
 }// Show the edit sensor modal
 window.editSensor = function editSensor(index) {
     if (index < 0 || index >= sensorConfigData.length) {
@@ -1355,6 +1382,25 @@ window.saveSensor = function saveSensor() {
             return true;
         }
         
+        // Check for SHT30 specific conflicts (uses consecutive registers)
+        if (sensor.type === 'SHT30') {
+            // SHT30 uses register N for temperature and N+1 for humidity
+            if (sensor.modbusRegister + 1 === modbusRegister) {
+                return true; // New register conflicts with SHT30's humidity register
+            }
+        }
+        
+        // Check if current sensor is SHT30 and would conflict
+        if (type === 'SHT30') {
+            // Current SHT30 needs registers N and N+1
+            if (sensor.modbusRegister === modbusRegister + 1) {
+                return true; // Existing sensor conflicts with new SHT30's humidity register
+            }
+            if (sensor.type === 'SHT30' && Math.abs(sensor.modbusRegister - modbusRegister) < 2) {
+                return true; // Two SHT30 sensors with overlapping register ranges
+            }
+        }
+        
         // Check if the new register conflicts with multi-output sensor's secondary registers
         if (sensor.multiValues && Array.isArray(sensor.multiValues)) {
             for (const value of sensor.multiValues) {
@@ -1373,6 +1419,7 @@ window.saveSensor = function saveSensor() {
             for (let i = 0; i < outputCount; i++) {
                 const registerValue = modbusRegister + i;
                 if (sensor.modbusRegister === registerValue || 
+                    (sensor.type === 'SHT30' && sensor.modbusRegister + 1 === registerValue) ||
                     (sensor.multiValues && sensor.multiValues.some(mv => mv.register === registerValue))) {
                     return true;
                 }
@@ -2029,10 +2076,10 @@ window.getCalibrationEquationDisplay = function getCalibrationEquationDisplay(se
     }
     
     try {
-        // Find the sensor configuration by name
-        const sensorConfig = window.sensorConfigData.find(config => config.name === sensor.name);
+        // Find the sensor configuration by name (fallback to direct sensor data)
+        const sensorConfig = window.sensorConfigData.find(config => config.name === sensor.name) || sensor;
         if (!sensorConfig) {
-            console.warn('Sensor config not found for:', sensor.name, 'Available configs:', window.sensorConfigData);
+            console.warn('Sensor config not found for:', sensor.name);
             return 'Config not found';
         }
         
@@ -2040,20 +2087,35 @@ window.getCalibrationEquationDisplay = function getCalibrationEquationDisplay(se
         
         // Get calibration data based on output index
         if (outputIndex === 0) {
-            // Primary output (A)
-            offset = sensorConfig.calibrationOffset || sensorConfig.calibration?.offset || 0;
-            scale = sensorConfig.calibrationSlope || sensorConfig.calibration?.scale || 1;
-            expression = sensorConfig.calibrationExpression || sensorConfig.calibration?.expression || '';
+            // Primary output (A) - check both config and runtime response formats
+            offset = sensorConfig.calibrationOffset || sensorConfig.calibration_offset || sensorConfig.calibration?.offset || 0;
+            scale = sensorConfig.calibrationSlope || sensorConfig.calibration_slope || sensorConfig.calibration?.scale || 1;
+            expression = sensorConfig.calibrationExpression || sensorConfig.calibration_expression || sensorConfig.calibration?.expression || '';
+            
+            // Also check the sensor data directly (from iostatus/sensors/data endpoints)
+            if (!expression && sensor) {
+                expression = sensor.calibration_expression || '';
+            }
         } else if (outputIndex === 1) {
-            // Secondary output (B)
-            offset = sensorConfig.calibrationOffsetB || 0;
-            scale = sensorConfig.calibrationSlopeB || 1;
-            expression = sensorConfig.calibrationExpressionB || '';
+            // Secondary output (B) - use direct fields from backend
+            offset = sensorConfig.calibrationOffsetB || sensorConfig.calibration_offset_b || 0;
+            scale = sensorConfig.calibrationSlopeB || sensorConfig.calibration_slope_b || 1;
+            expression = sensorConfig.calibrationExpressionB || sensorConfig.calibration_expression_b || '';
+            
+            // Also check the sensor data directly
+            if (!expression && sensor) {
+                expression = sensor.calibration_expression_b || '';
+            }
         } else if (outputIndex === 2) {
-            // Tertiary output (C)
-            offset = sensorConfig.calibrationOffsetC || 0;
-            scale = sensorConfig.calibrationSlopeC || 1;
-            expression = sensorConfig.calibrationExpressionC || '';
+            // Tertiary output (C) - use direct fields from backend
+            offset = sensorConfig.calibrationOffsetC || sensorConfig.calibration_offset_c || 0;
+            scale = sensorConfig.calibrationSlopeC || sensorConfig.calibration_slope_c || 1;
+            expression = sensorConfig.calibrationExpressionC || sensorConfig.calibration_expression_c || '';
+            
+            // Also check the sensor data directly
+            if (!expression && sensor) {
+                expression = sensor.calibration_expression_c || '';
+            }
         }
         
         // Determine what calibration is being used
@@ -2669,11 +2731,41 @@ window.handleTerminalKeypress = function handleTerminalKeypress(event) {
     }
 }
 
+// Encoding conversion functions
+function convertCommandByEncoding(command, encoding) {
+    switch (encoding) {
+        case 'text':
+            return command;
+        case 'ascii':
+            return command.split('').map(char => char.charCodeAt(0)).join(' ');
+        case 'hex':
+            return command.split('').map(char => char.charCodeAt(0).toString(16).padStart(2, '0')).join(' ');
+        case 'decimal':
+            return command.split('').map(char => char.charCodeAt(0)).join(' ');
+        default:
+            return command;
+    }
+}
+
+function getEncodingDisplayText(encoding) {
+    switch (encoding) {
+        case 'ascii':
+            return 'ASCII bytes';
+        case 'hex':
+            return 'hex bytes';
+        case 'decimal':
+            return 'decimal bytes';
+        default:
+            return 'text';
+    }
+}
+
 // Send a terminal command
 function sendTerminalCommand() {
     const protocol = document.getElementById('terminal-protocol').value;
     const pin = document.getElementById('terminal-pin').value;
     const command = document.getElementById('terminal-command').value.trim();
+    const encoding = document.getElementById('terminal-encoding').value;
     const i2cAddress = document.getElementById('terminal-i2c-address').value;
     
     if (!command) {
@@ -2692,8 +2784,16 @@ function sendTerminalCommand() {
         return;
     }
     
-    // Display the command in terminal
-    addTerminalOutput(`> ${command}`, 'command');
+    // Convert command based on encoding selection
+    const convertedCommand = convertCommandByEncoding(command, encoding);
+    const encodingDisplay = getEncodingDisplayText(encoding);
+    
+    // Display the command in terminal with encoding info
+    if (encoding === 'text') {
+        addTerminalOutput(`> ${command}`, 'command');
+    } else {
+        addTerminalOutput(`> ${command} (as ${encodingDisplay}: ${convertedCommand})`, 'command');
+    }
     
     // Handle special commands locally
     if (command.toLowerCase() === 'help') {
@@ -2710,7 +2810,9 @@ function sendTerminalCommand() {
     const payload = {
         protocol: protocol,
         pin: pin,
-        command: command,
+        command: convertedCommand, // Send the converted command
+        originalCommand: command,  // Keep original for reference
+        encoding: encoding,        // Include encoding info
         i2cAddress: i2cAddress
     };
     
