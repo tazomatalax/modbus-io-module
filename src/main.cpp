@@ -274,8 +274,25 @@ void processI2CQueue() {
             bool hasCommand = strlen(configuredSensors[op.sensorIndex].command) > 0;
             
             if (hasCommand) {
-                String command = String(configuredSensors[op.sensorIndex].command);
-                
+                // Sanitize command: remove control chars except explicit \r or \n
+                String rawCmd = String(configuredSensors[op.sensorIndex].command);
+                String command = "";
+                for (int i = 0; i < rawCmd.length(); i++) {
+                    char c = rawCmd[i];
+                    // Allow printable ASCII, or explicit \r/\n sequences
+                    if (c >= 32 && c <= 126) {
+                        command += c;
+                    } else if (c == '\\' && i + 1 < rawCmd.length()) {
+                        char next = rawCmd[i + 1];
+                        if (next == 'r' || next == 'n') {
+                            command += c;
+                            command += next;
+                            i++;
+                        }
+                    }
+                    // Ignore all other control chars
+                }
+
                 // Check if command is hex format (starts with 0x or contains only hex digits)
                 bool isHexCommand = command.startsWith("0x") || command.startsWith("0X");
                 if (!isHexCommand) {
@@ -291,18 +308,18 @@ void processI2CQueue() {
                         }
                     }
                 }
-                
+
                 if (isHexCommand) {
                     // Hex command format (e.g., "0x2C06" or "2C 06")
                     String cleanCmd = command;
                     cleanCmd.replace("0x", "");
                     cleanCmd.replace("0X", "");
                     cleanCmd.replace(" ", "");
-                    
+
                     logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "TX", 
                                     "CMD: " + command + " (HEX) (" + String(configuredSensors[op.sensorIndex].type) + ")", 
                                     String(configuredSensors[op.sensorIndex].name));
-                    
+
                     // Write hex command bytes
                     for (int i = 0; i < cleanCmd.length(); i += 2) {
                         if (i + 1 < cleanCmd.length()) {
@@ -316,7 +333,7 @@ void processI2CQueue() {
                     logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "TX", 
                                     "CMD: \"" + command + "\" (TEXT) (" + String(configuredSensors[op.sensorIndex].type) + ")", 
                                     String(configuredSensors[op.sensorIndex].name));
-                    
+
                     // Write text command as ASCII bytes
                     for (int i = 0; i < command.length(); i++) {
                         Wire.write((uint8_t)command[i]);
@@ -437,42 +454,51 @@ void processI2CQueue() {
                     }
                 } else if (strcmp(configuredSensors[op.sensorIndex].type, "EZO-PH") == 0 || 
                           strcmp(configuredSensors[op.sensorIndex].type, "EZO_PH") == 0) {
-                    // Handle both hyphen and underscore variants for compatibility
-                    // Atlas Scientific protocol: first byte is response code
+                    // Atlas Scientific EZO PH protocol: first byte is status
                     if (idx > 0) {
-                        uint8_t responseCode = (uint8_t)response[0];
-                        
-                        if (responseCode == 1) {
-                            // Success - parse data starting from byte 1
+                        uint8_t statusCode = (uint8_t)response[0];
+                        if (statusCode == 1) {
+                            // Success: parse ASCII data after status byte
                             String dataStr = "";
                             for (int j = 1; j < idx; j++) {
-                                if (response[j] >= 32 && response[j] <= 126) { // Printable ASCII only
-                                    dataStr += (char)response[j];
-                                }
+                                char c = response[j];
+                                if (c >= 32 && c <= 126) dataStr += c;
                             }
+                            dataStr.trim();
                             if (dataStr.length() > 0) {
                                 configuredSensors[op.sensorIndex].rawValue = dataStr.toFloat();
-                                logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "VAL", 
-                                                "pH: " + String(configuredSensors[op.sensorIndex].rawValue) + " (from: '" + dataStr + "')", 
-                                                String(configuredSensors[op.sensorIndex].name));
+                                // Apply calibration and update calibratedValue/modbusValue
+                                float calibratedValue = applyCalibration(configuredSensors[op.sensorIndex].rawValue, configuredSensors[op.sensorIndex]);
+                                configuredSensors[op.sensorIndex].calibratedValue = calibratedValue;
+                                configuredSensors[op.sensorIndex].modbusValue = (int)(calibratedValue * 100);
+                                logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "VAL", "EZO Success: '" + dataStr + "', Calibrated: " + String(calibratedValue), String(configuredSensors[op.sensorIndex].name));
                             } else {
                                 configuredSensors[op.sensorIndex].rawValue = -998.0;
+                                configuredSensors[op.sensorIndex].calibratedValue = 0.0;
+                                configuredSensors[op.sensorIndex].modbusValue = 0;
                                 logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "ERR", "EZO-PH: Empty data after success code", String(configuredSensors[op.sensorIndex].name));
                             }
-                        } else if (responseCode == 2) {
+                        } else if (statusCode == 254) {
+                            // Processing: retry up to 3 times with delay
+                            if (op.retryCount < 3) {
+                                op.retryCount++;
+                                delay(100); // Wait 100ms before retry
+                                op.state = BusOpState::READY_TO_READ;
+                                logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "WARN", "EZO-PH: Processing, retry " + String(op.retryCount), String(configuredSensors[op.sensorIndex].name));
+                                return; // Do not advance queue
+                            } else {
+                                configuredSensors[op.sensorIndex].rawValue = -996.0;
+                                logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "ERR", "EZO-PH: Processing timeout", String(configuredSensors[op.sensorIndex].name));
+                            }
+                        } else if (statusCode == 2) {
                             configuredSensors[op.sensorIndex].rawValue = -997.0;
                             logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "ERR", "EZO-PH: Syntax error", String(configuredSensors[op.sensorIndex].name));
-                        } else if (responseCode == 254) {
-                            configuredSensors[op.sensorIndex].rawValue = -996.0;
-                            logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "WARN", "EZO-PH: Still processing (increase delay)", String(configuredSensors[op.sensorIndex].name));
-                        } else if (responseCode == 255) {
+                        } else if (statusCode == 255) {
                             configuredSensors[op.sensorIndex].rawValue = -995.0;
                             logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "WARN", "EZO-PH: No data available", String(configuredSensors[op.sensorIndex].name));
                         } else {
                             configuredSensors[op.sensorIndex].rawValue = -994.0;
-                            logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "ERR", 
-                                            "EZO-PH: Unknown response code " + String(responseCode), 
-                                            String(configuredSensors[op.sensorIndex].name));
+                            logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "ERR", "EZO-PH: Unknown status " + String(statusCode), String(configuredSensors[op.sensorIndex].name));
                         }
                     } else {
                         configuredSensors[op.sensorIndex].rawValue = -993.0;
@@ -4064,20 +4090,42 @@ void handlePOSTSensorConfig(WiFiClient& client, String body) {
     auto fillDefaults = [](JsonObject& sensor) {
         const char* type = sensor["type"] | "";
         if (strcmp(type, "BME280") == 0) {
-            sensor["i2cAddress"] = 0x76;
+            if (!sensor.containsKey("i2cAddress") || (int)sensor["i2cAddress"] == 0) {
+                sensor["i2cAddress"] = 0x76;
+            }
             sensor["modbusRegister"] = 3;
-        } else if (strcmp(type, "EZO-PH") == 0) {
-            sensor["i2cAddress"] = 0x63;
+        } else if (strcmp(type, "EZO-PH") == 0 || strcmp(type, "EZO_PH") == 0) {
+            if (!sensor.containsKey("i2cAddress") || (int)sensor["i2cAddress"] == 0) {
+                sensor["i2cAddress"] = 0x63;
+            }
             sensor["modbusRegister"] = 4;
-        } else if (strcmp(type, "EZO-EC") == 0) {
-            sensor["i2cAddress"] = 0x64;
+            if (!sensor.containsKey("command") || String(sensor["command"] | "").length() == 0) {
+                sensor["command"] = "R";
+            }
+        } else if (strcmp(type, "EZO-EC") == 0 || strcmp(type, "EZO_EC") == 0) {
+            if (!sensor.containsKey("i2cAddress") || (int)sensor["i2cAddress"] == 0) {
+                sensor["i2cAddress"] = 0x64;
+            }
             sensor["modbusRegister"] = 5;
-        } else if (strcmp(type, "EZO-DO") == 0) {
-            sensor["i2cAddress"] = 0x61;
+            if (!sensor.containsKey("command") || String(sensor["command"] | "").length() == 0) {
+                sensor["command"] = "R";
+            }
+        } else if (strcmp(type, "EZO-DO") == 0 || strcmp(type, "EZO_DO") == 0) {
+            if (!sensor.containsKey("i2cAddress") || (int)sensor["i2cAddress"] == 0) {
+                sensor["i2cAddress"] = 0x61;
+            }
             sensor["modbusRegister"] = 6;
-        } else if (strcmp(type, "EZO-RTD") == 0) {
-            sensor["i2cAddress"] = 0x66;
+            if (!sensor.containsKey("command") || String(sensor["command"] | "").length() == 0) {
+                sensor["command"] = "R";
+            }
+        } else if (strcmp(type, "EZO-RTD") == 0 || strcmp(type, "EZO_RTD") == 0) {
+            if (!sensor.containsKey("i2cAddress") || (int)sensor["i2cAddress"] == 0) {
+                sensor["i2cAddress"] = 0x66;
+            }
             sensor["modbusRegister"] = 7;
+            if (!sensor.containsKey("command") || String(sensor["command"] | "").length() == 0) {
+                sensor["command"] = "R";
+            }
         } // Add more known types as needed
     };
 

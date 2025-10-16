@@ -1,0 +1,214 @@
+# EZO PH Sensor Polling – Modbus IO Module Firmware
+
+This document explains how EZO PH sensor polling is implemented in your Modbus IO Module firmware, including all relevant code sections and their roles in the overall sensor dataflow.
+
+---
+
+## 1. Sensor Configuration and Presets
+
+When the firmware loads sensor configuration (from `sensors.json` via LittleFS), it populates the `configuredSensors` array. The `applySensorPresets()` function ensures that any unset fields for known sensor types (including EZO PH) are filled with sensible defaults, but **does not override user settings**.
+
+```cpp
+void applySensorPresets() {
+    for (int i = 0; i < numConfiguredSensors; i++) {
+        if (!configuredSensors[i].enabled) continue;
+        if (strcmp(configuredSensors[i].type, "EZO-PH") == 0 ||
+            strcmp(configuredSensors[i].type, "EZO_PH") == 0) {
+            if (configuredSensors[i].i2cAddress == 0) configuredSensors[i].i2cAddress = 0x63;
+            if (strlen(configuredSensors[i].command) == 0) strcpy(configuredSensors[i].command, "R");
+            if (strlen(configuredSensors[i].protocol) == 0) strcpy(configuredSensors[i].protocol, "I2C");
+            if (configuredSensors[i].updateInterval == 0) configuredSensors[i].updateInterval = 5000;
+            if (configuredSensors[i].modbusRegister == 0) configuredSensors[i].modbusRegister = 10;
+            Serial.printf("Auto-configured EZO-PH sensor (address: 0x%02X, interval: %dms, register: %d)\n", 
+                         configuredSensors[i].i2cAddress, configuredSensors[i].updateInterval, configuredSensors[i].modbusRegister);
+        }
+        // ...other sensor types...
+    }
+}
+```
+
+---
+
+## 2. Polling Cadence and Queue Management
+
+The firmware uses a **unified queue system** for sensor polling. Every sensor is checked periodically in `updateBusQueues()`, and if it's time for a new reading, it is added to the appropriate queue.
+
+```cpp
+void updateBusQueues() {
+    for (int i = 0; i < numConfiguredSensors; i++) {
+        if (!configuredSensors[i].enabled) continue;
+        if (currentTime - configuredSensors[i].lastReadTime >= configuredSensors[i].updateInterval) {
+            if (strncmp(configuredSensors[i].protocol, "I2C", 3) == 0) {
+                enqueueBusOperation(i, "I2C");
+            }
+        }
+    }
+}
+```
+
+---
+
+## 3. I2C Queue Operation and Command Sending
+
+The `processI2CQueue()` function handles sending commands and reading responses for all I2C sensors, including EZO PH.
+
+### Sending the Command
+
+For EZO PH, the command is `"R"` (just the letter R, no carriage return for I2C). The code checks if the command is text or hex and sends it accordingly.
+
+```cpp
+if (hasCommand) {
+    String command = String(configuredSensors[op.sensorIndex].command);
+    // ...hex/text detection...
+    // For EZO PH, this is a text command:
+    for (int i = 0; i < command.length(); i++) {
+        if (command[i] == '\\' && i + 1 < command.length()) {
+            if (command[i + 1] == 'r') { Wire.write(13); i++; }
+            else if (command[i + 1] == 'n') { Wire.write(10); i++; }
+            else { Wire.write((uint8_t)command[i]); }
+        } else {
+            Wire.write((uint8_t)command[i]);
+        }
+    }
+}
+Wire.endTransmission();
+```
+
+### Delay Before Reading
+
+After sending the command, the firmware waits for the sensor to process the request. For EZO PH, this is typically 900ms (configurable via `delayBeforeRead`).
+
+```cpp
+if (strcmp(configuredSensors[sensorIndex].type, "EZO-PH") == 0 ||
+    strcmp(configuredSensors[sensorIndex].type, "EZO_PH") == 0) {
+    op.conversionTime = configuredSensors[sensorIndex].delayBeforeRead;
+    if (op.conversionTime <= 0) op.conversionTime = 900; // Default 900ms for EZO
+}
+```
+
+---
+
+## 4. Reading and Interpreting the Response
+
+After the delay, the firmware requests up to 32 bytes from the sensor. The EZO PH sensor returns a **status byte** followed by ASCII data.
+
+```cpp
+Wire.requestFrom((int)configuredSensors[op.sensorIndex].i2cAddress, 32);
+char response[32] = {0};
+int idx = 0;
+while(Wire.available() && idx < 31) {
+    uint8_t byte = Wire.read();
+    response[idx++] = byte;
+}
+response[idx] = '\0';
+
+// EZO sensors return status code as first byte
+uint8_t statusCode = (uint8_t)response[0];
+String cleanResponse = "";
+if (statusCode == 1) {
+    // Success - extract data (skip status byte)
+    for (int j = 1; j < idx; j++) {
+        char c = response[j];
+        if (c >= 32 && c <= 126 && c != 0) { cleanResponse += c; }
+    }
+    cleanResponse.trim();
+    logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "VAL", 
+        "EZO Success: \"" + cleanResponse + "\"", String(configuredSensors[op.sensorIndex].name));
+} else if (statusCode == 2) {
+    cleanResponse = "SYNTAX_ERROR";
+} else if (statusCode == 254) {
+    cleanResponse = "PROCESSING";
+} else if (statusCode == 255) {
+    cleanResponse = "NO_DATA";
+} else {
+    cleanResponse = "UNKNOWN_STATUS_" + String(statusCode);
+}
+strncpy(configuredSensors[op.sensorIndex].response, cleanResponse.c_str(), sizeof(configuredSensors[op.sensorIndex].response)-1);
+configuredSensors[op.sensorIndex].response[sizeof(configuredSensors[op.sensorIndex].response)-1] = '\0';
+```
+
+---
+
+## 5. Parsing and Calibrating the pH Value
+
+The ASCII response (after the status byte) is parsed as a float and calibrated using the user-provided or default calibration equation.
+
+```cpp
+if (strcmp(configuredSensors[op.sensorIndex].type, "EZO-PH") == 0 ||
+    strcmp(configuredSensors[op.sensorIndex].type, "EZO_PH") == 0) {
+    configuredSensors[op.sensorIndex].rawValue = atof(configuredSensors[op.sensorIndex].response);
+    float calibratedValue = applyCalibration(configuredSensors[op.sensorIndex].rawValue, configuredSensors[op.sensorIndex]);
+    configuredSensors[op.sensorIndex].calibratedValue = calibratedValue;
+    configuredSensors[op.sensorIndex].modbusValue = (int)(calibratedValue * 100);
+    logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "VAL", "pH: " + String(configuredSensors[op.sensorIndex].rawValue), String(configuredSensors[op.sensorIndex].name));
+}
+```
+
+---
+
+## 6. Modbus Register Mapping
+
+The calibrated value is mapped to the configured Modbus register for client access.
+
+```cpp
+void updateIOForClient(int clientIndex) {
+    for (int i = 0; i < numConfiguredSensors; i++) {
+        if (configuredSensors[i].enabled && configuredSensors[i].modbusRegister >= 0) {
+            modbusClients[clientIndex].server.inputRegisterWrite(configuredSensors[i].modbusRegister, configuredSensors[i].modbusValue);
+        }
+    }
+}
+```
+
+---
+
+## 7. Web UI and REST API Exposure
+
+The sensor readings, calibration, and configuration are exposed via REST endpoints (`/sensors/data`, `/iostatus`, `/sensors/config`) for the web UI.
+
+```cpp
+void sendJSONSensorData(WiFiClient& client) {
+    for (int i = 0; i < numConfiguredSensors; i++) {
+        if (configuredSensors[i].enabled) {
+            JsonObject sensor = sensorsArray.createNestedObject();
+            sensor["name"] = configuredSensors[i].name;
+            sensor["type"] = configuredSensors[i].type;
+            sensor["protocol"] = configuredSensors[i].protocol;
+            sensor["i2c_address"] = configuredSensors[i].i2cAddress;
+            sensor["modbus_register"] = configuredSensors[i].modbusRegister;
+            sensor["raw_value"] = configuredSensors[i].rawValue;
+            sensor["calibrated_value"] = configuredSensors[i].calibratedValue;
+            sensor["modbus_value"] = configuredSensors[i].modbusValue;
+        }
+    }
+}
+```
+
+---
+
+## 8. Diagnostics
+
+All I2C transactions, including EZO PH polling, are logged for diagnostics and can be monitored via the web UI terminal.
+
+```cpp
+void logI2CTransaction(int address, String direction, String data, String pin) {
+    // ...terminal logging logic...
+}
+```
+
+---
+
+## Summary of EZO PH Polling Flow
+
+1. **Configuration**: User sets up EZO PH sensor via web UI; firmware applies defaults only for unset fields.
+2. **Polling**: Sensor is polled at the configured interval; command `"R"` is sent over I2C.
+3. **Delay**: Firmware waits for the sensor to process the command (default 900ms).
+4. **Response**: Firmware reads the response, interprets the status byte, and extracts the pH value.
+5. **Calibration**: The raw pH value is calibrated using user or default settings.
+6. **Modbus Mapping**: Calibrated value is written to the configured Modbus register.
+7. **REST Exposure**: Sensor data is exposed via REST endpoints for the web UI.
+8. **Diagnostics**: All transactions are logged for debugging and monitoring.
+
+---
+
+**This design ensures robust, configurable, and standards-compliant polling of EZO PH sensors, with full integration into Modbus and web-based diagnostics.**
