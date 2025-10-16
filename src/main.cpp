@@ -47,7 +47,7 @@ void applySensorPresets() {
     for (int i = 0; i < numConfiguredSensors; i++) {
         if (!configuredSensors[i].enabled) continue;
         // Auto-configure based on sensor type (only if not already configured)
-        if (strcmp(configuredSensors[i].type, "EZO-PH") == 0) {
+            if (strcmp(configuredSensors[i].type, "EZO-PH") == 0 || strcmp(configuredSensors[i].type, "EZO_PH") == 0) {
             ezoPhCount++;
             if (ezoPhCount > 1) {
                 // Disable duplicate EZO-PH sensors
