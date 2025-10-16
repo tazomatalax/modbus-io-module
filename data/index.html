@@ -248,7 +248,17 @@
             <div class="terminal-command-area">
                 <div class="control-group">
                     <label for="terminal-command">Command</label>
-                    <input type="text" id="terminal-command" placeholder="Enter command..." onkeypress="handleTerminalKeypress(event)">
+                    <input type="text" id="terminal-command" placeholder="e.g., write R\r or write 82,13" onkeypress="handleTerminalKeypress(event)">
+                </div>
+                
+                <div class="control-group">
+                    <label for="terminal-encoding">Encoding</label>
+                    <select id="terminal-encoding">
+                        <option value="text">Text</option>
+                        <option value="ascii">ASCII Bytes</option>
+                        <option value="hex">Hex Bytes</option>
+                        <option value="decimal">Decimal Bytes</option>
+                    </select>
                 </div>
                 
                 <div class="terminal-buttons">
@@ -320,27 +330,23 @@
                         <optgroup label="I2C Sensors">
                             <option value="BME280">BME280 (Temperature, Humidity, Pressure)</option>
                             <option value="SHT30">SHT30 (Temperature, Humidity)</option>
-                            <option value="SIM_I2C_TEMPERATURE">Simulated I2C Temperature</option>
-                            <option value="SIM_I2C_HUMIDITY">Simulated I2C Humidity</option>
-                            <option value="SIM_I2C_PRESSURE">Simulated I2C Pressure</option>
+
                             <option value="EZO_PH">EZO-pH (pH Sensor)</option>
                             <option value="EZO_EC">EZO-EC (Conductivity)</option>
                             <option value="EZO_DO">EZO-DO (Dissolved Oxygen)</option>
                             <option value="EZO_RTD">EZO-RTD (Temperature)</option>
                         </optgroup>
                         <optgroup label="UART Sensors">
-                            <option value="SIM_UART_SENSOR">Simulated UART Sensor</option>
+
                         </optgroup>
                         <optgroup label="Analog Sensors">
-                            <option value="SIM_ANALOG_VOLTAGE">Simulated Analog Voltage</option>
-                            <option value="SIM_ANALOG_CURRENT">Simulated Analog Current</option>
+
                         </optgroup>
                         <optgroup label="One-Wire Sensors">
                             <option value="DS18B20">DS18B20 (Temperature)</option>
                         </optgroup>
                         <optgroup label="Digital Sensors">
-                            <option value="SIM_DIGITAL_SWITCH">Simulated Digital Switch</option>
-                            <option value="SIM_DIGITAL_COUNTER">Simulated Digital Counter</option>
+
                         </optgroup>
                     </select>
                 </div>
@@ -373,7 +379,7 @@
                             <div class="form-group">
                                 <label for="sensor-i2c-address">I2C Address (Hex)</label>
                                 <input type="text" id="sensor-i2c-address" pattern="^(0x)?[0-9A-Fa-f]{1,2}$" placeholder="0x48" required>
-                                <small class="form-help">Use 0x00 for simulated sensors</small>
+
                             </div>
                         </div>
                     </div>

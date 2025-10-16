@@ -163,8 +163,7 @@ window.updateSensorTableBody = function updateSensorTableBody() {
     const tableBody = document.getElementById('sensor-table-body');
     if (!tableBody) return;
     tableBody.innerHTML = window.sensorConfigData.map((sensor, index) => {
-        const i2cAddress = sensor.type && sensor.type.startsWith('SIM_') ?
-            (sensor.i2cAddress === 0 ? 'Simulated' : `0x${sensor.i2cAddress.toString(16).toUpperCase().padStart(2, '0')}`) :
+        const i2cAddress =
             (sensor.i2cAddress ? `0x${sensor.i2cAddress.toString(16).toUpperCase().padStart(2, '0')}` : 'N/A');
         const enabledClass = sensor.enabled ? 'sensor-enabled' : 'sensor-disabled';
         const enabledText = sensor.enabled ? 'Yes' : 'No';
@@ -176,7 +175,7 @@ window.updateSensorTableBody = function updateSensorTableBody() {
                 <td>${sensor.name}</td>
                 <td>${sensor.type}</td>
                 <td>${i2cAddress}</td>
-                <td>${sensor.modbusRegister || 'N/A'}</td>
+                <td>${sensor.type === 'SHT30' && sensor.modbusRegister ? `${sensor.modbusRegister}, ${sensor.modbusRegister + 1}` : (sensor.modbusRegister || 'N/A')}</td>
                 <td class="${enabledClass}">${enabledText}</td>
                 <td class="${calibrationClass}">${calibrationText}</td>
                 <td>
@@ -447,14 +446,6 @@ window.updateSensorTypeOptions = function updateSensorTypeOptions() {
                 { value: 'GENERIC_I2C', text: 'Generic I2C Sensor' }
             ]
         });
-        optgroups.push({
-            label: 'Simulated I2C Sensors',
-            options: [
-                { value: 'SIM_I2C_TEMPERATURE', text: 'Simulated I2C Temperature' },
-                { value: 'SIM_I2C_HUMIDITY', text: 'Simulated I2C Humidity' },
-                { value: 'SIM_I2C_PRESSURE', text: 'Simulated I2C Pressure' }
-            ]
-        });
     } else if (protocolType === 'UART') {
         optgroups.push({
             label: 'Real UART Sensors',
@@ -464,13 +455,6 @@ window.updateSensorTypeOptions = function updateSensorTypeOptions() {
                 { value: 'ASCII_SENSOR', text: 'ASCII Text Sensor' },
                 { value: 'BINARY_SENSOR', text: 'Binary Protocol Sensor' },
                 { value: 'GENERIC_UART', text: 'Generic UART Device' }
-            ]
-        });
-        optgroups.push({
-            label: 'Simulated UART Sensors',
-            options: [
-                { value: 'SIM_UART_TEMPERATURE', text: 'Simulated UART Temperature' },
-                { value: 'SIM_UART_FLOW', text: 'Simulated UART Flow Meter' }
             ]
         });
     } else if (protocolType === 'Analog Voltage') {
@@ -484,13 +468,6 @@ window.updateSensorTypeOptions = function updateSensorTypeOptions() {
                 { value: 'ANALOG_CUSTOM', text: 'Custom Analog Input' }
             ]
         });
-        optgroups.push({
-            label: 'Simulated Analog Sensors',
-            options: [
-                { value: 'SIM_ANALOG_VOLTAGE', text: 'Simulated Analog Voltage' },
-                { value: 'SIM_ANALOG_CURRENT', text: 'Simulated Analog Current' }
-            ]
-        });
     } else if (protocolType === 'One-Wire') {
         optgroups.push({
             label: 'Real One-Wire Sensors',
@@ -499,12 +476,6 @@ window.updateSensorTypeOptions = function updateSensorTypeOptions() {
                 { value: 'DS18S20', text: 'DS18S20 Temperature Sensor' },
                 { value: 'DS1822', text: 'DS1822 Temperature Sensor' },
                 { value: 'GENERIC_ONEWIRE', text: 'Generic One-Wire Device' }
-            ]
-        });
-        optgroups.push({
-            label: 'Simulated One-Wire Sensors',
-            options: [
-                { value: 'SIM_ONEWIRE_TEMP', text: 'Simulated One-Wire Temperature' }
             ]
         });
     } else if (protocolType === 'Digital Counter') {
@@ -2110,6 +2081,13 @@ window.updateIOStatus = function updateIOStatus() {
             consecutiveErrors++;
             console.error('Error fetching IO status:', error);
             
+            // Don't show errors immediately after config save - device might be processing
+            const timeSinceLastSuccess = Date.now() - lastSuccessfulUpdate;
+            if (timeSinceLastSuccess < 30000) { // Give 30 seconds grace period after config changes
+                console.log('Suppressing error notification - recent config change');
+                return;
+            }
+            
             // Only show toast on first error
             if (consecutiveErrors === 1) {
                 showToast('Connection issue detected', 'warning');
@@ -2404,9 +2382,12 @@ window.saveSensorConfig = function saveSensorConfig() {
             
             // Immediately refresh the Status IO to show new sensors
             setTimeout(() => {
-                updateIOStatus();
-                loadSensorConfig(); // Refresh the sensor config list too
-            }, 500); // Quick delay to ensure backend has processed
+                loadSensorConfig(); // Refresh the sensor config list first
+                // Wait a bit longer for the device to process the new configuration
+                setTimeout(() => {
+                    updateIOStatus();
+                }, 1000); // Give more time for backend processing
+            }, 500);
         } else {
             showToast('Failed to save sensor configuration: ' + (data.message || 'Unknown error'), 'error', false, 5000);
         }
@@ -2669,12 +2650,40 @@ window.handleTerminalKeypress = function handleTerminalKeypress(event) {
     }
 }
 
+// Convert command based on selected encoding
+function convertCommandEncoding(command, encoding) {
+    // First process escape sequences
+    const processedCmd = processEscapeSequences(command);
+    
+    switch (encoding) {
+        case 'text':
+            return processedCmd;
+        case 'ascii':
+            return processedCmd.split('').map(char => char.charCodeAt(0).toString()).join(',');
+        case 'hex':
+            return processedCmd.split('').map(char => char.charCodeAt(0).toString(16).padStart(2, '0')).join(',');
+        case 'decimal':
+            return processedCmd.split('').map(char => char.charCodeAt(0).toString()).join(',');
+        default:
+            return processedCmd;
+    }
+}
+
+// Handle escape sequences in text commands
+function processEscapeSequences(command) {
+    return command.replace(/\\r/g, '\r')
+                 .replace(/\\n/g, '\n')
+                 .replace(/\\t/g, '\t')
+                 .replace(/\\\\/g, '\\');
+}
+
 // Send a terminal command
 function sendTerminalCommand() {
     const protocol = document.getElementById('terminal-protocol').value;
     const pin = document.getElementById('terminal-pin').value;
     const command = document.getElementById('terminal-command').value.trim();
     const i2cAddress = document.getElementById('terminal-i2c-address').value;
+    const encoding = document.getElementById('terminal-encoding').value;
     
     if (!command) {
         addTerminalOutput('Error: No command entered', 'error');
@@ -2692,8 +2701,33 @@ function sendTerminalCommand() {
         return;
     }
     
-    // Display the command in terminal
-    addTerminalOutput(`> ${command}`, 'command');
+    // Convert command based on encoding
+    let processedCommand = command;
+    let displayCommand = command;
+    
+    if (protocol === 'i2c' && encoding !== 'text') {
+        // For I2C write commands, convert based on encoding
+        if (command.toLowerCase().startsWith('write')) {
+            // Extract the data part after "write "
+            const parts = command.split(' ');
+            if (parts.length > 1) {
+                const dataToWrite = parts.slice(1).join(' ');
+                const convertedData = convertCommandEncoding(dataToWrite, encoding);
+                processedCommand = `write ${convertedData}`;
+                displayCommand = `${command} [${encoding}: ${convertedData}]`;
+            }
+        } else {
+            // For other commands, convert the entire command
+            processedCommand = convertCommandEncoding(processEscapeSequences(command), encoding);
+            displayCommand = `${command} [${encoding}: ${processedCommand}]`;
+        }
+    } else if (encoding === 'text') {
+        // Process escape sequences for text commands
+        processedCommand = processEscapeSequences(command);
+    }
+    
+    // Display the command in terminal with encoding info
+    addTerminalOutput(`> ${displayCommand}`, 'command');
     
     // Handle special commands locally
     if (command.toLowerCase() === 'help') {
@@ -2710,8 +2744,9 @@ function sendTerminalCommand() {
     const payload = {
         protocol: protocol,
         pin: pin,
-        command: command,
-        i2cAddress: i2cAddress
+        command: processedCommand,
+        i2cAddress: i2cAddress,
+        encoding: encoding
     };
     
     fetch('/terminal/command', {
@@ -2908,6 +2943,17 @@ SYSTEM:
   reset          - Restart system
   info           - Hardware details
 
+ENCODING OPTIONS:
+  Text           - Send as-is (supports \\r, \\n escape sequences)
+  ASCII Bytes    - Convert to comma-separated ASCII values
+  Hex Bytes      - Convert to comma-separated hex values
+  Decimal Bytes  - Convert to comma-separated decimal values
+
+Examples:
+  Text: "R\\r" -> sends R + carriage return
+  ASCII: "R\\r" -> sends "82,13"
+  Hex: "R\\r" -> sends "52,0d"
+
 General:
   help           - Show this help
   clear          - Clear terminal
@@ -2922,6 +2968,30 @@ document.addEventListener('DOMContentLoaded', function() {
     loadSensorConfig();
     
     updateTerminalInterface();
+    
+    // Add encoding selector event listener
+    const encodingSelect = document.getElementById('terminal-encoding');
+    const commandInput = document.getElementById('terminal-command');
+    
+    if (encodingSelect && commandInput) {
+        encodingSelect.addEventListener('change', function() {
+            const encoding = this.value;
+            switch (encoding) {
+                case 'text':
+                    commandInput.placeholder = 'e.g., write R\\r or Cal,mid,7.00\\r';
+                    break;
+                case 'ascii':
+                    commandInput.placeholder = 'e.g., write R\\r (converts to 82,13)';
+                    break;
+                case 'hex':
+                    commandInput.placeholder = 'e.g., write R\\r (converts to 52,0d)';
+                    break;
+                case 'decimal':
+                    commandInput.placeholder = 'e.g., write R\\r (converts to 82,13)';
+                    break;
+            }
+        });
+    }
     
     // Add event listeners for byte extraction controls
     const startByteInput = document.getElementById('data-start-byte');

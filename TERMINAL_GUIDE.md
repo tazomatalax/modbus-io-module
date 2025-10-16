@@ -61,6 +61,14 @@ Response: AI1 - Pin 27, Range: 0-3300mV, Resolution: 12-bit
 - `probe` - Check if specific device exists at address
 - `read <register>` - Read from device register
 - `write <register> <data>` - Write data to device register
+- `write <byte1>,<byte2>,...` - Write comma-separated byte values (for EZO sensors)
+
+**Encoding Options:**
+The terminal now includes an encoding dropdown that automatically converts text commands to different formats:
+- **Text** - Send commands as-is (supports \r, \n escape sequences)
+- **ASCII Bytes** - Convert to comma-separated ASCII decimal values  
+- **Hex Bytes** - Convert to comma-separated hexadecimal values
+- **Decimal Bytes** - Convert to comma-separated decimal values
 
 **I2C Address Format:**
 - Decimal: 72
@@ -81,6 +89,16 @@ Response: Register 0x0 = 0x25 (37)
 
 Protocol: I2C, Address: 0x48, Command: write 1 128
 Response: Wrote 0x80 to register 0x1
+
+# EZO Sensor Commands with Encoding:
+Protocol: I2C, Address: 0x63, Encoding: Text, Command: write R
+Response: Wrote 2 bytes: [82,13] to 0x63
+
+Protocol: I2C, Address: 0x63, Encoding: ASCII, Command: write R
+Response: Wrote 2 bytes: [82,13] to 0x63
+
+Protocol: I2C, Address: 0x63, Encoding: Hex, Command: write R
+Response: Wrote 2 bytes: [82,13] to 0x63
 ```
 
 ### 4. UART Communication
@@ -346,6 +364,8 @@ Common error responses and their meanings:
 3. **Watch Mode**: Perfect for real-time debugging and monitoring
 4. **I2C Addresses**: Can be entered in decimal (72) or hex (0x48) format
 5. **Persistent Settings**: Digital I/O configurations (pullup, invert, latch) persist until device reset
+6. **Encoding Dropdown**: Use the encoding dropdown for easy EZO sensor commands - type readable text like "R\r" and let the system convert to ASCII bytes automatically
+7. **EZO Commands**: Common EZO commands include "R\r" (read), "Cal,mid,7.00\r" (calibrate), "Status\r" (status)
 
 ## Troubleshooting
 
