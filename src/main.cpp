@@ -1319,6 +1319,39 @@ void setup() {
         Serial.println("LittleFS mounted successfully");
     }
 
+    // Debug: dump sensors file existence and a short preview to help troubleshoot persistence
+    Serial.println("Checking sensors file on filesystem...");
+    auto dumpSensorsFile = [&]() {
+        if (!LittleFS.exists(SENSORS_FILE)) {
+            Serial.println("Sensors file does not exist on LittleFS");
+            return;
+        }
+        File sf = LittleFS.open(SENSORS_FILE, "r");
+        if (!sf) {
+            Serial.println("Failed to open sensors file for reading");
+            return;
+        }
+        size_t sz = sf.size();
+        Serial.printf("Sensors file exists, size=%u bytes\n", (unsigned)sz);
+        const size_t previewSize = min((size_t)1024, sz);
+        Serial.println("-- Begin sensors.json preview --");
+        char buf[256];
+        size_t remaining = previewSize;
+        while (remaining > 0) {
+            size_t toRead = min((size_t)sizeof(buf)-1, remaining);
+            int r = sf.readBytes(buf, toRead);
+            buf[r] = '\0';
+            Serial.print(buf);
+            remaining -= r;
+            if (r == 0) break;
+        }
+        Serial.println("\n-- End preview --");
+        sf.close();
+    };
+
+    delay(200);
+    dumpSensorsFile();
+
     Serial.println("Loading sensor configuration...");
     delay(500);
     loadSensorConfig();
@@ -2634,7 +2667,169 @@ void loadSensorConfig() {
     // Initialize sensors array
     numConfiguredSensors = 0;
     memset(configuredSensors, 0, sizeof(configuredSensors));
-    // After loading sensors.json into configuredSensors[] (if implemented)
+
+    if (!LittleFS.exists(SENSORS_FILE)) {
+        Serial.println("No sensors file found on LittleFS");
+        return;
+    }
+
+    File file = LittleFS.open(SENSORS_FILE, "r");
+    if (!file) {
+        Serial.println("Failed to open sensors file");
+        return;
+    }
+
+    size_t size = file.size();
+    if (size == 0) {
+        Serial.println("Sensors file is empty");
+        file.close();
+        return;
+    }
+
+    // Parse JSON
+    StaticJsonDocument<8192> doc; // generous buffer for sensor configs
+    DeserializationError err = deserializeJson(doc, file);
+    file.close();
+    if (err) {
+        Serial.printf("Failed to parse sensors JSON: %s\n", err.c_str());
+        return;
+    }
+
+    if (!doc.containsKey("sensors") || !doc["sensors"].is<JsonArray>()) {
+        Serial.println("sensors array missing or invalid in JSON");
+        return;
+    }
+
+    JsonArray sensorsArray = doc["sensors"].as<JsonArray>();
+    Serial.printf("Found %u sensors in file\n", (unsigned)sensorsArray.size());
+
+    for (JsonObject sensor : sensorsArray) {
+        if (numConfiguredSensors >= MAX_SENSORS) break;
+
+        // Mirror the POST parsing logic to populate SensorConfig
+        SensorConfig &cfg = configuredSensors[numConfiguredSensors];
+        cfg.enabled = sensor["enabled"] | false;
+        const char* name = sensor["name"] | "";
+        strncpy(cfg.name, name, sizeof(cfg.name)-1);
+        cfg.name[sizeof(cfg.name)-1] = '\0';
+
+        const char* type = sensor["type"] | "";
+        strncpy(cfg.type, type, sizeof(cfg.type)-1);
+        cfg.type[sizeof(cfg.type)-1] = '\0';
+
+        const char* protocol = sensor["protocol"] | "";
+        strncpy(cfg.protocol, protocol, sizeof(cfg.protocol)-1);
+        cfg.protocol[sizeof(cfg.protocol)-1] = '\0';
+
+        cfg.i2cAddress = sensor["i2cAddress"] | 0;
+        cfg.modbusRegister = sensor["modbusRegister"] | 0;
+
+        // command may be string or object
+        const char* command = "";
+        int delayBeforeRead = 0;
+        if (sensor.containsKey("command") && sensor["command"].is<const char*>()) {
+            command = sensor["command"] | "";
+        } else if (sensor.containsKey("command") && sensor["command"].is<JsonObject>()) {
+            JsonObject cmdObj = sensor["command"];
+            command = cmdObj["command"] | "";
+            delayBeforeRead = cmdObj["waitTime"] | 0;
+        }
+        strncpy(cfg.command, command, sizeof(cfg.command)-1);
+        cfg.command[sizeof(cfg.command)-1] = '\0';
+
+        cfg.updateInterval = sensor["updateInterval"] | sensor["pollingFrequency"] | 5000;
+        cfg.delayBeforeRead = sensor["delayBeforeRead"] | delayBeforeRead;
+
+        // Pins
+        cfg.sdaPin = sensor["sdaPin"] | -1;
+        cfg.sclPin = sensor["sclPin"] | -1;
+        cfg.dataPin = sensor["dataPin"] | -1;
+        cfg.uartTxPin = sensor["uartTxPin"] | -1;
+        cfg.uartRxPin = sensor["uartRxPin"] | -1;
+        cfg.analogPin = sensor["analogPin"] | -1;
+        cfg.oneWirePin = sensor["oneWirePin"] | -1;
+        cfg.digitalPin = sensor["digitalPin"] | -1;
+
+        const char* owCommand = sensor["oneWireCommand"] | "0x44";
+        strncpy(cfg.oneWireCommand, owCommand, sizeof(cfg.oneWireCommand)-1);
+        cfg.oneWireCommand[sizeof(cfg.oneWireCommand)-1] = '\0';
+        cfg.oneWireInterval = sensor["oneWireInterval"] | 5;
+        cfg.oneWireConversionTime = sensor["oneWireConversionTime"] | 750;
+        cfg.oneWireAutoMode = sensor["oneWireAutoMode"] | true;
+
+        // Calibration nested or flat
+        if (sensor.containsKey("calibration") && sensor["calibration"].is<JsonObject>()) {
+            JsonObject cal = sensor["calibration"];
+            cfg.calibrationOffset = cal["offset"] | 0.0;
+            cfg.calibrationSlope = cal["scale"] | 1.0;
+            const char* expr = cal["expression"] | "";
+            strncpy(cfg.calibrationExpression, expr, sizeof(cfg.calibrationExpression)-1);
+            cfg.calibrationExpression[sizeof(cfg.calibrationExpression)-1] = '\0';
+        } else {
+            cfg.calibrationOffset = sensor["calibrationOffset"] | 0.0;
+            cfg.calibrationSlope = sensor["calibrationSlope"] | 1.0;
+            const char* expr = sensor["calibrationExpression"] | "";
+            strncpy(cfg.calibrationExpression, expr, sizeof(cfg.calibrationExpression)-1);
+            cfg.calibrationExpression[sizeof(cfg.calibrationExpression)-1] = '\0';
+        }
+
+        // Multi-output calibration
+        cfg.calibrationOffsetB = sensor["calibrationOffsetB"] | 0.0;
+        cfg.calibrationSlopeB = sensor["calibrationSlopeB"] | 1.0;
+        cfg.calibrationOffsetC = sensor["calibrationOffsetC"] | 0.0;
+        cfg.calibrationSlopeC = sensor["calibrationSlopeC"] | 1.0;
+        const char* exprB = sensor["calibrationExpressionB"] | "";
+        strncpy(cfg.calibrationExpressionB, exprB, sizeof(cfg.calibrationExpressionB)-1);
+        cfg.calibrationExpressionB[sizeof(cfg.calibrationExpressionB)-1] = '\0';
+        const char* exprC = sensor["calibrationExpressionC"] | "";
+        strncpy(cfg.calibrationExpressionC, exprC, sizeof(cfg.calibrationExpressionC)-1);
+        cfg.calibrationExpressionC[sizeof(cfg.calibrationExpressionC)-1] = '\0';
+
+        // Data parsing
+        if (sensor.containsKey("dataParsing") && sensor["dataParsing"].is<JsonObject>()) {
+            JsonObject dp = sensor["dataParsing"];
+            const char* method = dp["method"] | "raw";
+            strncpy(cfg.parsingMethod, method, sizeof(cfg.parsingMethod)-1);
+            cfg.parsingMethod[sizeof(cfg.parsingMethod)-1] = '\0';
+            StaticJsonDocument<256> tmp;
+            tmp.set(dp);
+            String s; serializeJson(tmp, s);
+            strncpy(cfg.parsingConfig, s.c_str(), sizeof(cfg.parsingConfig)-1);
+            cfg.parsingConfig[sizeof(cfg.parsingConfig)-1] = '\0';
+        } else {
+            strncpy(cfg.parsingMethod, "raw", sizeof(cfg.parsingMethod)-1);
+            cfg.parsingMethod[sizeof(cfg.parsingMethod)-1] = '\0';
+            cfg.parsingConfig[0] = '\0';
+        }
+
+        if (sensor.containsKey("dataParsingB") && sensor["dataParsingB"].is<JsonObject>()) {
+            JsonObject dp = sensor["dataParsingB"];
+            const char* method = dp["method"] | "raw";
+            strncpy(cfg.parsingMethodB, method, sizeof(cfg.parsingMethodB)-1);
+            cfg.parsingMethodB[sizeof(cfg.parsingMethodB)-1] = '\0';
+            StaticJsonDocument<256> tmp;
+            tmp.set(dp);
+            String s; serializeJson(tmp, s);
+            strncpy(cfg.parsingConfigB, s.c_str(), sizeof(cfg.parsingConfigB)-1);
+            cfg.parsingConfigB[sizeof(cfg.parsingConfigB)-1] = '\0';
+        } else {
+            strncpy(cfg.parsingMethodB, "raw", sizeof(cfg.parsingMethodB)-1);
+            cfg.parsingMethodB[sizeof(cfg.parsingMethodB)-1] = '\0';
+            cfg.parsingConfigB[0] = '\0';
+        }
+
+        // Runtime init
+        cfg.cmdPending = false;
+        cfg.lastCmdSent = 0;
+        cfg.response[0] = '\0';
+        cfg.calibrationData[0] = '\0';
+
+        numConfiguredSensors++;
+    }
+
+    Serial.printf("Loaded %d sensors from filesystem\n", numConfiguredSensors);
+
+    // Apply presets after loading
     applySensorPresets();
 }
 
