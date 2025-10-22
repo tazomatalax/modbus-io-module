@@ -1,12 +1,3 @@
-// ...existing code...
-
-
-// ...existing code...
-
-
-// ...existing code...
-
-
 #include "sys_init.h"
 
 // Sensor reading functions

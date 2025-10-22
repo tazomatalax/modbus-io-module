@@ -1,9 +1,42 @@
-.pio
+# PlatformIO
+.pio/
+.platformio/
+
+# VSCode
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/settings.json
 .vscode/tasks.json
 .vscode/extensions.json
+
+# Agent/Development
 .claude
-.git
+
+# Build artifacts
+*.o
+*.d
+*.elf
+*.bin
+*.hex
+
+# IDE
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Dependencies
+node_modules
 *node_modules
+
+# Environment
+.env
+.env.local
+
+# Temp files
+*.tmp
+*.log
