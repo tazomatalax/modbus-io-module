@@ -1,6 +1,19 @@
-# Modbus TCP IO Module
+# Modbus TCP IO Module - Enhanced
 
-A flexible Ethernet-based Modbus TCP IO module built on the Wiznet W5500-EVB-Pico board (RP2040). Features a modern web interface for configuration and real-time monitoring with support for configurable I2C sensors.
+A flexible Ethernet-based Modbus TCP IO module built on the Wiznet W5500-EVB-Pico board (RP2040). Features a modern web interface for configuration and real-time monitoring with support for multiple sensor types, mathematical calibration, and built-in diagnostic tools.
+
+## 🆕 Latest Enhancements (v2.0.0 - September 9, 2025)
+
+### Multi-Sensor Type Support
+- **I2C, UART, Digital, and Analog** sensor types
+- **Mathematical Formula Conversion**: Custom calibration expressions (e.g., `(x * 1.8) + 32`)
+- **Engineering Units**: Display converted values with proper units (°C, %, psi, etc.)
+- **Terminal Interface**: Built-in diagnostics with network and sensor commands
+
+### Diagnostic Terminal
+- **Network Commands**: `ipconfig`, `arp`, `ping`, `tracert`
+- **Sensor Commands**: `sensor list`, `sensor read <id>`, `sensor info <id>`, `sensor test <id>`
+- **Real-time Troubleshooting**: Immediate feedback for system diagnostics
 
 ![W5500-EVB-PoE-Pico Pinout](images/W5500-EVB-PoE-Pico-pinout.png)
 
@@ -173,14 +186,17 @@ A flexible Ethernet-based Modbus TCP IO module built on the Wiznet W5500-EVB-Pic
 
 1. Power up the board via USB or PoE
 2. Connect to network via Ethernet
-3. Access web interface via IP address
-4. Configure network settings if needed
-5. Configure IO settings as required:
-   - Set digital input pullup, inversion, and latching options
-   - Configure digital output initial state and inversion options
-6. Control digital outputs via web interface or Modbus
-7. Monitor inputs and outputs in real-time
-8. Reset latched inputs via web interface or by writing to Modbus coils 100-107
+3. **Upload LittleFS file system image:**
+  - In PlatformIO, use the command palette and select `PlatformIO: Upload File System Image` to upload the contents of the `data/` directory (web assets) to the device.
+  - This step is required for the web interface to function. If skipped, you will get a "404 Not Found" error when accessing the web page.
+4. Access web interface via IP address
+5. Configure network settings if needed
+6. Configure IO settings as required:
+  - Set digital input pullup, inversion, and latching options
+  - Configure digital output initial state and inversion options
+7. Control digital outputs via web interface or Modbus
+8. Monitor inputs and outputs in real-time
+9. Reset latched inputs via web interface or by writing to Modbus coils 100-107
 
 ## Debugging
 - Serial debug output (115200 baud)

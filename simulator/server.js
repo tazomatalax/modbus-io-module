@@ -37,23 +37,10 @@ function injectSimulatorContent(html) {
           <!-- Sensor Controls -->
           <div class="sim-section">
             <h3>I2C Sensors</h3>
-            <div class="sim-control-item">
-              <label class="switch-label">
-                <input type="checkbox" id="sim-sensors-auto" checked>
-                <span class="switch-text">Auto Mode</span>
-              </label>
-            </div>
-            <div id="sim-sensor-manual" style="display: none;">
-              <div class="form-group">
-                <label for="sim-temp">Temperature (°C)</label>
-                <input type="number" id="sim-temp" step="0.1" value="22.5" min="-40" max="100">
-              </div>
-              <div class="form-group">
-                <label for="sim-humidity">Humidity (%)</label>
-                <input type="number" id="sim-humidity" step="0.1" value="45.0" min="0" max="100">
-              </div>
-              <button onclick="updateSensorValues()" class="action-button">Update Sensors</button>
-            </div>
+            <p style="font-size: 0.9em; color: #666; margin: 10px 0;">
+              I2C sensor simulation is now controlled through the sensor configuration interface. 
+              Add simulated sensors using the "Add Sensor" button and select simulated sensor types.
+            </p>
           </div>
           
           <!-- Digital Input Controls -->
@@ -132,17 +119,11 @@ function injectSimulatorContent(html) {
     // Load current simulation state
     fetch('/simulate/status').then(r => r.ok ? r.json() : null).then(status => {
       if (status) {
-        // Set mode toggles
-        document.getElementById('sim-sensors-auto').checked = (status.sensorsMode === 'auto');
+        // Set mode toggles for remaining controls
         document.getElementById('sim-di-auto').checked = (status.diMode === 'auto');
         document.getElementById('sim-ai-auto').checked = (status.aiMode === 'auto');
         
-        // Set manual control values
-        if (status.sensors) {
-          document.getElementById('sim-temp').value = status.sensors.temperature.toFixed(1);
-          document.getElementById('sim-humidity').value = status.sensors.humidity.toFixed(1);
-        }
-        
+        // Set manual control values for remaining controls
         if (status.ai) {
           document.getElementById('sim-ai1').value = status.ai[0] || 0;
           document.getElementById('sim-ai2').value = status.ai[1] || 0;
@@ -162,12 +143,7 @@ function injectSimulatorContent(html) {
       }
     }).catch(() => {});
     
-    // Auto/Manual mode toggles
-    document.getElementById('sim-sensors-auto').addEventListener('change', function() {
-      updateManualControlsVisibility();
-      updateSimStatus();
-    });
-    
+    // Auto/Manual mode toggles for remaining controls
     document.getElementById('sim-di-auto').addEventListener('change', function() {
       updateManualControlsVisibility();
       updateSimStatus();
@@ -180,8 +156,6 @@ function injectSimulatorContent(html) {
   }
   
   function updateManualControlsVisibility() {
-    document.getElementById('sim-sensor-manual').style.display = 
-      document.getElementById('sim-sensors-auto').checked ? 'none' : 'block';
     document.getElementById('sim-di-manual').style.display = 
       document.getElementById('sim-di-auto').checked ? 'none' : 'block';
     document.getElementById('sim-ai-manual').style.display = 
@@ -189,38 +163,14 @@ function injectSimulatorContent(html) {
   }
   
   function updateSimStatus() {
-    const sensorsMode = document.getElementById('sim-sensors-auto').checked ? 'Auto' : 'Manual';
     const diMode = document.getElementById('sim-di-auto').checked ? 'Auto' : 'Manual';
     const aiMode = document.getElementById('sim-ai-auto').checked ? 'Auto' : 'Manual';
     
     document.getElementById('sim-status').innerHTML = 
-      'Sensors: ' + sensorsMode + '<br>' +
+      'Sensors: Controlled by sensor config<br>' +
       'DI: ' + diMode + '<br>' +
       'AI: ' + aiMode;
   }
-  
-  // Global functions for button handlers
-  window.updateSensorValues = function() {
-    const temp = parseFloat(document.getElementById('sim-temp').value);
-    const humidity = parseFloat(document.getElementById('sim-humidity').value);
-    
-    fetch('/simulate/sensors', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        mode: 'manual',
-        temperature: temp,
-        humidity: humidity
-      })
-    }).then(response => response.json())
-      .then(data => {
-        if (data.success && window.showToast) {
-          window.showToast('Sensors updated: ' + temp + '°C, ' + humidity + '%', 'success');
-        }
-      }).catch(err => {
-        if (window.showToast) window.showToast('Error updating sensors', 'error');
-      });
-  };
   
   window.updateDigitalInputs = function() {
     const diValues = [];
@@ -275,11 +225,8 @@ function injectSimulatorContent(html) {
     initSimControls();
   }
   
-  // Also set auto modes back to auto when they're re-enabled
+  // Also set auto modes back to auto when they're re-enabled for remaining controls
   setInterval(function() {
-    if (document.getElementById('sim-sensors-auto').checked) {
-      fetch('/simulate/sensors', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'auto' }) }).catch(() => {});
-    }
     if (document.getElementById('sim-di-auto').checked) {
       fetch('/simulate/di', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'auto' }) }).catch(() => {});
     }
@@ -364,7 +311,7 @@ const state = {
     dInRaw: Array(8).fill(false),
     dInLatched: Array(8).fill(false),
     dOut: Array(8).fill(false),
-    aIn: [1650, 1200, 800], // Realistic mid-range values when simulation is off
+    aIn: [0, 0, 0], // No analog values when no sensors configured
     temperature: 22.5,      // Room temperature default
     humidity: 45.0,         // Typical indoor humidity
     pressure: 1013.25,
@@ -534,6 +481,11 @@ function getSensorData(sensor) {
   
   const sensorTypeLower = sensor.type.toLowerCase();
   
+  // Check if this is a simulated sensor type
+  if (sensor.type.startsWith('SIM_')) {
+    return getSimulatedSensorData(sensor);
+  }
+  
   // Temperature sensors
   if (sensorTypeLower.includes('temperature') || 
       sensorTypeLower.includes('bmp') || 
@@ -577,6 +529,137 @@ function getSensorData(sensor) {
   }
   
   return null;
+}
+
+// Helper function to get simulated sensor data for SIM_ sensors
+function getSimulatedSensorData(sensor) {
+  // Only return data if sensor is enabled
+  if (!sensor.enabled) {
+    return null;
+  }
+  
+  if (!sensor.simulatedValue && sensor.simulatedValue !== 0) {
+    // Initialize with a default value if not set
+    sensor.simulatedValue = getSensorSimulationBaseValue(sensor);
+    console.log(`[sim] Late initialization of sensor ${sensor.name} with value: ${sensor.simulatedValue}`);
+  }
+  return applySensorCalibration(sensor.simulatedValue, sensor.calibration);
+}
+
+// Helper function to get base simulation value for a sensor type
+function getSensorSimulationBaseValue(sensor) {
+  const sensorType = sensor.type.toUpperCase();
+  
+  switch (sensorType) {
+    case 'SIM_I2C_TEMPERATURE':
+      return 22.5; // °C
+    case 'SIM_I2C_HUMIDITY':
+      return 45.0; // %
+    case 'SIM_I2C_PRESSURE':
+      return 1013.25; // hPa
+    case 'SIM_UART_GPS':
+      return 0; // Generic value for GPS
+    case 'SIM_UART_MODBUS':
+      return 100; // Generic modbus sensor value
+    case 'SIM_ANALOG_VOLTAGE':
+      return 1650; // mV (middle of 0-3300 range)
+    case 'SIM_ANALOG_CURRENT':
+      return 12; // mA (4-20mA loop)
+    case 'SIM_DIGITAL_SWITCH':
+      return 0; // Boolean state
+    case 'SIM_DIGITAL_COUNTER':
+      return 0; // Counter value
+    default:
+      return 20 + (sensor.modbusRegister % 10) * 2;
+  }
+}
+
+// Helper function to get simulation variation for realistic data
+function getSensorSimulationVariation(sensor, timestamp) {
+  const sensorType = sensor.type.toUpperCase();
+  const phase = sensor.modbusRegister * 1000; // Use register as phase offset
+  
+  switch (sensorType) {
+    case 'SIM_I2C_TEMPERATURE':
+      return Math.sin((timestamp + phase) / 10000) * 2.0; // ±2°C variation
+    case 'SIM_I2C_HUMIDITY':
+      return Math.cos((timestamp + phase) / 8000) * 5.0; // ±5% variation
+    case 'SIM_I2C_PRESSURE':
+      return Math.sin((timestamp + phase) / 15000) * 10.0; // ±10 hPa variation
+    case 'SIM_UART_GPS':
+      return Math.random() * 10; // Random GPS value
+    case 'SIM_UART_MODBUS':
+      return Math.sin((timestamp + phase) / 5000) * 10; // ±10 variation
+    case 'SIM_ANALOG_VOLTAGE':
+      return Math.sin((timestamp + phase) / 5000) * 800; // ±800mV variation
+    case 'SIM_ANALOG_CURRENT':
+      return Math.sin((timestamp + phase) / 7000) * 4; // ±4mA variation
+    case 'SIM_DIGITAL_SWITCH':
+      // Random state changes every ~10 seconds
+      return Math.random() < 0.01 ? (Math.random() < 0.5 ? 1 : -1) : 0;
+    case 'SIM_DIGITAL_COUNTER':
+      // Increment occasionally
+      return Math.random() < 0.02 ? 1 : 0;
+    default:
+      return Math.sin((timestamp + phase) / 5000) * 5;
+  }
+}
+
+// Helper function to update simulated sensor value
+function updateSimulatedSensorValue(sensor, newValue) {
+  const sensorType = sensor.type.toUpperCase();
+  
+  switch (sensorType) {
+    case 'SIM_I2C_TEMPERATURE':
+      sensor.simulatedValue = newValue;
+      // Also update global temperature for backward compatibility
+      state.io.temperature = newValue;
+      break;
+    case 'SIM_I2C_HUMIDITY':
+      sensor.simulatedValue = newValue;
+      // Also update global humidity for backward compatibility
+      state.io.humidity = newValue;
+      break;
+    case 'SIM_I2C_PRESSURE':
+      sensor.simulatedValue = newValue;
+      // Also update global pressure for backward compatibility
+      state.io.pressure = newValue;
+      break;
+    case 'SIM_ANALOG_VOLTAGE':
+      sensor.simulatedValue = newValue;
+      // Update corresponding analog input channel (mV)
+      if (sensor.modbusRegister >= 0 && sensor.modbusRegister < 3) {
+        state.io.aIn[sensor.modbusRegister] = Math.round(newValue);
+      }
+      break;
+    case 'SIM_ANALOG_CURRENT':
+      sensor.simulatedValue = newValue;
+      // Update corresponding analog input channel (convert mA to mV for ADC representation)
+      if (sensor.modbusRegister >= 0 && sensor.modbusRegister < 3) {
+        // Convert 4-20mA to 0-3300mV range for display
+        const voltage = ((newValue - 4) / 16) * 3300;
+        state.io.aIn[sensor.modbusRegister] = Math.round(Math.max(0, Math.min(3300, voltage)));
+      }
+      break;
+    case 'SIM_DIGITAL_SWITCH':
+      // For digital sensors, handle boolean states
+      const currentState = sensor.simulatedValue || 0;
+      sensor.simulatedValue = Math.abs(newValue) > 0.5 ? (currentState > 0.5 ? 0 : 1) : currentState;
+      // Update corresponding digital input channel
+      if (sensor.modbusRegister >= 0 && sensor.modbusRegister < 8) {
+        state.io.dInRaw[sensor.modbusRegister] = sensor.simulatedValue > 0.5;
+        state.io.dIn[sensor.modbusRegister] = sensor.simulatedValue > 0.5;
+      }
+      break;
+    case 'SIM_DIGITAL_COUNTER':
+      // For counters, accumulate
+      sensor.simulatedValue = (sensor.simulatedValue || 0) + Math.max(0, newValue);
+      // Digital counters don't directly affect DI pins, they just maintain count values
+      break;
+    default:
+      sensor.simulatedValue = newValue;
+      break;
+  }
 }
 
 // Helper function to determine the data key for a sensor
@@ -645,25 +728,30 @@ function scanUISensorKeys() {
 function updateSensors() {
   const t = Date.now();
   
-  // I2C-like sensors
-  // Only simulate if global simulation is enabled AND in auto mode
-  if (state.sim.globalSimulationEnabled && state.sim.sensorsMode === 'auto') {
-    state.io.temperature = 23.45 + Math.sin(t / 10000) * 2.0;
-    state.io.humidity = 55.2 + Math.cos(t / 8000) * 5.0;
-    state.io.pressure = 1013.25 + Math.sin(t / 15000) * 10.0;
+  // Only simulate sensor values for configured simulated sensors that are enabled
+  if (currentSensorConfig && currentSensorConfig.sensors) {
+    currentSensorConfig.sensors.forEach(sensor => {
+      if (sensor.enabled && sensor.type && sensor.type.startsWith('SIM_')) {
+        // Generate simulated data based on sensor type
+        const baseValue = getSensorSimulationBaseValue(sensor);
+        const variation = getSensorSimulationVariation(sensor, t);
+        const simulatedValue = baseValue + variation;
+        
+        // Store the simulated value based on sensor type
+        updateSimulatedSensorValue(sensor, simulatedValue);
+      } else if (sensor.type && sensor.type.startsWith('SIM_') && !sensor.enabled) {
+        // If sensor is disabled, clear its simulated value
+        if (sensor.simulatedValue !== undefined) {
+          console.log(`[sim] Clearing simulation data for disabled sensor: ${sensor.name}`);
+          delete sensor.simulatedValue;
+        }
+      }
+    });
   }
-  // If global simulation is disabled, temperature/humidity/pressure remain at their last values
-  // On real hardware, these would be actual I2C sensor readings
   
-  // Analog inputs in mV (simulate 0-3300 range)
-  // Only simulate if global simulation is enabled AND in auto mode
-  if (state.sim.globalSimulationEnabled && state.sim.aiMode === 'auto') {
-    state.io.aIn[0] = Math.round(1650 + 800 * Math.sin(t / 5000));
-    state.io.aIn[1] = Math.round(1200 + 600 * Math.cos(t / 7000));
-    state.io.aIn[2] = Math.round(800 + 500 * Math.sin(t / 9000));
-  }
-  // If global simulation is disabled, analog inputs remain at their last values
-  // On real hardware, these would be actual ADC readings
+  // Analog inputs are now handled by the sensor configuration system
+  // If you have SIM_ANALOG_* sensors configured, they will provide analog data
+  // Otherwise, analog inputs remain at 0 (no analog sensors configured)
 }
 
 // Digital inputs simulation: random toggles with latching behavior
@@ -948,11 +1036,30 @@ function saveSensorConfig(config) {
   console.log('[sim] Saving', config.sensors?.length || 0, 'sensors');
   
   try {
+    // Initialize simulated sensor values for newly configured sensors
+    if (config && config.sensors) {
+      const simulatedSensors = config.sensors.filter(sensor => 
+        sensor.enabled && sensor.type && sensor.type.startsWith('SIM_')
+      );
+      
+      console.log(`[sim] Active simulated sensors to save: ${simulatedSensors.length}`);
+      
+      config.sensors.forEach(sensor => {
+        if (sensor.enabled && sensor.type && sensor.type.startsWith('SIM_')) {
+          // Initialize simulated values for new simulated sensors
+          if (sensor.simulatedValue === undefined) {
+            sensor.simulatedValue = getSensorSimulationBaseValue(sensor);
+            console.log(`[sim] Initialized simulated sensor ${sensor.name} (${sensor.type}) with value: ${sensor.simulatedValue}`);
+          }
+        }
+      });
+    }
+    
     // Preserve documentation comments when saving
     const configWithComments = {
       "_comment": "SIMULATOR SENSOR CONFIGURATION - This file simulates the LittleFS /sensors.json that will exist on your Raspberry Pi Pico. The simulator reads/writes this file exactly like the real device reads/writes LittleFS. Changes made via the web interface will be saved here and persist across simulator restarts.",
       "_architecture": "Simulator uses this file <-> Real device uses LittleFS /sensors.json",
-      "_registers_note": "Registers 0-4 are reserved for system I/O (AI1-3, Temp, Humidity). Use register 5+ for sensors.",
+      "_registers_note": "Any register 0-65535 can be used. Registers 0-2 are also used for analog inputs if enabled.",
       "sensors": config.sensors || []
     };
     
@@ -987,8 +1094,54 @@ app.post('/sensors/config', (req, res) => {
   
   // Update and save configuration (simulates LittleFS write on real device)
   if (req.body.sensors && Array.isArray(req.body.sensors)) {
-    currentSensorConfig.sensors = req.body.sensors;
-    console.log('[sim] Updated sensor configuration with', req.body.sensors.length, 'sensors');
+    // Compare old vs new configuration to determine what changed
+    const oldSensors = currentSensorConfig.sensors || [];
+    const newSensors = req.body.sensors;
+    
+    // Stop simulation for removed simulated sensors
+    oldSensors.forEach(oldSensor => {
+      if (oldSensor.type && oldSensor.type.startsWith('SIM_') && oldSensor.enabled) {
+        const stillExists = newSensors.find(newSensor => 
+          newSensor.name === oldSensor.name && 
+          newSensor.type === oldSensor.type && 
+          newSensor.enabled
+        );
+        
+        if (!stillExists) {
+          console.log(`[sim] Stopping simulation for removed sensor: ${oldSensor.name} (${oldSensor.type})`);
+          // Clear any stored simulation data for this sensor
+          delete oldSensor.simulatedValue;
+        }
+      }
+    });
+    
+    // Start simulation for new simulated sensors
+    newSensors.forEach(newSensor => {
+      if (newSensor.type && newSensor.type.startsWith('SIM_') && newSensor.enabled) {
+        const existedBefore = oldSensors.find(oldSensor => 
+          oldSensor.name === newSensor.name && 
+          oldSensor.type === newSensor.type && 
+          oldSensor.enabled
+        );
+        
+        if (!existedBefore) {
+          console.log(`[sim] Starting simulation for new sensor: ${newSensor.name} (${newSensor.type})`);
+          // Initialize simulation value for new sensor
+          newSensor.simulatedValue = getSensorSimulationBaseValue(newSensor);
+          console.log(`[sim] Initialized ${newSensor.name} with value: ${newSensor.simulatedValue}`);
+        }
+      }
+    });
+    
+    // Update the configuration
+    currentSensorConfig.sensors = newSensors;
+    console.log('[sim] Updated sensor configuration with', newSensors.length, 'sensors');
+    
+    // Count active simulated sensors
+    const activeSimulatedSensors = newSensors.filter(sensor => 
+      sensor.enabled && sensor.type && sensor.type.startsWith('SIM_')
+    ).length;
+    console.log(`[sim] Active simulated sensors: ${activeSimulatedSensors}`);
     
     // Save to file (simulates device writing to LittleFS)
     if (saveSensorConfig(currentSensorConfig)) {

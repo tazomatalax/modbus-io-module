@@ -1,12 +1,64 @@
-#pragma once
+﻿#pragma once
 
 #include <Arduino.h>
 #include <SPI.h>
+#include <Wire.h>
 #include <W5500lwIP.h>
+#include <LwipEthernet.h>
 #include <WebServer.h>
 #include <ArduinoModbus.h>
 #include <ArduinoJson.h>
 #include <LittleFS.h>
+
+#define MAX_SENSORS 10
+
+// Forward declarations
+struct SensorCommand {
+    uint8_t sensorIndex;
+    uint32_t nextExecutionMs;
+    uint32_t intervalMs;
+    const char* command;
+    bool isGeneric;
+};
+
+// Simple command array handler
+struct CommandArray {
+    SensorCommand commands[MAX_SENSORS];
+    uint8_t count;
+    
+    void init() {
+        count = 0;
+    }
+    
+    bool add(const SensorCommand& cmd) {
+        if (count < MAX_SENSORS) {
+            commands[count++] = cmd;
+            return true;
+        }
+        return false;
+    }
+    
+    bool isEmpty() const {
+        return count == 0;
+    }
+    
+    SensorCommand* getNext() {
+        return isEmpty() ? nullptr : &commands[0];
+    }
+    
+    void remove() {
+        if (!isEmpty()) {
+            for (uint8_t i = 0; i < count - 1; i++) {
+                commands[i] = commands[i + 1];
+            }
+            count--;
+        }
+    }
+    
+    void clear() {
+        count = 0;
+    }
+};
 
 // Watchdog timer
 #define WDT_TIMEOUT 5000
@@ -27,7 +79,7 @@
 // Constants
 #define CONFIG_FILE "/config.json"
 #define SENSORS_FILE "/sensors.json"
-#define CONFIG_VERSION 6  // Increment this when config structure changes
+#define CONFIG_VERSION 7  // Increment this when config structure changes
 #define HOSTNAME_MAX_LENGTH 32
 #define MAX_MODBUS_CLIENTS 4  // Maximum number of concurrent Modbus clients
 #define MAX_SENSORS 10
@@ -41,6 +93,28 @@ const uint8_t DIGITAL_OUTPUTS[] = {8, 9, 10, 11, 12, 13, 14, 15}; // Digital out
 const uint8_t ANALOG_INPUTS[] = {26, 27, 28};   // ADC pins
 
 // Network and Modbus Configuration
+
+// Bus operation states
+enum class BusOpState {
+    IDLE,
+    REQUEST_SENT,
+    WAITING_CONVERSION,
+    READY_TO_READ,
+    ERROR
+};
+
+// Bus operation structure
+struct BusOperation {
+    uint8_t sensorIndex;
+    uint32_t startTime;
+    uint32_t conversionTime;
+    BusOpState state;
+    uint8_t retryCount;
+    bool needsCRC;
+};
+
+// SensorCommand is already defined above
+
 struct Config {
     uint8_t version;
     bool dhcpEnabled;
@@ -54,35 +128,6 @@ struct Config {
     bool diLatch[8];          // Enable latching for digital inputs (stay ON until read)
     bool doInvert[8];         // Invert logic for digital outputs
     bool doInitialState[8];   // Initial state for digital outputs (true = ON, false = OFF)
-} config;
-
-// Default configuration
-const Config DEFAULT_CONFIG = {
-    CONFIG_VERSION,              // version
-    true,                       // DHCP enabled
-    {192, 168, 1, 10},         // Default IP
-    {192, 168, 1, 1},          // Default Gateway
-    {255, 255, 255, 0},        // Default Subnet
-    502,                       // Default Modbus port
-    "modbus-io",                // Default hostname
-    {false, false, false, false, false, false, false, false},  // diPullup (all disabled)
-    {false, false, false, false, false, false, false, false},  // diInvert (no inversion)
-    {false, false, false, false, false, false, false, false},  // diLatch (no latching)
-    {false, false, false, false, false, false, false, false},  // doInvert (no inversion)
-    {false, false, false, false, false, false, false, false},  // doInitialState (all OFF)
-};
-
-struct SensorConfig {
-    bool enabled;
-    char name[32];
-    char type[16]; // "BME280", "EZO_PH", etc.
-    uint8_t i2cAddress;
-    uint16_t modbusRegister;
-    
-    // EZO sensor state tracking
-    bool cmdPending;
-    unsigned long lastCmdSent;
-    char response[32];
 };
 
 struct IOStatus {
@@ -97,18 +142,97 @@ struct IOStatus {
     float humidity;       // Humidity reading from I2C sensor (e.g., BME280) 
     float pressure;       // Pressure reading from I2C sensor (e.g., BME280)
     // Add additional sensor fields as needed for your specific I2C sensors
+    // Dataflow display improvements
+    float rawValue[MAX_SENSORS];   // Raw value per sensor
+    char rawUnit[MAX_SENSORS][8];  // Raw unit per sensor ("mV", "ADC", etc.)
+    float calibratedValue[MAX_SENSORS]; // Calibrated value per sensor
+    float ph;
+    float conductivity;
 };
 
-IOStatus ioStatus;
+// Sensor configuration structure (KEEP - intentional improvements)
+struct SensorConfig {
+    bool enabled;
+    char name[32];
+    char type[16];
+    char protocol[16]; // Added protocol field for sensor assignment
+    uint8_t i2cAddress;
+    char i2cAddressStr[8]; // Hex string for I2C address
+    int modbusRegister;
+    float calibrationOffset;
+    float calibrationSlope;
+    char calibrationExpression[128];  // Mathematical expression for calibration (supports any equation)
+    // Dynamic pin assignment
+    int sdaPin;
+    int sclPin;
+    int dataPin;
+    int uartTxPin;
+    int uartRxPin;
+    int analogPin;
+    int oneWirePin;
+    int digitalPin;
+    // Data parsing configuration
+    char parsingMethod[16];   // raw, custom_bits, bit_field, status_register, json_path, csv_column
+    char command[32];
+    uint32_t updateInterval;
+    int delayBeforeRead;      // Delay in ms before reading response (for UART, I2C timing)
+    uint8_t i2cMultiplexerChannel;
+    char parsingConfig[128];  // JSON string for parsing configuration
+    
+    // Secondary parsing for multi-output sensors
+    char parsingMethodB[16];  // Parsing method for secondary value (rawValueB)
+    char parsingConfigB[128]; // JSON config for secondary parsing
+    char parsingMethodC[16];  // Parsing method for tertiary value (rawValueC)  
+    char parsingConfigC[128]; // JSON config for tertiary parsing
+    // EZO sensor state tracking
+    bool cmdPending;
+    unsigned long lastCmdSent;
+    // Response data storage
+    char response[64];
+    char calibrationData[256];
+    // Current sensor values for dataflow - support multiple outputs
+    float rawValue;           // Primary raw sensor reading (rawValueA)
+    float rawValueB;          // Secondary raw reading (humidity for SHT30, pressure for BME280)
+    float rawValueC;          // Tertiary raw reading (pressure for BME280, etc.)
+    
+    float calibratedValue;    // Primary calibrated value (after applying calibration)
+    float calibratedValueB;   // Secondary calibrated value
+    float calibratedValueC;   // Tertiary calibrated value
+    
+    int modbusValue;          // Primary value written to Modbus register
+    int modbusValueB;         // Secondary value for next Modbus register
+    int modbusValueC;         // Tertiary value for next Modbus register
+    
+    // Calibration for multiple outputs
+    float calibrationOffsetB; // Calibration offset for rawValueB
+    float calibrationSlopeB;  // Calibration slope for rawValueB
+    float calibrationOffsetC; // Calibration offset for rawValueC  
+    float calibrationSlopeC;  // Calibration slope for rawValueC
+    char calibrationExpressionB[128];  // Mathematical expression for calibrating rawValueB
+    char calibrationExpressionC[128];  // Mathematical expression for calibrating rawValueC
+    
+    char rawDataString[128];  // Raw data string for parsing (I2C/UART responses)
+    unsigned long lastReadTime; // When last read was performed
+    
+    // One-Wire specific configuration
+    char oneWireCommand[16];  // Hex command to send (e.g., "0x44" for Convert T)
+    int oneWireInterval;      // Interval in seconds between commands (0 = manual only)
+    int oneWireConversionTime; // Time in ms to wait after command before reading
+    unsigned long lastOneWireCmd; // When last command was sent
+    bool oneWireAutoMode;     // Enable automatic periodic commands
+};
 
+// Extern declarations for global variables
+extern Config config;
+extern IOStatus ioStatus;
 extern SensorConfig configuredSensors[MAX_SENSORS];
 extern int numConfiguredSensors;
 
-// Ethernet and Server instances
-Wiznet5500lwIP eth(PIN_ETH_CS, SPI, PIN_ETH_IRQ);
-WiFiServer modbusServer; 
-WebServer webServer(80);
-WiFiClient client;
+// Ethernet and Server instances - Essential for web server
+extern Wiznet5500lwIP eth;
+extern WiFiServer modbusServer; 
+extern WiFiServer httpServer;    // HTTP server on port 80
+extern WiFiClient client;
 
 // Client management
 struct ModbusClientConnection {
@@ -119,38 +243,90 @@ struct ModbusClientConnection {
     unsigned long connectionTime;
 };
 
-ModbusClientConnection modbusClients[MAX_MODBUS_CLIENTS];
-int connectedClients = 0;
+extern ModbusClientConnection modbusClients[MAX_MODBUS_CLIENTS];
+extern int connectedClients;
 
-// Function declarations
+// Default configuration
+const Config DEFAULT_CONFIG = {
+    .version = CONFIG_VERSION,
+    .dhcpEnabled = true,
+    .ip = {192, 168, 1, 10},
+    .gateway = {192, 168, 1, 1},
+    .subnet = {255, 255, 255, 0},
+    .modbusPort = 502,
+    .hostname = "modbus-io-module",
+    .diPullup = {true, true, true, true, true, true, true, true},
+    .diInvert = {false, false, false, false, false, false, false, false},
+    .diLatch = {false, false, false, false, false, false, false, false},
+    .doInvert = {false, false, false, false, false, false, false, false},
+    .doInitialState = {false, false, false, false, false, false, false, false}
+};
+
+void initializePins();
 void loadConfig();
 void saveConfig();
-void setPinModes();
-void setupEthernet();
-void setupModbus();
-void setupWebServer();
-void updateIOpins();
-void updateIOForClient(int clientIndex);
-void handleRoot();
-void handleCSS();
-void handleJS();
-void handleFavicon();
-void handleLogo();
-void handleGetConfig();
-void handleSetConfig();
-void handleSetOutput();
-void handleGetIOStatus();
-void handleGetIOConfig();
-void handleSetIOConfig();
-void resetLatches();
-void handleResetLatches();
-void handleResetSingleLatch();
-void handleGetSensorConfig();
-void handleSetSensorConfig();
 void loadSensorConfig();
 void saveSensorConfig();
-void handleGetSensorConfig();
-void handleSetSensorConfig();
-void handleEzoSensors();
+void updateIOpins();
+void resetLatches();
 void initializeEzoSensors();
-void handleSensorCommand();
+void handleEzoSensors();
+
+// File serving helper for main.cpp
+void serveFileFromFS(WiFiClient& client, const String& filename, const String& contentType) {
+    Serial.print("[serveFileFromFS] Requested filename: ");
+    Serial.println(filename);
+    Serial.print("[serveFileFromFS] Content-Type: ");
+    Serial.println(contentType);
+    if (!LittleFS.begin()) {
+        Serial.println("[serveFileFromFS] LittleFS mount failed");
+        client.println("HTTP/1.1 500 Internal Server Error");
+        client.println("Content-Type: text/plain");
+        client.println("Connection: close");
+        client.println();
+        client.println("Filesystem mount failed");
+        return;
+    }
+    String fname = filename;
+    if (!fname.startsWith("/")) fname = "/" + fname;
+    Serial.print("[serveFileFromFS] Opening file: ");
+    Serial.println(fname);
+    File file = LittleFS.open(fname, "r");
+    if (!file) {
+        Serial.print("[serveFileFromFS] File not found: ");
+        Serial.println(fname);
+        client.println("HTTP/1.1 404 Not Found");
+        client.println("Content-Type: text/plain");
+        client.println("Connection: close");
+        client.println();
+        client.println("404 Not Found");
+        return;
+    } else {
+        Serial.print("[serveFileFromFS] File opened successfully: ");
+        Serial.println(fname);
+    }
+    client.println("HTTP/1.1 200 OK");
+    client.print("Content-Type: ");
+    client.println(contentType);
+    client.println("Connection: close");
+    client.print("Content-Length: ");
+    client.println(file.size());
+    client.println();
+    const size_t bufSize = 1024;
+    uint8_t buf[bufSize];
+    size_t bytesRead;
+    while ((bytesRead = file.read(buf, bufSize)) > 0) {
+        client.write(buf, bytesRead);
+    }
+    file.close();
+}
+
+extern Config config;
+extern IOStatus ioStatus;
+extern SensorConfig configuredSensors[MAX_SENSORS];
+extern ModbusClientConnection modbusClients[MAX_MODBUS_CLIENTS];
+extern int numConfiguredSensors;
+extern int connectedClients;
+extern bool systemInitialized;
+extern unsigned long lastSensorRead;
+extern unsigned long lastEzoCommand;
