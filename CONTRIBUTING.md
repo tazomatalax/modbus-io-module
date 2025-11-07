@@ -1,6 +1,6 @@
 <div align="center">
 
-# Modbus IO Module – Engineering & Agent Operations Guide
+# Contributing to the Modbus IO Module
 
 Fast orientation + consistent, high‑quality contributions for an embedded Modbus + web‑configured IO & sensor gateway (RP2040 + W5500). This guide is optimized for AI coding agents and human reviewers.
 
@@ -258,7 +258,7 @@ A: Ensure bus speed negotiation; possibly wrap sensor transactions in critical s
 
 ## 13. Contribution Flow (Condensed)
 1. Write or modify sensor / IO / endpoint logic in firmware.
-2. Update REST + register documentation in this file.
+2. Update REST + register documentation in this file (CONTRIBUTING.md).
 3. If UI depends on it, mirror minimal stub in simulator.
 4. Add UI changes (progress state, error handling).
 5. Test (hardware if available) + simulator.
@@ -296,6 +296,6 @@ app.get('/new/endpoint', (req,res)=>{
 
 ---
 
-### End of Guide
+### End of Contributing Guide
 
-Maintain this file as authoritative reference. Every structural change must be reflected here to keep future autonomous contributions safe and aligned.
+Maintain this file as the authoritative reference. Every structural change must be reflected here to keep future autonomous contributions safe and aligned.
