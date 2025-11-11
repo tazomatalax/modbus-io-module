@@ -1,4 +1,64 @@
 # Changelog - Modbus TCP IO Module
+
+## [Unreleased] - 2025-11-07 - Software I2C Multiplexer & Multi-Sensor Pin Configuration
+
+### 🎯 Major Features Added
+
+#### Software I2C Bus Multiplexer
+- **Added**: Dynamic I2C pin switching via `setI2CPins()` function
+- **Feature**: Single Wire instance manages all I2C pin pairs sequentially
+- **Benefit**: Support sensors on ANY valid RP2040 I2C pin pair simultaneously
+- **Implementation**: Queue-based processing switches pins as needed for each sensor
+- **Impact**: Eliminates dual-bus limitation, supports unlimited I2C pin configurations
+
+#### Dynamic I2C Pin Configuration
+- **Enhanced**: I2C sensors can specify custom SDA/SCL pins in sensors.json
+- **Supported Pins I2C0**: {0,1}, {4,5}, {8,9}, {12,13}, {16,17}, {20,21}, {24,25}, {28,29}
+- **Supported Pins I2C1**: {2,3}, {6,7}, {10,11}, {14,15}, {18,19}, {26,27}
+- **Example**: PH sensor on GP4/GP5, SHT30 on GP2/GP3, additional sensors on GP6/GP7, etc.
+- **Flexibility**: Multiple sensors can be configured on the same pin pair
+
+#### I2C Sensor Type Improvements
+- **Fixed**: SHT30 sensor queuing and communication on non-default I2C pins
+- **Fixed**: ANALOG_CUSTOM sensor now updates `lastReadTime` for web UI display
+- **Added**: Serial logging for I2C pin switches with source/destination pins
+
+#### Pin Switching Mechanism
+- **How It Works**: Before processing each I2C sensor from queue, dynamically switch Wire to correct pins
+- **Efficiency**: Pin switching (~20ms) is negligible compared to sensor polling intervals (1-5 seconds)
+- **Deterministic**: Sequential queue processing ensures no I2C bus conflicts
+- **Logging**: Detailed debug output tracks all pin switches
+
+### 🔧 Technical Changes
+
+#### Modified Files
+- `src/main.cpp`:
+  - Added `currentI2C_SDA` and `currentI2C_SCL` static tracking variables
+  - Implemented `setI2CPins(int sda, int scl)` helper function
+  - Updated `processI2CQueue()` to call `setI2CPins()` before sensor communication
+  - Simplified `setup()` I2C initialization (removed dual-bus code)
+  - Updated pin pair logging in serial output
+  - Added missing `lastReadTime` update for ANALOG_CUSTOM sensors
+
+#### RP2040 Wire Library Usage
+- **API Used**: `Wire.setSDA()`, `Wire.setSCL()`, `Wire.begin()`, `Wire.end()`
+- **Not Used**: Wire1 (unnecessary with software multiplexing)
+- **Reason**: Sequential processing eliminates need for multiple Wire instances
+
+### ✅ Tested Scenarios
+- PH sensor on GP4/GP5 (I2C0)
+- SHT30 sensor on GP2/GP3 (I2C1)
+- ANALOG_CUSTOM on GP27
+- DS18B20 on GP28 (One-Wire)
+- Dynamic pin switching between sensors in queue
+
+### 📝 Known Limitations
+- Only one I2C bus active at a time (by design - not a limitation, just sequential)
+- Pin switching takes ~20ms per sensor change (negligible vs 1-5s polling intervals)
+- Physical I2C pull-up resistors required on each pin pair in use
+
+---
+
 [2025-10-07]
 Backend and firmware now support dynamic sensor parameters for generic sensors, including protocol, pin assignments, measurement command, polling interval, parsing method/config, calibration, and modbus register. These are loaded and saved via config_manager.cpp and used in main.cpp for sensor reading and bus operations.
 

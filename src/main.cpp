@@ -373,6 +373,18 @@ void processI2CQueue() {
         }
             
         case BusOpState::READY_TO_READ: {
+            // Per-op timeout: abort if this operation has been pending too long (3 seconds)
+            if (op.startTime > 0 && currentTime - op.startTime > 3000) {
+                Serial.printf("[I2C] TIMEOUT: Sensor %d stuck in READY_TO_READ for 3s, removing from queue\n", op.sensorIndex);
+                configuredSensors[op.sensorIndex].rawValue = -1000.0;  // Mark as error
+                for(int i = 0; i < i2cQueueSize - 1; i++) {
+                    i2cQueue[i] = i2cQueue[i + 1];
+                }
+                i2cQueueSize--;
+                rp2040.wdt_reset();
+                return;
+            }
+            
             logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "REQ", 
                             "Requesting 32 bytes from " + String(configuredSensors[op.sensorIndex].name), 
                             String(configuredSensors[op.sensorIndex].name));
@@ -470,16 +482,18 @@ void processI2CQueue() {
                                 logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "ERR", "EZO-PH: Empty data after success code", String(configuredSensors[op.sensorIndex].name));
                             }
                         } else if (statusCode == 254) {
-                            // Processing: retry up to 3 times with delay
+                            // Processing: use non-blocking retry (don't use delay!)
                             if (op.retryCount < 3) {
                                 op.retryCount++;
-                                delay(100); // Wait 100ms before retry
-                                op.state = BusOpState::READY_TO_READ;
-                                logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "WARN", "EZO-PH: Processing, retry " + String(op.retryCount), String(configuredSensors[op.sensorIndex].name));
-                                return; // Do not advance queue
+                                // Reschedule as REQUEST_SENT with short conversion time to retry after 100ms
+                                op.state = BusOpState::REQUEST_SENT;
+                                op.conversionTime = 100;
+                                op.startTime = currentTime;
+                                logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "WARN", "EZO-PH: Processing, will retry " + String(op.retryCount), String(configuredSensors[op.sensorIndex].name));
+                                return; // Do not dequeue yet, will process again next loop
                             } else {
                                 configuredSensors[op.sensorIndex].rawValue = -996.0;
-                                logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "ERR", "EZO-PH: Processing timeout", String(configuredSensors[op.sensorIndex].name));
+                                logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "ERR", "EZO-PH: Processing timeout after 3 retries", String(configuredSensors[op.sensorIndex].name));
                             }
                         } else if (statusCode == 2) {
                             configuredSensors[op.sensorIndex].rawValue = -997.0;
@@ -4998,6 +5012,38 @@ void updateIOpins() {
         uint32_t rawValue = analogRead(ANALOG_INPUTS[i]);
         uint16_t valueToWrite = (rawValue * 3300UL) / 4095UL;
         ioStatus.aIn[i] = valueToWrite;
+    }
+    
+    // Read ANALOG_CUSTOM sensors - handle analog voltage sensors directly here
+    for (int i = 0; i < numConfiguredSensors; i++) {
+        if (!configuredSensors[i].enabled) continue;
+        
+        // Check if sensor should be read based on updateInterval
+        unsigned long currentTime = millis();
+        if (currentTime - configuredSensors[i].lastReadTime >= configuredSensors[i].updateInterval) {
+            
+            if (strncmp(configuredSensors[i].protocol, "Analog", 6) == 0) {
+                // Read analog voltage sensor
+                int pin = configuredSensors[i].analogPin;
+                if (pin >= 0 && pin < 32) {
+                    uint32_t rawADC = analogRead(pin);
+                    float voltage = (rawADC * 3.3) / 4095.0;
+                    
+                    // Store raw and calibrated values to BOTH configuredSensors AND ioStatus
+                    // This ensures data flows to web UI and Modbus
+                    configuredSensors[i].rawValue = voltage;
+                    float calibrated = applyCalibration(voltage, configuredSensors[i]);
+                    configuredSensors[i].calibratedValue = calibrated;
+                    configuredSensors[i].modbusValue = (int)(calibrated * 100);
+                    configuredSensors[i].lastReadTime = currentTime;
+                    
+                    // Also store to ioStatus for web UI compatibility
+                    if (i < 3) {
+                        ioStatus.aIn[i] = (uint16_t)(calibrated * 1000); // mV format
+                    }
+                }
+            }
+        }
     }
     
     // I2C Sensor Reading - Dynamic sensor configuration
