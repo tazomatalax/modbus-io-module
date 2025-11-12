@@ -118,6 +118,150 @@ const DATA_PARSING_OPTIONS = {
     }
 };
 
+// ========== NETWORK CONFIGURATION FUNCTIONS ==========
+
+// Parse IP string to array (e.g., "192.168.1.10" -> [192, 168, 1, 10])
+function parseIPString(ipStr) {
+    if (!ipStr) return null;
+    const parts = ipStr.trim().split('.');
+    if (parts.length !== 4) return null;
+    const octets = parts.map(p => {
+        const num = parseInt(p);
+        return (num >= 0 && num <= 255) ? num : null;
+    });
+    return octets.includes(null) ? null : octets;
+}
+
+// Format IP array to string (e.g., [192, 168, 1, 10] -> "192.168.1.10")
+function formatIPArray(arr) {
+    if (!arr || arr.length !== 4) return '';
+    return arr.join('.');
+}
+
+// Load network configuration from device
+window.loadNetworkConfig = function loadNetworkConfig() {
+    const attemptLoad = (retries = 0) => {
+        fetch('/config', { timeout: 5000 })
+            .then(response => {
+                if (!response.ok) throw new Error('Response status: ' + response.status);
+                return response.json();
+            })
+            .then(data => {
+                // Update form fields with current configuration
+                if (data.ip) {
+                    document.getElementById('ip').value = formatIPArray(data.ip);
+                } else {
+                    document.getElementById('ip').value = '192.168.1.10';
+                }
+                
+                if (data.gateway) {
+                    document.getElementById('gateway').value = formatIPArray(data.gateway);
+                } else {
+                    document.getElementById('gateway').value = '192.168.1.1';
+                }
+                
+                if (data.subnet) {
+                    document.getElementById('subnet').value = formatIPArray(data.subnet);
+                } else {
+                    document.getElementById('subnet').value = '255.255.255.0';
+                }
+                
+                document.getElementById('dhcp').checked = data.dhcpEnabled || false;
+                document.getElementById('hostname').value = data.hostname || 'modbus-io-module';
+                document.getElementById('modbus_port').value = data.modbusPort || 502;
+                
+                showToast('Network configuration loaded', 'success');
+            })
+            .catch(error => {
+                console.error('Error loading network config (attempt ' + (retries + 1) + '):', error);
+                
+                // Retry up to 3 times with 1 second delays
+                if (retries < 3) {
+                    setTimeout(() => attemptLoad(retries + 1), 1000);
+                } else {
+                    // Set safe defaults after retries exhausted
+                    document.getElementById('ip').value = '192.168.1.10';
+                    document.getElementById('gateway').value = '192.168.1.1';
+                    document.getElementById('subnet').value = '255.255.255.0';
+                    document.getElementById('dhcp').checked = false;
+                    document.getElementById('hostname').value = 'modbus-io-module';
+                    document.getElementById('modbus_port').value = 502;
+                }
+            });
+    };
+    
+    attemptLoad();
+};
+
+// Save network configuration to device
+window.saveConfig = function saveConfig() {
+    const dhcpEnabled = document.getElementById('dhcp').checked;
+    const hostname = document.getElementById('hostname').value;
+    const ipStr = document.getElementById('ip').value;
+    const subnetStr = document.getElementById('subnet').value;
+    const gatewayStr = document.getElementById('gateway').value;
+    const modbusPort = parseInt(document.getElementById('modbus_port').value);
+    
+    // Validate IP addresses
+    const ip = parseIPString(ipStr);
+    const subnet = parseIPString(subnetStr);
+    const gateway = parseIPString(gatewayStr);
+    
+    if (!ip) {
+        showToast('Invalid IP address format', 'error');
+        return;
+    }
+    if (!subnet) {
+        showToast('Invalid subnet mask format', 'error');
+        return;
+    }
+    if (!gateway) {
+        showToast('Invalid gateway address format', 'error');
+        return;
+    }
+    if (!hostname || hostname.length === 0) {
+        showToast('Hostname cannot be empty', 'error');
+        return;
+    }
+    if (modbusPort < 1 || modbusPort > 65535) {
+        showToast('Modbus port must be between 1 and 65535', 'error');
+        return;
+    }
+    
+    // Prepare configuration object
+    const config = {
+        dhcpEnabled: dhcpEnabled,
+        hostname: hostname,
+        ip: ip,
+        subnet: subnet,
+        gateway: gateway,
+        modbusPort: modbusPort
+    };
+    
+    // Send to device
+    fetch('/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config)
+    })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                showToast('Network configuration saved. Device will reboot...', 'success', true);
+                // Device will reboot, page will disconnect
+                setTimeout(() => {
+                    showToast('Device rebooted. Reconnecting...', 'info', true);
+                }, 2000);
+            } else {
+                showToast('Failed to save network configuration', 'error');
+            }
+        })
+        .catch(error => {
+            console.error('Error saving config:', error);
+            showToast('Error saving network configuration', 'error');
+        });
+};
+
 // Helper to get used pins (except for bus protocols)
 function getUsedPins(protocol) {
     let used = [];
@@ -3022,6 +3166,9 @@ General:
 document.addEventListener('DOMContentLoaded', function() {
     // Load initial sensor configuration
     loadSensorConfig();
+    
+    // Load network configuration
+    loadNetworkConfig();
     
     updateTerminalInterface();
     

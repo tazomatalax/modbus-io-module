@@ -1,60 +1,6 @@
 {
-  "_comment": "SIMULATOR SENSOR CONFIGURATION - This file simulates the LittleFS /sensors.json that will exist on your Raspberry Pi Pico. The simulator reads/writes this file exactly like the real device reads/writes LittleFS. Changes made via the web interface will be saved here and persist across simulator restarts.",
-  "_architecture": "Simulator uses this file <-> Real device uses LittleFS /sensors.json",
+  "_comment": "Sensor Configuration - Empty by default. Add sensors via web UI.",
+  "_architecture": "This file is synced to device LittleFS /sensors.json",
   "_registers_note": "Any register 0-65535 can be used. Registers 0-2 are also used for analog inputs if enabled.",
-  "sensors": [
-    {
-      "enabled": true,
-      "name": "SHT30 Temperature + Humidity",
-      "type": "SHT30",
-      "protocol": "I2C",
-      "i2cAddress": 68,
-      "modbusRegister": 10,
-      "updateInterval": 1000,
-      "calibrationOffset": 0.0,
-      "calibrationSlope": 1.0,
-      "calibrationOffsetB": 0.0,
-      "calibrationSlopeB": 1.0,
-      "_comment": "Multi-output sensor: Temperature goes to register 10, Humidity to register 11"
-    },
-    {
-      "enabled": true,
-      "name": "Demo Temperature",
-      "type": "SIM_I2C_TEMPERATURE",
-      "i2cAddress": 0,
-      "modbusRegister": 3,
-      "calibration": {
-        "offset": 0,
-        "scale": 1,
-        "expression": "",
-        "polynomialStr": ""
-      }
-    },
-    {
-      "enabled": true,
-      "name": "Demo Humidity", 
-      "type": "SIM_I2C_HUMIDITY",
-      "i2cAddress": 0,
-      "modbusRegister": 4,
-      "calibration": {
-        "offset": 0,
-        "scale": 1,
-        "expression": "",
-        "polynomialStr": ""
-      }
-    },
-    {
-      "enabled": true,
-      "name": "Demo Pressure",
-      "type": "SIM_I2C_PRESSURE", 
-      "i2cAddress": 0,
-      "modbusRegister": 5,
-      "calibration": {
-        "offset": 0,
-        "scale": 1,
-        "expression": "",
-        "polynomialStr": ""
-      }
-    }
-  ]
+  "sensors": []
 }

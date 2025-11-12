@@ -43,7 +43,6 @@ void applySensorPresets() {
             if (ezoPhCount > 1) {
                 // Disable duplicate EZO-PH sensors
                 configuredSensors[i].enabled = false;
-                Serial.println("Duplicate EZO-PH sensor disabled");
                 continue;
             }
             if (configuredSensors[i].i2cAddress == 0) configuredSensors[i].i2cAddress = 0x63;
@@ -52,29 +51,24 @@ void applySensorPresets() {
             if (strlen(configuredSensors[i].protocol) == 0) strcpy(configuredSensors[i].protocol, "I2C");
             if (configuredSensors[i].updateInterval == 0) configuredSensors[i].updateInterval = 5000;
             if (configuredSensors[i].modbusRegister == 0) configuredSensors[i].modbusRegister = 10;
-            Serial.printf("Auto-configured EZO-PH sensor (preserved user settings: addr=%d, cmd='%s', interval=%d)\n", 
-                         configuredSensors[i].i2cAddress, configuredSensors[i].command, configuredSensors[i].updateInterval);
         } else if (strcmp(configuredSensors[i].type, "EZO-EC") == 0) {
             if (configuredSensors[i].i2cAddress == 0) configuredSensors[i].i2cAddress = 0x64;
             if (strlen(configuredSensors[i].command) == 0) strcpy(configuredSensors[i].command, "R");
             if (strlen(configuredSensors[i].protocol) == 0) strcpy(configuredSensors[i].protocol, "I2C");
             if (configuredSensors[i].updateInterval == 0) configuredSensors[i].updateInterval = 5000;
             if (configuredSensors[i].modbusRegister == 0) configuredSensors[i].modbusRegister = 11;
-            Serial.println("Auto-configured EZO-EC sensor");
         } else if (strcmp(configuredSensors[i].type, "EZO-DO") == 0) {
             if (configuredSensors[i].i2cAddress == 0) configuredSensors[i].i2cAddress = 0x61;
             if (strlen(configuredSensors[i].command) == 0) strcpy(configuredSensors[i].command, "R");
             if (strlen(configuredSensors[i].protocol) == 0) strcpy(configuredSensors[i].protocol, "I2C");
             if (configuredSensors[i].updateInterval == 0) configuredSensors[i].updateInterval = 5000;
             if (configuredSensors[i].modbusRegister == 0) configuredSensors[i].modbusRegister = 12;
-            Serial.println("Auto-configured EZO-DO sensor");
         } else if (strcmp(configuredSensors[i].type, "EZO-RTD") == 0) {
             if (configuredSensors[i].i2cAddress == 0) configuredSensors[i].i2cAddress = 0x66;
             if (strlen(configuredSensors[i].command) == 0) strcpy(configuredSensors[i].command, "R");
             if (strlen(configuredSensors[i].protocol) == 0) strcpy(configuredSensors[i].protocol, "I2C");
             if (configuredSensors[i].updateInterval == 0) configuredSensors[i].updateInterval = 5000;
             if (configuredSensors[i].modbusRegister == 0) configuredSensors[i].modbusRegister = 13;
-            Serial.println("Auto-configured EZO-RTD sensor");
         } else if (strcmp(configuredSensors[i].type, "SHT30") == 0) {
             if (configuredSensors[i].i2cAddress == 0) configuredSensors[i].i2cAddress = 0x44;
             if (strlen(configuredSensors[i].command) == 0) strcpy(configuredSensors[i].command, "0x2C06");  // SHT30 measurement command
@@ -82,28 +76,23 @@ void applySensorPresets() {
             if (configuredSensors[i].updateInterval == 0) configuredSensors[i].updateInterval = 1000;
             // Don't override manually configured modbus register!
             if (configuredSensors[i].modbusRegister == 0) configuredSensors[i].modbusRegister = 15;
-            Serial.printf("Auto-configured SHT30 sensor (register preserved: %d)\n", configuredSensors[i].modbusRegister);
         } else if (strcmp(configuredSensors[i].type, "BME280") == 0) {
             if (configuredSensors[i].i2cAddress == 0) configuredSensors[i].i2cAddress = 0x76;
             if (strlen(configuredSensors[i].protocol) == 0) strcpy(configuredSensors[i].protocol, "I2C");
             if (configuredSensors[i].updateInterval == 0) configuredSensors[i].updateInterval = 1000;
             if (configuredSensors[i].modbusRegister == 0) configuredSensors[i].modbusRegister = 16;
-            Serial.println("Auto-configured BME280 sensor");
         } else if (strcmp(configuredSensors[i].type, "DS18B20") == 0) {
             if (strlen(configuredSensors[i].protocol) == 0) strcpy(configuredSensors[i].protocol, "One-Wire");
             if (configuredSensors[i].updateInterval == 0) configuredSensors[i].updateInterval = 2000;
             if (configuredSensors[i].modbusRegister == 0) configuredSensors[i].modbusRegister = 14;
-            Serial.println("Auto-configured DS18B20 sensor");
         } else if (strcmp(configuredSensors[i].type, "Generic One-Wire") == 0) {
             if (strlen(configuredSensors[i].protocol) == 0) strcpy(configuredSensors[i].protocol, "One-Wire");
             if (configuredSensors[i].updateInterval == 0) configuredSensors[i].updateInterval = 2000;
             if (configuredSensors[i].modbusRegister == 0) configuredSensors[i].modbusRegister = 17; // Next available register
-            Serial.println("Auto-configured Generic One-Wire sensor");
         } else if (strcmp(configuredSensors[i].type, "Generic I2C") == 0) {
             if (strlen(configuredSensors[i].protocol) == 0) strcpy(configuredSensors[i].protocol, "I2C");
             if (configuredSensors[i].updateInterval == 0) configuredSensors[i].updateInterval = 1000;
             if (configuredSensors[i].modbusRegister == 0) configuredSensors[i].modbusRegister = 18; // Next available register
-            Serial.println("Auto-configured Generic I2C sensor");
         } else if (strcmp(configuredSensors[i].type, "GENERIC_UART") == 0) {
             if (strlen(configuredSensors[i].protocol) == 0) strcpy(configuredSensors[i].protocol, "UART");
             // Don't override updateInterval - use what was configured in web UI
@@ -111,7 +100,6 @@ void applySensorPresets() {
             // Set default UART pins if not configured
             if (configuredSensors[i].uartTxPin == 0) configuredSensors[i].uartTxPin = 0; // GP0
             if (configuredSensors[i].uartRxPin == 0) configuredSensors[i].uartRxPin = 1; // GP1
-            Serial.printf("Auto-configured GENERIC_UART sensor (updateInterval preserved: %d)\n", configuredSensors[i].updateInterval);
         }
         
         // Set default pins if not configured
@@ -434,7 +422,7 @@ void processI2CQueue() {
                         configuredSensors[op.sensorIndex].rawValue = temperature;
                         configuredSensors[op.sensorIndex].rawValueB = humidity;
                         
-                        Serial.printf("[DEBUG] SHT30 parsed: Temp=%.2f°C, Hum=%.2f%%\n", temperature, humidity);
+
                         
                         // Apply calibration to both values using new expression-capable functions
                         float calibratedTemp = applyCalibration(temperature, configuredSensors[op.sensorIndex]);
@@ -604,8 +592,7 @@ void processUARTQueue() {
     // Declare variables outside switch to avoid 'crosses initialization' error
     int txPin, rxPin;
     
-    Serial.printf("[DEBUG] UART: Processing sensor %d (%s) - state %d\n", 
-                 op.sensorIndex, configuredSensors[op.sensorIndex].name, (int)op.state);
+
     
     switch(op.state) {
         case BusOpState::IDLE:
@@ -628,7 +615,7 @@ void processUARTQueue() {
                     if (strlen(command) > 0) {
                         Serial1.print(command);
                         Serial1.print("\r\n");
-                        Serial.printf("[DEBUG] UART: Sent command '%s' to TX:%d\n", command, txPin);
+
                         
                         // Log the UART transaction for terminal watch
                         String pinStr = String(txPin) + "," + String(rxPin);
@@ -655,7 +642,7 @@ void processUARTQueue() {
                             
                             strncpy(configuredSensors[op.sensorIndex].rawDataString, response.c_str(), 
                                    sizeof(configuredSensors[op.sensorIndex].rawDataString)-1);
-                            Serial.printf("[DEBUG] UART: Received response '%s'\n", response.c_str());
+
                             
                             // Parse the response to extract numeric value
                             float value = 0.0;
@@ -674,12 +661,12 @@ void processUARTQueue() {
                             configuredSensors[op.sensorIndex].modbusValue = (int)(calibratedValue * 100);
                             
                         } else {
-                            Serial.printf("[DEBUG] UART: No response received\n");
+
                             configuredSensors[op.sensorIndex].rawValue = 0.0;
                             strcpy(configuredSensors[op.sensorIndex].rawDataString, "NO_RESPONSE");
                         }
                     } else {
-                        Serial.printf("[DEBUG] UART: No command configured, reading available data\n");
+
                         // Just read any available data
                         String response = "";
                         while (Serial1.available() && response.length() < 120) {
@@ -695,12 +682,12 @@ void processUARTQueue() {
                     
                     Serial1.end(); // Close UART to free pins for other sensors
                 } else {
-                    Serial.printf("[DEBUG] UART: Invalid pin combination TX:%d RX:%d\n", txPin, rxPin);
+
                     configuredSensors[op.sensorIndex].rawValue = 0.0;
                     strcpy(configuredSensors[op.sensorIndex].rawDataString, "INVALID_PINS");
                 }
             } else {
-                Serial.printf("[DEBUG] UART: Invalid pins TX:%d RX:%d\n", txPin, rxPin);
+
                 configuredSensors[op.sensorIndex].rawValue = 0.0;
                 strcpy(configuredSensors[op.sensorIndex].rawDataString, "INVALID_PINS");
             }
@@ -739,7 +726,7 @@ void processOneWireQueue() {
     
     switch(op.state) {
         case BusOpState::IDLE:
-            Serial.printf("[DEBUG] One-Wire: Sensor %d (%s) IDLE, pin %d\n", op.sensorIndex, configuredSensors[op.sensorIndex].name, owPin);
+
             // Initialize One-Wire transaction
             pinMode(owPin, OUTPUT);
             digitalWrite(owPin, LOW);
@@ -750,7 +737,7 @@ void processOneWireQueue() {
             delayMicroseconds(410);
 
             if (presence) {
-                Serial.printf("[DEBUG] One-Wire: Presence detected for sensor %d, sending convert command\n", op.sensorIndex);
+
                 
                 // Log the One-Wire transaction for terminal watch
                 logOneWireTransaction(String(owPin), "TX", "0xCC 0x44 (Skip ROM + Convert T)");
@@ -790,9 +777,9 @@ void processOneWireQueue() {
                 op.startTime = currentTime;
                 configuredSensors[op.sensorIndex].lastOneWireCmd = currentTime;
             } else {
-                Serial.printf("[DEBUG] One-Wire: No presence detected for sensor %d, retry %d\n", op.sensorIndex, op.retryCount+1);
+
                 if (++op.retryCount >= 3) {
-                    Serial.printf("[DEBUG] One-Wire: Max retries exceeded for sensor %d, removing from queue\n", op.sensorIndex);
+
                     for(int i = 0; i < oneWireQueueSize - 1; i++) {
                         oneWireQueue[i] = oneWireQueue[i + 1];
                     }
@@ -803,14 +790,14 @@ void processOneWireQueue() {
 
         case BusOpState::REQUEST_SENT:
             if (currentTime - op.startTime >= op.conversionTime) {
-                Serial.printf("[DEBUG] One-Wire: Conversion time elapsed for sensor %d\n", op.sensorIndex);
+
                 op.state = BusOpState::READY_TO_READ;
             }
             break;
 
         case BusOpState::READY_TO_READ:
             readOk = true;
-            Serial.printf("[DEBUG] One-Wire: Ready to read sensor %d\n", op.sensorIndex);
+
             // Send read scratchpad command
             pinMode(owPin, OUTPUT);
             digitalWrite(owPin, LOW);
@@ -821,7 +808,7 @@ void processOneWireQueue() {
             delayMicroseconds(410);
 
             if (presence) {
-                Serial.printf("[DEBUG] One-Wire: Presence detected for read sensor %d\n", op.sensorIndex);
+
                 
                 // Send Skip ROM (0xCC) + Read Scratchpad (0xBE) command
                 // Skip ROM command
@@ -872,17 +859,14 @@ void processOneWireQueue() {
                 }
                 
                 // Print scratchpad for debugging
-                Serial.printf("[DEBUG] One-Wire: Scratchpad: ");
-                for (int i = 0; i < 9; i++) {
-                    Serial.printf("%02X ", scratchpad[i]);
-                }
-                Serial.println();
-
+                // (Disabled for cleaner serial output)
+                /*
                 // Skip CRC validation for now - DS18B20 often has CRC issues with bit-banged implementation
                 // if (op.needsCRC && !validateCRC(scratchpad, 9)) {
                 //     Serial.printf("[DEBUG] One-Wire: CRC failed for sensor %d\n", op.sensorIndex);
                 //     readOk = false;
                 // }
+                */
 
                 if (readOk) {
                     // Convert raw data to temperature (DS18B20 format)
@@ -904,8 +888,7 @@ void processOneWireQueue() {
                     configuredSensors[op.sensorIndex].modbusValue = (int)(calibratedTemp * 100);
                     configuredSensors[op.sensorIndex].lastReadTime = currentTime;
 
-                    Serial.printf("[DEBUG] One-Wire: Sensor %d read value %.2f°C (raw=0x%04X, calibrated=%.2f, modbus=%d)\n", 
-                                 op.sensorIndex, temp, raw, calibratedTemp, configuredSensors[op.sensorIndex].modbusValue);
+
 
                     // Format raw data string
                     char dataStr[32];
@@ -913,10 +896,10 @@ void processOneWireQueue() {
                     strncpy(configuredSensors[op.sensorIndex].rawDataString, dataStr, 
                             sizeof(configuredSensors[op.sensorIndex].rawDataString)-1);
                 } else {
-                    Serial.printf("[DEBUG] One-Wire: Read failed for sensor %d\n", op.sensorIndex);
+
                 }
             } else {
-                Serial.printf("[DEBUG] One-Wire: No presence detected for read sensor %d\n", op.sensorIndex);
+
             }
 
             // Move to next operation
@@ -927,7 +910,7 @@ void processOneWireQueue() {
             break;
 
         case BusOpState::ERROR:
-            Serial.printf("[DEBUG] One-Wire: ERROR state for sensor %d\n", op.sensorIndex);
+
             // Move to next operation
             for(int i = 0; i < oneWireQueueSize - 1; i++) {
                 oneWireQueue[i] = oneWireQueue[i + 1];
@@ -1357,15 +1340,13 @@ void setup() {
     delay(200);
     dumpSensorsFile();
 
-    Serial.println("Loading sensor configuration...");
-    delay(500);
+    // Loading sensor configuration - reduced logging
     loadSensorConfig();
     // Ensure presets are applied after initial config load
     applySensorPresets();
     
     // Initialize command queues
-    
-    Serial.printf("Loaded %d sensors\n", numConfiguredSensors);
+    Serial.printf("Sensors: %d configured\n", numConfiguredSensors);
     
     // Initialize bus queues and command arrays
     i2cQueueSize = 0;
@@ -2655,38 +2636,209 @@ void handleEzoSensors() {
 }
 
 void loadConfig() {
-    // Use hardcoded defaults for config (RAM only)
+    Serial.println("Loading network configuration...");
+    
+    // Start with defaults
     config = DEFAULT_CONFIG;
-    config.modbusPort = 502;
-    // If your Config struct has a deviceName field, set it here. Otherwise, remove this line.
-    // All old JSON/file logic removed.
-    return;
+    
+    // Try to load from persistent storage (config.json)
+    if (!LittleFS.exists(CONFIG_FILE)) {
+        Serial.println("No config file found, using defaults");
+        return;
+    }
+    
+    File file = LittleFS.open(CONFIG_FILE, "r");
+    if (!file) {
+        Serial.println("Failed to open config file");
+        return;
+    }
+    
+    size_t size = file.size();
+    if (size == 0) {
+        Serial.println("Config file is empty, using defaults");
+        file.close();
+        return;
+    }
+    
+    // Parse JSON from file
+    StaticJsonDocument<1024> doc;
+    DeserializationError err = deserializeJson(doc, file);
+    file.close();
+    
+    if (err) {
+        Serial.printf("Failed to parse config JSON: %s, using defaults\n", err.c_str());
+        return;
+    }
+    
+    // Load network settings from JSON
+    config.version = doc["version"] | CONFIG_VERSION;
+    config.dhcpEnabled = doc["dhcpEnabled"] | false;
+    config.modbusPort = doc["modbusPort"] | 502;
+    
+    // Load hostname
+    const char* hostname = doc["hostname"] | "modbus-io-module";
+    strncpy(config.hostname, hostname, HOSTNAME_MAX_LENGTH - 1);
+    config.hostname[HOSTNAME_MAX_LENGTH - 1] = '\0';
+    
+    // Load IP address
+    if (doc.containsKey("ip") && doc["ip"].is<JsonArray>()) {
+        JsonArray ipArray = doc["ip"];
+        if (ipArray.size() == 4) {
+            for (int i = 0; i < 4; i++) {
+                config.ip[i] = ipArray[i] | 0;
+            }
+        }
+    }
+    
+    // Load gateway
+    if (doc.containsKey("gateway") && doc["gateway"].is<JsonArray>()) {
+        JsonArray gwArray = doc["gateway"];
+        if (gwArray.size() == 4) {
+            for (int i = 0; i < 4; i++) {
+                config.gateway[i] = gwArray[i] | 0;
+            }
+        }
+    }
+    
+    // Load subnet mask
+    if (doc.containsKey("subnet") && doc["subnet"].is<JsonArray>()) {
+        JsonArray subnetArray = doc["subnet"];
+        if (subnetArray.size() == 4) {
+            for (int i = 0; i < 4; i++) {
+                config.subnet[i] = subnetArray[i] | 0;
+            }
+        }
+    }
+    
+    // Load IO configuration
+    if (doc.containsKey("diPullup") && doc["diPullup"].is<JsonArray>()) {
+        JsonArray diPullupArray = doc["diPullup"];
+        for (int i = 0; i < 8 && i < (int)diPullupArray.size(); i++) {
+            config.diPullup[i] = diPullupArray[i] | true;
+        }
+    }
+    
+    if (doc.containsKey("diInvert") && doc["diInvert"].is<JsonArray>()) {
+        JsonArray diInvertArray = doc["diInvert"];
+        for (int i = 0; i < 8 && i < (int)diInvertArray.size(); i++) {
+            config.diInvert[i] = diInvertArray[i] | false;
+        }
+    }
+    
+    if (doc.containsKey("diLatch") && doc["diLatch"].is<JsonArray>()) {
+        JsonArray diLatchArray = doc["diLatch"];
+        for (int i = 0; i < 8 && i < (int)diLatchArray.size(); i++) {
+            config.diLatch[i] = diLatchArray[i] | false;
+        }
+    }
+    
+    if (doc.containsKey("doInvert") && doc["doInvert"].is<JsonArray>()) {
+        JsonArray doInvertArray = doc["doInvert"];
+        for (int i = 0; i < 8 && i < (int)doInvertArray.size(); i++) {
+            config.doInvert[i] = doInvertArray[i] | false;
+        }
+    }
+    
+    if (doc.containsKey("doInitialState") && doc["doInitialState"].is<JsonArray>()) {
+        JsonArray doInitialArray = doc["doInitialState"];
+        for (int i = 0; i < 8 && i < (int)doInitialArray.size(); i++) {
+            config.doInitialState[i] = doInitialArray[i] | false;
+        }
+    }
+    
+    Serial.println("Network configuration loaded successfully");
+    Serial.print("  DHCP: "); Serial.println(config.dhcpEnabled ? "enabled" : "disabled");
+    Serial.print("  IP: "); Serial.print(config.ip[0]); Serial.print("."); Serial.print(config.ip[1]); Serial.print("."); Serial.print(config.ip[2]); Serial.print("."); Serial.println(config.ip[3]);
+    Serial.print("  Hostname: "); Serial.println(config.hostname);
 }
 
 void saveConfig() {
-    Serial.println("Config save (RAM only, not persisted)");
+    Serial.println("Saving network configuration to LittleFS...");
+    
+    // Create JSON document
+    StaticJsonDocument<1024> doc;
+    
+    doc["version"] = config.version;
+    doc["dhcpEnabled"] = config.dhcpEnabled;
+    doc["modbusPort"] = config.modbusPort;
+    doc["hostname"] = config.hostname;
+    
+    // Save IP address as array
+    JsonArray ipArray = doc.createNestedArray("ip");
+    for (int i = 0; i < 4; i++) {
+        ipArray.add(config.ip[i]);
+    }
+    
+    // Save gateway as array
+    JsonArray gwArray = doc.createNestedArray("gateway");
+    for (int i = 0; i < 4; i++) {
+        gwArray.add(config.gateway[i]);
+    }
+    
+    // Save subnet as array
+    JsonArray subnetArray = doc.createNestedArray("subnet");
+    for (int i = 0; i < 4; i++) {
+        subnetArray.add(config.subnet[i]);
+    }
+    
+    // Save IO configuration
+    JsonArray diPullupArray = doc.createNestedArray("diPullup");
+    for (int i = 0; i < 8; i++) {
+        diPullupArray.add(config.diPullup[i]);
+    }
+    
+    JsonArray diInvertArray = doc.createNestedArray("diInvert");
+    for (int i = 0; i < 8; i++) {
+        diInvertArray.add(config.diInvert[i]);
+    }
+    
+    JsonArray diLatchArray = doc.createNestedArray("diLatch");
+    for (int i = 0; i < 8; i++) {
+        diLatchArray.add(config.diLatch[i]);
+    }
+    
+    JsonArray doInvertArray = doc.createNestedArray("doInvert");
+    for (int i = 0; i < 8; i++) {
+        doInvertArray.add(config.doInvert[i]);
+    }
+    
+    JsonArray doInitialArray = doc.createNestedArray("doInitialState");
+    for (int i = 0; i < 8; i++) {
+        doInitialArray.add(config.doInitialState[i]);
+    }
+    
+    // Write to file
+    File file = LittleFS.open(CONFIG_FILE, "w");
+    if (!file) {
+        Serial.println("Failed to open config file for writing");
+        return;
+    }
+    
+    if (serializeJson(doc, file) == 0) {
+        Serial.println("Failed to write config JSON");
+    } else {
+        Serial.println("Config saved successfully");
+    }
+    
+    file.close();
 }
 
 void loadSensorConfig() {
-    Serial.println("Loading sensor configuration...");
     // Initialize sensors array
     numConfiguredSensors = 0;
     memset(configuredSensors, 0, sizeof(configuredSensors));
 
     if (!LittleFS.exists(SENSORS_FILE)) {
-        Serial.println("No sensors file found on LittleFS");
         return;
     }
 
     File file = LittleFS.open(SENSORS_FILE, "r");
     if (!file) {
-        Serial.println("Failed to open sensors file");
         return;
     }
 
     size_t size = file.size();
     if (size == 0) {
-        Serial.println("Sensors file is empty");
         file.close();
         return;
     }
@@ -2696,17 +2848,15 @@ void loadSensorConfig() {
     DeserializationError err = deserializeJson(doc, file);
     file.close();
     if (err) {
-        Serial.printf("Failed to parse sensors JSON: %s\n", err.c_str());
+        Serial.printf("Sensor JSON parse error: %s\n", err.c_str());
         return;
     }
 
     if (!doc.containsKey("sensors") || !doc["sensors"].is<JsonArray>()) {
-        Serial.println("sensors array missing or invalid in JSON");
         return;
     }
 
     JsonArray sensorsArray = doc["sensors"].as<JsonArray>();
-    Serial.printf("Found %u sensors in file\n", (unsigned)sensorsArray.size());
 
     for (JsonObject sensor : sensorsArray) {
         if (numConfiguredSensors >= MAX_SENSORS) break;
@@ -2832,14 +2982,12 @@ void loadSensorConfig() {
         numConfiguredSensors++;
     }
 
-    Serial.printf("Loaded %d sensors from filesystem\n", numConfiguredSensors);
 
     // Apply presets after loading
     applySensorPresets();
 }
 
 void saveSensorConfig() {
-    Serial.println("Saving sensor configuration...");
     // Create JSON document
     StaticJsonDocument<2048> doc;
     JsonArray sensorsArray = doc.createNestedArray("sensors");
@@ -2990,8 +3138,28 @@ void setupEthernet() {
     Serial.print("  Gateway: "); Serial.print(config.gateway[0]); Serial.print("."); Serial.print(config.gateway[1]); Serial.print("."); Serial.print(config.gateway[2]); Serial.print("."); Serial.println(config.gateway[3]);
     Serial.print("  Subnet: "); Serial.print(config.subnet[0]); Serial.print("."); Serial.print(config.subnet[1]); Serial.print("."); Serial.print(config.subnet[2]); Serial.print("."); Serial.println(config.subnet[3]);
 
-    if (config.dhcpEnabled) {
-        // Try DHCP first
+    if (!config.dhcpEnabled) {
+        // Use static IP configuration (default behavior)
+        Serial.println("Using static IP configuration");
+        IPAddress ip(config.ip[0], config.ip[1], config.ip[2], config.ip[3]);
+        IPAddress gateway(config.gateway[0], config.gateway[1], config.gateway[2], config.gateway[3]);
+        IPAddress subnet(config.subnet[0], config.subnet[1], config.subnet[2], config.subnet[3]);
+        
+        eth.config(ip, gateway, subnet);
+        if (eth.begin()) {
+            delay(1000);  // Give it time to initialize with static IP
+            IPAddress currentIP = eth.localIP();
+            if (currentIP[0] != 0 || currentIP[1] != 0 || currentIP[2] != 0 || currentIP[3] != 0) {
+                connected = true;
+                Serial.println("Static IP configuration successful");
+            } else {
+                Serial.println("Static IP configuration failed - IP not assigned");
+            }
+        } else {
+            Serial.println("Failed to start Ethernet with static IP");
+        }
+    } else {
+        // Try DHCP when enabled
         Serial.println("Attempting to use DHCP...");
         if (eth.begin()) {
             // Wait for DHCP to complete
@@ -3011,35 +3179,40 @@ void setupEthernet() {
             
             if (!connected) {
                 Serial.println("\nDHCP timeout, falling back to static IP");
+                // Fall back to static IP on DHCP timeout
+                IPAddress ip(config.ip[0], config.ip[1], config.ip[2], config.ip[3]);
+                IPAddress gateway(config.gateway[0], config.gateway[1], config.gateway[2], config.gateway[3]);
+                IPAddress subnet(config.subnet[0], config.subnet[1], config.subnet[2], config.subnet[3]);
+                
+                eth.end();
+                delay(500);
+                
+                eth.config(ip, gateway, subnet);
+                if (eth.begin()) {
+                    delay(1000);
+                    IPAddress currentIP = eth.localIP();
+                    if (currentIP[0] != 0 || currentIP[1] != 0 || currentIP[2] != 0 || currentIP[3] != 0) {
+                        connected = true;
+                        Serial.println("Fallback to static IP successful");
+                    }
+                }
             }
         } else {
             Serial.println("Failed to start DHCP process, falling back to static IP");
-        }
-    }
-    
-    // If DHCP failed or not enabled, use static IP
-    if (!connected) {
-        Serial.println("Using static IP configuration");
-        IPAddress ip(config.ip[0], config.ip[1], config.ip[2], config.ip[3]);
-        IPAddress gateway(config.gateway[0], config.gateway[1], config.gateway[2], config.gateway[3]);
-        IPAddress subnet(config.subnet[0], config.subnet[1], config.subnet[2], config.subnet[3]);
-        
-        // Stop current connection attempt if any
-        eth.end();
-        delay(500);  // Short delay to ensure clean restart
-        
-        eth.config(ip, gateway, subnet);
-        if (eth.begin()) {
-            delay(1000);  // Give it time to initialize with static IP
-            IPAddress currentIP = eth.localIP();
-            if (currentIP[0] != 0 || currentIP[1] != 0 || currentIP[2] != 0 || currentIP[3] != 0) {
-                connected = true;
-                Serial.println("Static IP configuration successful");
-            } else {
-                Serial.println("Static IP configuration failed - IP not assigned");
+            // Fall back to static IP
+            IPAddress ip(config.ip[0], config.ip[1], config.ip[2], config.ip[3]);
+            IPAddress gateway(config.gateway[0], config.gateway[1], config.gateway[2], config.gateway[3]);
+            IPAddress subnet(config.subnet[0], config.subnet[1], config.subnet[2], config.subnet[3]);
+            
+            eth.config(ip, gateway, subnet);
+            if (eth.begin()) {
+                delay(1000);
+                IPAddress currentIP = eth.localIP();
+                if (currentIP[0] != 0 || currentIP[1] != 0 || currentIP[2] != 0 || currentIP[3] != 0) {
+                    connected = true;
+                    Serial.println("Fallback to static IP successful");
+                }
             }
-        } else {
-            Serial.println("Failed to start Ethernet with static IP");
         }
     }
 
@@ -3224,7 +3397,38 @@ void sendJSON(WiFiClient& client, String json); // Ensure sendJSON is declared
 
 void sendJSONConfig(WiFiClient& client) {
     StaticJsonDocument<1024> doc;
-    doc["config"] = "placeholder";
+    
+    // Network configuration
+    doc["dhcpEnabled"] = config.dhcpEnabled;
+    
+    // Fixed IP address
+    JsonArray ipArray = doc.createNestedArray("ip");
+    for (int i = 0; i < 4; i++) {
+        ipArray.add(config.ip[i]);
+    }
+    
+    // Gateway
+    JsonArray gatewayArray = doc.createNestedArray("gateway");
+    for (int i = 0; i < 4; i++) {
+        gatewayArray.add(config.gateway[i]);
+    }
+    
+    // Subnet mask
+    JsonArray subnetArray = doc.createNestedArray("subnet");
+    for (int i = 0; i < 4; i++) {
+        subnetArray.add(config.subnet[i]);
+    }
+    
+    // Modbus and hostname
+    doc["modbusPort"] = config.modbusPort;
+    doc["hostname"] = config.hostname;
+    
+    // Current network status - use string conversion to avoid issues
+    IPAddress localIP = eth.localIP();
+    String ipStr = String(localIP[0]) + "." + String(localIP[1]) + "." + String(localIP[2]) + "." + String(localIP[3]);
+    doc["localIP"] = ipStr;
+    doc["status"] = "connected";
+    
     String response;
     serializeJson(doc, response);
     sendJSON(client, response);
@@ -4147,24 +4351,128 @@ void handlePOSTConfig(WiFiClient& client, String body) {
         return;
     }
     
-    // Update configuration (same logic as original handleSetConfig)
-    config.dhcpEnabled = doc["dhcpEnabled"] | config.dhcpEnabled;
-    config.modbusPort = doc["modbusPort"] | config.modbusPort;
+    bool configChanged = false;
     
-    if (doc.containsKey("ip")) {
-        JsonArray ipArray = doc["ip"];
-        for (int i = 0; i < 4 && i < ipArray.size(); i++) {
-            config.ip[i] = ipArray[i];
+    // Update DHCP setting
+    if (doc.containsKey("dhcpEnabled")) {
+        bool newDhcp = doc["dhcpEnabled"];
+        if (newDhcp != config.dhcpEnabled) {
+            config.dhcpEnabled = newDhcp;
+            configChanged = true;
+            Serial.print("DHCP setting changed to: ");
+            Serial.println(config.dhcpEnabled ? "enabled" : "disabled");
         }
     }
     
-    saveConfig();
+    // Update fixed IP address
+    if (doc.containsKey("ip")) {
+        JsonArray ipArray = doc["ip"];
+        if (ipArray.size() == 4) {
+            bool ipChanged = false;
+            for (int i = 0; i < 4; i++) {
+                uint8_t newOctet = ipArray[i];
+                if (newOctet != config.ip[i]) {
+                    config.ip[i] = newOctet;
+                    ipChanged = true;
+                }
+            }
+            if (ipChanged) {
+                configChanged = true;
+                Serial.print("IP address changed to: ");
+                Serial.print(config.ip[0]); Serial.print(".");
+                Serial.print(config.ip[1]); Serial.print(".");
+                Serial.print(config.ip[2]); Serial.print(".");
+                Serial.println(config.ip[3]);
+            }
+        }
+    }
     
-    client.println("HTTP/1.1 200 OK");
-    client.println("Content-Type: application/json");
-    client.println("Connection: close");
-    client.println();
-    client.println("{\"success\":true}");
+    // Update gateway
+    if (doc.containsKey("gateway")) {
+        JsonArray gatewayArray = doc["gateway"];
+        if (gatewayArray.size() == 4) {
+            bool gatewayChanged = false;
+            for (int i = 0; i < 4; i++) {
+                uint8_t newOctet = gatewayArray[i];
+                if (newOctet != config.gateway[i]) {
+                    config.gateway[i] = newOctet;
+                    gatewayChanged = true;
+                }
+            }
+            if (gatewayChanged) {
+                configChanged = true;
+                Serial.print("Gateway changed to: ");
+                Serial.print(config.gateway[0]); Serial.print(".");
+                Serial.print(config.gateway[1]); Serial.print(".");
+                Serial.print(config.gateway[2]); Serial.print(".");
+                Serial.println(config.gateway[3]);
+            }
+        }
+    }
+    
+    // Update subnet mask
+    if (doc.containsKey("subnet")) {
+        JsonArray subnetArray = doc["subnet"];
+        if (subnetArray.size() == 4) {
+            bool subnetChanged = false;
+            for (int i = 0; i < 4; i++) {
+                uint8_t newOctet = subnetArray[i];
+                if (newOctet != config.subnet[i]) {
+                    config.subnet[i] = newOctet;
+                    subnetChanged = true;
+                }
+            }
+            if (subnetChanged) {
+                configChanged = true;
+                Serial.print("Subnet changed to: ");
+                Serial.print(config.subnet[0]); Serial.print(".");
+                Serial.print(config.subnet[1]); Serial.print(".");
+                Serial.print(config.subnet[2]); Serial.print(".");
+                Serial.println(config.subnet[3]);
+            }
+        }
+    }
+    
+    // Update Modbus port
+    if (doc.containsKey("modbusPort")) {
+        uint16_t newPort = doc["modbusPort"];
+        if (newPort != config.modbusPort) {
+            config.modbusPort = newPort;
+            configChanged = true;
+            Serial.print("Modbus port changed to: ");
+            Serial.println(config.modbusPort);
+        }
+    }
+    
+    // Update hostname
+    if (doc.containsKey("hostname")) {
+        const char* newHostname = doc["hostname"];
+        if (strcmp(newHostname, config.hostname) != 0) {
+            strncpy(config.hostname, newHostname, HOSTNAME_MAX_LENGTH - 1);
+            config.hostname[HOSTNAME_MAX_LENGTH - 1] = '\0';
+            configChanged = true;
+            Serial.print("Hostname changed to: ");
+            Serial.println(config.hostname);
+        }
+    }
+    
+    if (configChanged) {
+        saveConfig();
+        
+        client.println("HTTP/1.1 200 OK");
+        client.println("Content-Type: application/json");
+        client.println("Connection: close");
+        client.println();
+        client.println("{\"success\":true,\"message\":\"Network configuration saved. Please manually reboot device for changes to take effect.\"}");
+        client.stop();
+    } else {
+        client.println("HTTP/1.1 200 OK");
+        client.println("Content-Type: application/json");
+        client.println("Connection: close");
+        client.println();
+        client.println("{\"success\":true,\"message\":\"No changes made\"}");
+        client.stop();
+    }
 }
 
 void handlePOSTSetOutput(WiFiClient& client, String body) {

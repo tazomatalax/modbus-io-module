@@ -249,7 +249,7 @@ extern int connectedClients;
 // Default configuration
 const Config DEFAULT_CONFIG = {
     .version = CONFIG_VERSION,
-    .dhcpEnabled = true,
+    .dhcpEnabled = false,
     .ip = {192, 168, 1, 10},
     .gateway = {192, 168, 1, 1},
     .subnet = {255, 255, 255, 0},
