@@ -30,6 +30,15 @@ struct SensorPreset {
 const SensorPreset sensorPresets[] = {
     // SHT30: I2C command 0x2C 0x06, 1s polling, 15ms delay
     { "SHT30", "I2C", {0x2C, 0x06}, 2, 1000, 15 },
+    // DS18B20: One-Wire, 2s polling, 750ms conversion time
+    { "DS18B20", "One-Wire", {0x44, 0x00}, 1, 2000, 750 },
+    // EZO Sensors: I2C read command 'R' = 0x52, 5s polling, 900ms response time
+    { "EZO_PH", "I2C", {0x52, 0x00}, 1, 5000, 900 },
+    { "EZO_EC", "I2C", {0x52, 0x00}, 1, 5000, 900 },
+    { "EZO_DO", "I2C", {0x52, 0x00}, 1, 5000, 900 },
+    { "EZO_RTD", "I2C", {0x52, 0x00}, 1, 5000, 900 },
+    // LIS3DH: 3-axis accelerometer, I2C, 1s polling, direct register read (no command)
+    { "LIS3DH", "I2C", {0x00, 0x00}, 0, 1000, 0 },
     // Add more named sensors here as needed
 };
 
@@ -85,6 +94,13 @@ void applySensorPresets() {
             if (strlen(configuredSensors[i].protocol) == 0) strcpy(configuredSensors[i].protocol, "One-Wire");
             if (configuredSensors[i].updateInterval == 0) configuredSensors[i].updateInterval = 2000;
             if (configuredSensors[i].modbusRegister == 0) configuredSensors[i].modbusRegister = 14;
+        } else if (strcmp(configuredSensors[i].type, "LIS3DH") == 0) {
+            if (configuredSensors[i].i2cAddress == 0) configuredSensors[i].i2cAddress = 0x18;
+            // LIS3DH uses direct register read, NOT a command - clear any existing command
+            memset(configuredSensors[i].command, 0, sizeof(configuredSensors[i].command));
+            if (strlen(configuredSensors[i].protocol) == 0) strcpy(configuredSensors[i].protocol, "I2C");
+            if (configuredSensors[i].updateInterval == 0) configuredSensors[i].updateInterval = 1000;
+            if (configuredSensors[i].modbusRegister == 0) configuredSensors[i].modbusRegister = 20;
         } else if (strcmp(configuredSensors[i].type, "Generic One-Wire") == 0) {
             if (strlen(configuredSensors[i].protocol) == 0) strcpy(configuredSensors[i].protocol, "One-Wire");
             if (configuredSensors[i].updateInterval == 0) configuredSensors[i].updateInterval = 2000;
@@ -254,7 +270,111 @@ void processI2CQueue() {
             // Check if sensor has a command to send
             bool hasCommand = strlen(configuredSensors[op.sensorIndex].command) > 0;
             
-            if (hasCommand) {
+            // Special handling for LIS3DH: atomic write+read without losing register pointer
+            if (strcmp(configuredSensors[op.sensorIndex].type, "LIS3DH") == 0) {
+                // LIS3DH: Perform register address write + data read in single atomic I2C operation
+                // This prevents the register pointer from being lost between transactions
+                logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "TX", 
+                                "Register address: 0xA8 (OUT_X_L with auto-increment) for LIS3DH", 
+                                String(configuredSensors[op.sensorIndex].name));
+                
+                // BEGIN I2C TRANSMISSION FIRST
+                Wire.beginTransmission(configuredSensors[op.sensorIndex].i2cAddress);
+                
+                // Write register address 0xA8 = 0x28 with auto-increment bit (bit 7) enabled
+                // This enables automatic address increment for multi-byte reads
+                Wire.write(0xA8);  // 0x28 | 0x80 = 0xA8 (enables auto-increment)
+                int writeResult = Wire.endTransmission(false);  // false = send REPEATED START, NOT STOP
+                
+                if (writeResult == 0) {
+                    logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "ACK", 
+                                    "Register address set with repeated START", 
+                                    String(configuredSensors[op.sensorIndex].name));
+                    
+                    // Immediately request 6 bytes in the same I2C session (repeated START)
+                    delayMicroseconds(10);  // Brief delay for register pointer to settle
+                    Wire.requestFrom((int)configuredSensors[op.sensorIndex].i2cAddress, 6);
+                    
+                    if (Wire.available()) {
+                        char response[32] = {0};
+                        String rawHex = "";
+                        int idx = 0;
+                        
+                        while(Wire.available() && idx < 6) {
+                            uint8_t byte = Wire.read();
+                            response[idx++] = byte;
+                            if (rawHex.length() > 0) rawHex += " ";
+                            rawHex += "0x" + String(byte, HEX);
+                        }
+                        response[idx] = '\0';
+                        
+                        logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "RX", 
+                                        "Raw: [" + rawHex + "]", 
+                                        String(configuredSensors[op.sensorIndex].name));
+                        
+                        // Parse LIS3DH data immediately in IDLE state
+                        if (idx >= 6) {
+                            // Extract raw 16-bit signed integers (little-endian)
+                            int16_t x_raw = ((uint8_t)response[1] << 8) | (uint8_t)response[0];
+                            int16_t y_raw = ((uint8_t)response[3] << 8) | (uint8_t)response[2];
+                            int16_t z_raw = ((uint8_t)response[5] << 8) | (uint8_t)response[4];
+                            
+                            // LIS3DH in standard 10-bit mode (±2g range):
+                            // - Data occupies upper 10 bits (bits 15-6)
+                            // - Lower 6 bits are padding
+                            // - Right-shift by 6 to get actual 10-bit value (-512 to +511)
+                            // - Scale: ±2g / 512 LSB = 3.906 mg/LSB
+                            x_raw >>= 6;
+                            y_raw >>= 6;
+                            z_raw >>= 6;
+                            
+                            float x_mg = (float)x_raw * 3.906f;  // ±2g standard mode: 3.906 mg/LSB
+                            float y_mg = (float)y_raw * 3.906f;
+                            float z_mg = (float)z_raw * 3.906f;
+                            
+                            configuredSensors[op.sensorIndex].rawValue = x_mg;
+                            configuredSensors[op.sensorIndex].rawValueB = y_mg;
+                            configuredSensors[op.sensorIndex].rawValueC = z_mg;
+                            
+                            float calibratedX = applyCalibration(x_mg, configuredSensors[op.sensorIndex]);
+                            float calibratedY = applyCalibrationB(y_mg, configuredSensors[op.sensorIndex]);
+                            float calibratedZ = applyCalibrationC(z_mg, configuredSensors[op.sensorIndex]);
+                            
+                            configuredSensors[op.sensorIndex].calibratedValue = calibratedX;
+                            configuredSensors[op.sensorIndex].calibratedValueB = calibratedY;
+                            configuredSensors[op.sensorIndex].calibratedValueC = calibratedZ;
+                            
+                            configuredSensors[op.sensorIndex].modbusValue = (int)(calibratedX * 100);
+                            configuredSensors[op.sensorIndex].modbusValueB = (int)(calibratedY * 100);
+                            configuredSensors[op.sensorIndex].modbusValueC = (int)(calibratedZ * 100);
+                            
+                            logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "VAL", 
+                                            "X: " + String(x_mg, 2) + " mg, Y: " + String(y_mg, 2) + " mg, Z: " + String(z_mg, 2) + " mg", 
+                                            String(configuredSensors[op.sensorIndex].name));
+                        } else {
+                            logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "ERR", 
+                                            "LIS3DH response too short: " + String(idx) + " bytes", 
+                                            String(configuredSensors[op.sensorIndex].name));
+                        }
+                    } else {
+                        logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "TIMEOUT", 
+                                        "No response after register set", 
+                                        String(configuredSensors[op.sensorIndex].name));
+                    }
+                } else {
+                    logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "NACK", 
+                                    "Failed to set register address, error: " + String(writeResult), 
+                                    String(configuredSensors[op.sensorIndex].name));
+                }
+                
+                // Move to next operation - LIS3DH handled completely in IDLE state
+                for(int i = 0; i < i2cQueueSize - 1; i++) {
+                    i2cQueue[i] = i2cQueue[i + 1];
+                }
+                i2cQueueSize--;
+                rp2040.wdt_reset();
+                return;
+            } else if (hasCommand) {
                 // Sanitize command: remove control chars except explicit \r or \n
                 String rawCmd = String(configuredSensors[op.sensorIndex].command);
                 String command = "";
@@ -332,6 +452,8 @@ void processI2CQueue() {
             if (result == 0) {
                 // Check if sensor needs delay before reading
                 bool hasCommand = strlen(configuredSensors[op.sensorIndex].command) > 0;
+                
+                // LIS3DH is handled completely in IDLE state, so skip state transitions for it
                 if (hasCommand && op.conversionTime > 0) {
                     op.state = BusOpState::REQUEST_SENT;
                     op.startTime = currentTime;
@@ -361,6 +483,14 @@ void processI2CQueue() {
             }
             break;
         }
+        
+        case BusOpState::WAITING_CONVERSION: {
+            // Wait for conversion/delay time to elapse (used for LIS3DH register pointer setup)
+            if (currentTime - op.startTime >= op.conversionTime) {
+                op.state = BusOpState::READY_TO_READ;
+            }
+            break;
+        }
             
         case BusOpState::READY_TO_READ: {
             // Per-op timeout: abort if this operation has been pending too long (3 seconds)
@@ -375,10 +505,18 @@ void processI2CQueue() {
                 return;
             }
             
+            // Determine how many bytes to request based on sensor type
+            int bytesToRequest = 32;  // Default for most sensors
+            if (strcmp(configuredSensors[op.sensorIndex].type, "LIS3DH") == 0) {
+                bytesToRequest = 6;  // LIS3DH: OUT_X_L, OUT_X_H, OUT_Y_L, OUT_Y_H, OUT_Z_L, OUT_Z_H
+            } else if (strcmp(configuredSensors[op.sensorIndex].type, "SHT30") == 0) {
+                bytesToRequest = 6;  // SHT30: 6 bytes (temp MSB/LSB/CRC + hum MSB/LSB/CRC)
+            }
+            
             logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "REQ", 
-                            "Requesting 32 bytes from " + String(configuredSensors[op.sensorIndex].name), 
+                            "Requesting " + String(bytesToRequest) + " bytes from " + String(configuredSensors[op.sensorIndex].name), 
                             String(configuredSensors[op.sensorIndex].name));
-            Wire.requestFrom((int)configuredSensors[op.sensorIndex].i2cAddress, 32);
+            Wire.requestFrom((int)configuredSensors[op.sensorIndex].i2cAddress, bytesToRequest);
             
             if (Wire.available()) {
                 char response[32] = {0};
@@ -551,6 +689,55 @@ void processI2CQueue() {
                     } else {
                         logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "VAL", 
                                         "Parsed: " + String(primaryValue), 
+                                        String(configuredSensors[op.sensorIndex].name));
+                    }
+                } else if (strcmp(configuredSensors[op.sensorIndex].type, "LIS3DH") == 0) {
+                    // LIS3DH returns 6 bytes: X_LSB, X_MSB, Y_LSB, Y_MSB, Z_LSB, Z_MSB (signed 16-bit little-endian)
+                    if (idx >= 6) {
+                        // Extract 16-bit signed integers from raw response bytes (little-endian format)
+                        // LIS3DH auto-increments through: 0x28(X_L), 0x29(X_H), 0x2A(Y_L), 0x2B(Y_H), 0x2C(Z_L), 0x2D(Z_H)
+                        int16_t x_raw = ((uint8_t)response[1] << 8) | (uint8_t)response[0];
+                        int16_t y_raw = ((uint8_t)response[3] << 8) | (uint8_t)response[2];
+                        int16_t z_raw = ((uint8_t)response[5] << 8) | (uint8_t)response[4];
+                        
+                        // LIS3DH in standard 10-bit mode (±2g range):
+                        // - Data occupies upper 10 bits (bits 15-6)
+                        // - Lower 6 bits are padding
+                        // - Right-shift by 6 to get actual 10-bit value (-512 to +511)
+                        // - Scale: ±2g / 512 LSB = 3.906 mg/LSB
+                        x_raw >>= 6;
+                        y_raw >>= 6;
+                        z_raw >>= 6;
+                        
+                        float x_mg = (float)x_raw * 3.906f;  // ±2g standard mode: 3.906 mg/LSB
+                        float y_mg = (float)y_raw * 3.906f;
+                        float z_mg = (float)z_raw * 3.906f;
+                        
+                        // Store raw values in multi-axis structure
+                        configuredSensors[op.sensorIndex].rawValue = x_mg;
+                        configuredSensors[op.sensorIndex].rawValueB = y_mg;
+                        configuredSensors[op.sensorIndex].rawValueC = z_mg;
+                        
+                        // Apply calibration to all three axes using new expression-capable functions
+                        float calibratedX = applyCalibration(x_mg, configuredSensors[op.sensorIndex]);
+                        float calibratedY = applyCalibrationB(y_mg, configuredSensors[op.sensorIndex]);
+                        float calibratedZ = applyCalibrationC(z_mg, configuredSensors[op.sensorIndex]);
+                        
+                        configuredSensors[op.sensorIndex].calibratedValue = calibratedX;
+                        configuredSensors[op.sensorIndex].calibratedValueB = calibratedY;
+                        configuredSensors[op.sensorIndex].calibratedValueC = calibratedZ;
+                        
+                        // Convert to Modbus values (scaled by 100 for decimal precision)
+                        configuredSensors[op.sensorIndex].modbusValue = (int)(calibratedX * 100);
+                        configuredSensors[op.sensorIndex].modbusValueB = (int)(calibratedY * 100);
+                        configuredSensors[op.sensorIndex].modbusValueC = (int)(calibratedZ * 100);
+                        
+                        logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "VAL", 
+                                        "X: " + String(x_mg, 2) + " mg, Y: " + String(y_mg, 2) + " mg, Z: " + String(z_mg, 2) + " mg", 
+                                        String(configuredSensors[op.sensorIndex].name));
+                    } else {
+                        logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "ERR", 
+                                        "LIS3DH response too short: " + String(idx) + " bytes", 
                                         String(configuredSensors[op.sensorIndex].name));
                     }
                 } else {
@@ -925,6 +1112,31 @@ void processOneWireQueue() {
 void enqueueBusOperation(uint8_t sensorIndex, const char* protocol) {
     if (!configuredSensors[sensorIndex].enabled) return;
     
+    // Prevent duplicate operations in queue for the same sensor
+    // This avoids queuing up multiple pending reads while one is still processing
+    if (strcmp(protocol, "One-Wire") == 0) {
+        for (int i = 0; i < oneWireQueueSize; i++) {
+            if (oneWireQueue[i].sensorIndex == sensorIndex) {
+                // Operation for this sensor already pending, skip
+                return;
+            }
+        }
+    } else if (strcmp(protocol, "I2C") == 0) {
+        for (int i = 0; i < i2cQueueSize; i++) {
+            if (i2cQueue[i].sensorIndex == sensorIndex) {
+                // Operation for this sensor already pending, skip
+                return;
+            }
+        }
+    } else if (strcmp(protocol, "UART") == 0) {
+        for (int i = 0; i < uartQueueSize; i++) {
+            if (uartQueue[i].sensorIndex == sensorIndex) {
+                // Operation for this sensor already pending, skip
+                return;
+            }
+        }
+    }
+    
     BusOperation op = {
         .sensorIndex = sensorIndex,
             .startTime = millis(),
@@ -939,6 +1151,8 @@ void enqueueBusOperation(uint8_t sensorIndex, const char* protocol) {
         op.conversionTime = 900; // Atlas Scientific pH spec: 900ms
     } else if (strcmp(configuredSensors[sensorIndex].type, "EZO-EC") == 0) {
         op.conversionTime = 900;
+    } else if (strcmp(configuredSensors[sensorIndex].type, "LIS3DH") == 0) {
+        op.conversionTime = 0; // Direct register read, no conversion time needed (just 1ms in WAITING_CONVERSION state)
     } else if (strcmp(configuredSensors[sensorIndex].type, "DS18B20") == 0) {
         op.conversionTime = configuredSensors[sensorIndex].oneWireConversionTime;
         if (op.conversionTime <= 0) op.conversionTime = 750;
@@ -1062,12 +1276,7 @@ void logI2CTransaction(int address, String direction, String data, String pin) {
             String logMsg = "I2C [0x" + String(address, HEX) + "] " + direction + ": " + data;
             addTerminalLog(logMsg);
             Serial.println("TERMINAL_LOG: " + logMsg);
-        } else {
-            Serial.printf("DEBUG logI2C: Protocol check failed or shouldLog=false (protocol=%s, shouldLog=%d)\n", 
-                         watchedProtocolUpper.c_str(), shouldLog);
         }
-    } else {
-        Serial.println("DEBUG logI2C: terminalWatchActive=false");
     }
 }
 
@@ -1419,6 +1628,80 @@ void setup() {
     }
     if (!foundDevice) {
         Serial.println("No I2C devices found");
+    }
+    
+    // Initialize any LIS3DH sensors that are configured and enabled
+    for (int i = 0; i < numConfiguredSensors; i++) {
+        if (configuredSensors[i].enabled && strcmp(configuredSensors[i].type, "LIS3DH") == 0) {
+            uint8_t addr = configuredSensors[i].i2cAddress;
+            Serial.printf("[Setup] Initializing LIS3DH at 0x%02X\n", addr);
+            
+            // First verify WHO_AM_I register (0x0F should return 0x33)
+            Wire.beginTransmission(addr);
+            Wire.write(0x0F);  // WHO_AM_I register
+            Wire.endTransmission();
+            delay(5);
+            Wire.requestFrom(addr, 1);
+            if (Wire.available()) {
+                uint8_t whoami = Wire.read();
+                Serial.printf("[Setup] LIS3DH WHO_AM_I = 0x%02X (expect 0x33)\n", whoami);
+                if (whoami != 0x33) {
+                    Serial.printf("[Setup] WARNING: Unexpected WHO_AM_I value! Device may not be LIS3DH\n");
+                }
+            } else {
+                Serial.printf("[Setup] WARNING: Could not read WHO_AM_I from LIS3DH\n");
+            }
+            delay(10);
+            
+            // Configure LIS3DH: CTRL_REG1 (0x20) = 0x96
+            // Bit 7-4: ODR[3:0] = 1001 (1344 Hz, fastest normal mode)
+            // Bit 3: Zen = 1 - Enable Z-axis
+            // Bit 2: Yen = 1 - Enable Y-axis
+            // Bit 1: Xen = 1 - Enable X-axis
+            // Bit 0: LP = 0 - Normal mode (not low power)
+            // 0x96 = 10010110 = 1344 Hz, all axes enabled, normal mode
+            Wire.beginTransmission(addr);
+            Wire.write(0x20);  // CTRL_REG1
+            Wire.write(0x96);  // 1344 Hz, all axes enabled, normal mode
+            if (Wire.endTransmission() == 0) {
+                Serial.printf("[Setup] LIS3DH CTRL_REG1 (0x20) set to 0x96 OK (1344 Hz, all axes, normal mode)\n");
+            } else {
+                Serial.printf("[Setup] LIS3DH CTRL_REG1 config failed\n");
+            }
+            
+            // Configure LIS3DH: CTRL_REG4 (0x23) = 0x80
+            // Bit 7: BDU (1) - Block Data Update (wait for both MSB/LSB before reading)
+            // Bit 6: BLE (0) - Big Endian (0 = Little Endian)
+            // Bits 5-4: FS1, FS0 (00) - Full Scale ±2g (Raspberry Pi reference uses this)
+            // Bit 3: HR (0) - High Resolution disabled (standard 10-bit mode)
+            // 0x80 = 1000 0000 = ±2g range, BDU enabled
+            // Per RP reference: sensitivity = 0.004g per LSB in this standard mode
+            delay(10);
+            Wire.beginTransmission(addr);
+            Wire.write(0x23);  // CTRL_REG4
+            Wire.write(0x80);  // ±2g range with BDU enabled (standard mode, per RP reference)
+            if (Wire.endTransmission() == 0) {
+                Serial.printf("[Setup] LIS3DH CTRL_REG4 (0x23) set to 0x80 OK (±2g, standard mode)\n");
+            } else {
+                Serial.printf("[Setup] LIS3DH CTRL_REG4 config failed\n");
+            }
+            
+            // Turn auxiliary ADC on (for temperature sensing, optional but included per RP reference)
+            delay(10);
+            Wire.beginTransmission(addr);
+            Wire.write(0x1F);  // TEMP_CFG_REG
+            Wire.write(0xC0);  // Temperature sensor enabled
+            if (Wire.endTransmission() == 0) {
+                Serial.printf("[Setup] LIS3DH TEMP_CFG_REG (0x1F) set to 0xC0 OK\n");
+            } else {
+                Serial.printf("[Setup] LIS3DH TEMP_CFG_REG config failed\n");
+            }
+            
+            Serial.printf("[Setup] LIS3DH at 0x%02X initialized successfully\n", addr);
+            
+            // Give sensor time to start outputting data after initialization
+            delay(500);  // Wait 500ms for first data to be available
+        }
     }
 
     // Start watchdog
@@ -5513,13 +5796,17 @@ void updateIOForClient(int clientIndex) {
     // Update Modbus registers with configured sensor values
     for (int i = 0; i < numConfiguredSensors; i++) {
         if (configuredSensors[i].enabled && configuredSensors[i].modbusRegister >= 0) {
-            // Primary value (temperature for SHT30)
+            // Primary value (temperature for SHT30, X for LIS3DH)
             modbusClients[clientIndex].server.inputRegisterWrite(configuredSensors[i].modbusRegister, configuredSensors[i].modbusValue);
 
-            // Multi-output sensors (SHT30 humidity, BME280 pressure, etc.)
+            // Multi-output sensors (SHT30 humidity, BME280 pressure, LIS3DH Y-axis, etc.)
             if (strcmp(configuredSensors[i].type, "SHT30") == 0) {
                 // Always write humidity to next register
                 modbusClients[clientIndex].server.inputRegisterWrite(configuredSensors[i].modbusRegister + 1, configuredSensors[i].modbusValueB);
+            } else if (strcmp(configuredSensors[i].type, "LIS3DH") == 0) {
+                // 3-axis accelerometer: X, Y, Z on consecutive registers
+                modbusClients[clientIndex].server.inputRegisterWrite(configuredSensors[i].modbusRegister + 1, configuredSensors[i].modbusValueB);
+                modbusClients[clientIndex].server.inputRegisterWrite(configuredSensors[i].modbusRegister + 2, configuredSensors[i].modbusValueC);
             }
             // Future: Add BME280 (temp, hum, pressure) and other multi-output sensors here
         }

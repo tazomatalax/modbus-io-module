@@ -98,6 +98,138 @@ See **[Pinout & Interfaces](docs/hardware/pinout-and-interfaces.md#modbus-regist
 - Check SDA (GP24) and SCL (GP25) connections
 - Confirm 4.7kΩ pull-ups on I2C bus
 
+## Persistent Configuration & JSON Files
+
+The firmware uses LittleFS (flash filesystem) to store persistent configuration. Understanding these JSON files is essential for troubleshooting and development.
+
+### Configuration Files
+
+#### 1. **config.json** – Network & I/O Settings
+**Location**: Flash filesystem (LittleFS)  
+**Purpose**: Stores network configuration (IP, gateway, subnet, Modbus port) and IO behavior (pullups, inversion, latching).
+
+**Structure**:
+```json
+{
+  "version": 1,
+  "dhcpEnabled": false,
+  "ip": [192, 168, 1, 10],
+  "gateway": [192, 168, 1, 1],
+  "subnet": [255, 255, 255, 0],
+  "modbusPort": 502,
+  "hostname": "modbus-io-module",
+  "diPullup": [true, true, ...],    // Digital input pullup flags
+  "diInvert": [false, false, ...],  // Digital input inversion
+  "diLatch": [false, false, ...],   // Digital input latching
+  "doInvert": [false, false, ...],  // Digital output inversion
+  "doInitialState": [false, ...]    // Initial DO states on boot
+}
+```
+
+**Firmware Interaction**:
+- Loaded during boot via `loadConfig()`
+- Applied to Ethernet driver immediately via `setupEthernet()`
+- When modified via web UI POST `/config`, saved and applied immediately via `reapplyNetworkConfig()`
+- Changes persist across reboots
+
+#### 2. **sensors.json** – Sensor Configuration
+**Location**: Flash filesystem (LittleFS)  
+**Purpose**: Stores all I2C, UART, OneWire, and analog sensor configurations including calibration parameters.
+
+**Structure**:
+```json
+{
+  "sensors": [
+    {
+      "enabled": true,
+      "name": "IMU",
+      "type": "LIS3DH",
+      "protocol": "I2C",
+      "i2cAddress": 24,
+      "modbusRegister": 3,
+      "command": "0x00 0x00",
+      "updateInterval": 1000,
+      "delayBeforeRead": 0,
+      "calibration": {
+        "offset": 0,
+        "scale": 1,
+        "expression": "",           // Optional: math expression for calibration
+        "polynomialStr": ""         // Optional: polynomial coefficients
+      }
+    }
+  ]
+}
+```
+
+**Firmware Interaction**:
+- Loaded during boot via `loadSensorConfig()`
+- Populates `configuredSensors[]` array used for polling
+- Polling queue (`i2cQueue`, `uartQueue`, `oneWireQueue`) reads sensor type and parameters to determine how to read each sensor
+- Sensor type string ("LIS3DH", "EZO_PH", "DS18B20", etc.) determines which protocol handler processes the read
+- Calibration parameters applied to raw sensor values in `applyCalibration()`, `applyCalibrationB()`, `applyCalibrationC()` functions
+- When modified via web UI POST `/sensors/config`, saved and device reboots to apply
+
+### Data Flow: How Sensors Are Polled
+
+1. **Boot**: `setup()` → `loadSensorConfig()` → populates `configuredSensors[]`
+2. **Main Loop**: `loop()` → `updateIOpins()` → checks sensor `updateInterval` timers
+3. **Enqueue**: If timer elapsed, calls `enqueueBusOperation(sensorIndex, protocol)`
+4. **Queue Processing**:
+   - `processI2CQueue()` reads sensor type, executes I2C state machine
+   - For LIS3DH: writes register address 0xA8 (with auto-increment), reads 6 bytes, parses X/Y/Z
+   - For EZO: sends command string, waits for response, parses millivolt reading
+   - For DS18B20: sends read command, waits conversion, parses temperature
+5. **Data Storage**: Raw value → Calibration function → `configuredSensors[i].calibratedValue` → Modbus register
+6. **Web Export**: `/iostatus` and `/sensors/data` endpoints serialize `configuredSensors[]` to JSON
+
+### REST Endpoints & Data Retrieval
+
+| Endpoint | Purpose | Data Source |
+|----------|---------|------------|
+| `GET /iostatus` | Real-time IO status + sensor values | `ioStatus` struct + `configuredSensors[]` |
+| `GET /sensors/data` | Extended sensor telemetry | `configuredSensors[]` array |
+| `GET /config` | Current network config | `config` struct |
+| `POST /config` | Update network settings | Parses JSON, calls `saveConfig()`, `reapplyNetworkConfig()` |
+| `GET /sensors/config` | Sensor configuration list | `sensors.json` contents |
+| `POST /sensors/config` | Update sensor definitions | Saves `sensors.json`, triggers reboot |
+
+### Debugging Architecture
+
+**Design Philosophy**: Debugging is **not** implemented via embedded Serial.print() statements scattered throughout the code. Instead, all diagnostics flow through the **web UI Terminal** which provides real-time filtering and protocol analysis.
+
+#### Web UI Terminal Features
+- **I2C Traffic Monitor**: Watch register writes/reads for any sensor in real-time
+- **Protocol Filtering**: Select specific I2C address, sensor name, or "all" to narrow focus
+- **Timestamp Correlation**: See exact millisecond timing of each operation
+- **Transaction Logging**: Every I2C operation logged as: TX (write) → ACK → REQ (read) → RX → VAL (parsed)
+
+#### How to Debug Sensors
+
+1. **Open Web UI** → Terminal tab
+2. **Start Watching I2C**: Select sensor or I2C address
+3. **Observe Logs**:
+   - **TX**: Register address or command being sent
+   - **ACK**: Acknowledgment received
+   - **REQ**: How many bytes requested
+   - **RX**: Raw hex bytes received
+   - **VAL**: Parsed/calibrated values
+4. **Interpret Pattern**:
+   - All zeros → sensor not outputting data (initialization or register issue)
+   - 0x80 repeated → sensor in default state (not polled or bad config)
+   - Garbage values → scaling factor or byte parsing wrong
+   - Timeouts → I2C bus issue or wrong address
+
+#### No Serial Debug Code Needed
+
+The firmware does **not** add temporary `Serial.printf()` statements for debugging. Instead:
+- Use the web terminal to watch live I2C traffic
+- Check `/sensors/data` endpoint for current sensor values
+- Review `config.json` and `sensors.json` to verify configuration
+- Use Modbus client to read registers and verify export
+
+This keeps the codebase clean and allows debugging without recompilation.
+
+
 ### Modbus Not Responding
 - Verify port 502 in network configuration
 - Check firewall allows connections

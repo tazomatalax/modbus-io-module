@@ -583,6 +583,7 @@ window.updateSensorTypeOptions = function updateSensorTypeOptions() {
             options: [
                 { value: 'BME280', text: 'BME280 (Temperature, Humidity, Pressure)' },
                 { value: 'SHT30', text: 'SHT30 (Temperature, Humidity)' },
+                { value: 'LIS3DH', text: 'LIS3DH (3-Axis Accelerometer)' },
                 { value: 'EZO_PH', text: 'EZO-pH (pH Sensor)' },
                 { value: 'EZO_EC', text: 'EZO-EC (Conductivity)' },
                 { value: 'EZO_DO', text: 'EZO-DO (Dissolved Oxygen)' },
@@ -907,6 +908,49 @@ window.autoConfigureSensorType = function autoConfigureSensorType() {
                 { name: 'Temperature', register: 'auto', units: '°C' },
                 { name: 'Humidity', register: 'auto+1', units: '%RH' },
                 { name: 'Pressure', register: 'auto+2', units: 'hPa' }
+            ]
+        },
+        'EZO_PH': {
+            protocol: 'I2C',
+            i2cAddress: '0x63',
+            command: { command: 'R', waitTime: 900 },
+            units: 'pH',
+            calibrationSlope: 1.0,
+            calibrationOffset: 0.0
+        },
+        'EZO_EC': {
+            protocol: 'I2C',
+            i2cAddress: '0x64',
+            command: { command: 'R', waitTime: 900 },
+            units: 'µS/cm',
+            calibrationSlope: 1.0,
+            calibrationOffset: 0.0
+        },
+        'EZO_DO': {
+            protocol: 'I2C',
+            i2cAddress: '0x61',
+            command: { command: 'R', waitTime: 900 },
+            units: 'mg/L',
+            calibrationSlope: 1.0,
+            calibrationOffset: 0.0
+        },
+        'EZO_RTD': {
+            protocol: 'I2C',
+            i2cAddress: '0x66',
+            command: { command: 'R', waitTime: 900 },
+            units: '°C',
+            calibrationSlope: 1.0,
+            calibrationOffset: 0.0
+        },
+        'LIS3DH': {
+            protocol: 'I2C',
+            i2cAddress: '0x18',
+            units: ['X: mg', 'Y: mg', 'Z: mg'],
+            multiValue: true,
+            values: [
+                { name: 'X-Axis Acceleration', register: 'auto', units: 'mg' },
+                { name: 'Y-Axis Acceleration', register: 'auto+1', units: 'mg' },
+                { name: 'Z-Axis Acceleration', register: 'auto+2', units: 'mg' }
             ]
         }
     };
