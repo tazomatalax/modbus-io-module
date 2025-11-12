@@ -216,6 +216,8 @@ bool validateCRC(uint8_t* data, size_t length) {
 
 void setPinModes();
 void setupEthernet();
+void reapplyNetworkConfig();
+void reapplySensorConfig();
 void setupModbus();
 void setupWebServer();
 
@@ -966,33 +968,19 @@ void updateBusQueues() {
         
         // Add to queue if it's time for next reading
         if (currentTime - configuredSensors[i].lastReadTime >= configuredSensors[i].updateInterval) {
-            Serial.printf("[DEBUG] Sensor %d (%s) ready for polling. Protocol: %s\n", 
-                         i, configuredSensors[i].name, configuredSensors[i].protocol);
             if (strncmp(configuredSensors[i].protocol, "I2C", 3) == 0) {
-                Serial.printf("[DEBUG] Adding sensor %d to I2C queue (current size: %d)\n", i, i2cQueueSize);
                 enqueueBusOperation(i, "I2C");
             } else if (strncmp(configuredSensors[i].protocol, "UART", 4) == 0) {
-                Serial.printf("[DEBUG] Adding sensor %d to UART queue (current size: %d)\n", i, uartQueueSize);
                 enqueueBusOperation(i, "UART");
             } else if (strncmp(configuredSensors[i].protocol, "One-Wire", 8) == 0) {
-                Serial.printf("[DEBUG] Adding sensor %d to One-Wire queue (current size: %d)\n", i, oneWireQueueSize);
                 enqueueBusOperation(i, "One-Wire");
             }
         }
     }
     
     // Process queues
-    if (i2cQueueSize > 0) {
-        Serial.printf("[DEBUG] Processing I2C queue (size: %d)\n", i2cQueueSize);
-    }
     processI2CQueue();
-    if (uartQueueSize > 0) {
-        Serial.printf("[DEBUG] Processing UART queue (size: %d)\n", uartQueueSize);
-    }
     processUARTQueue();
-    if (oneWireQueueSize > 0) {
-        Serial.printf("[DEBUG] Processing One-Wire queue (size: %d)\n", oneWireQueueSize);
-    }
     processOneWireQueue();
 }
 
@@ -1295,10 +1283,6 @@ void setup() {
 
 
 
-    Serial.println("Loading config...");
-    delay(500);
-    loadConfig();
-
     // Initialize LittleFS for web file serving
     Serial.println("Initializing filesystem...");
     if (!LittleFS.begin()) {
@@ -1306,6 +1290,27 @@ void setup() {
     } else {
         Serial.println("LittleFS mounted successfully");
     }
+
+    // Load configuration after filesystem is available
+    Serial.println("Loading config...");
+    delay(100);
+    loadConfig();
+    
+    // Print loaded configuration for boot diagnostics
+    Serial.println("=== Loaded Network Configuration ===");
+    Serial.print("  IP: "); Serial.print(config.ip[0]); Serial.print(".");
+    Serial.print(config.ip[1]); Serial.print("."); Serial.print(config.ip[2]); Serial.print(".");
+    Serial.println(config.ip[3]);
+    Serial.print("  Gateway: "); Serial.print(config.gateway[0]); Serial.print(".");
+    Serial.print(config.gateway[1]); Serial.print("."); Serial.print(config.gateway[2]); Serial.print(".");
+    Serial.println(config.gateway[3]);
+    Serial.print("  Subnet: "); Serial.print(config.subnet[0]); Serial.print(".");
+    Serial.print(config.subnet[1]); Serial.print("."); Serial.print(config.subnet[2]); Serial.print(".");
+    Serial.println(config.subnet[3]);
+    Serial.print("  Modbus Port: "); Serial.println(config.modbusPort);
+    Serial.print("  DHCP: "); Serial.println(config.dhcpEnabled ? "Enabled" : "Disabled");
+    Serial.print("  Hostname: "); Serial.println(config.hostname);
+    Serial.println("===================================");
 
     // Debug: dump sensors file existence and a short preview to help troubleshoot persistence
     Serial.println("Checking sensors file on filesystem...");
@@ -2817,7 +2822,19 @@ void saveConfig() {
     if (serializeJson(doc, file) == 0) {
         Serial.println("Failed to write config JSON");
     } else {
-        Serial.println("Config saved successfully");
+        Serial.println("=== Network Configuration Saved Successfully ===");
+        Serial.print("  IP: "); Serial.print(config.ip[0]); Serial.print(".");
+        Serial.print(config.ip[1]); Serial.print("."); Serial.print(config.ip[2]); Serial.print(".");
+        Serial.println(config.ip[3]);
+        Serial.print("  Gateway: "); Serial.print(config.gateway[0]); Serial.print(".");
+        Serial.print(config.gateway[1]); Serial.print("."); Serial.print(config.gateway[2]); Serial.print(".");
+        Serial.println(config.gateway[3]);
+        Serial.print("  Subnet: "); Serial.print(config.subnet[0]); Serial.print(".");
+        Serial.print(config.subnet[1]); Serial.print("."); Serial.print(config.subnet[2]); Serial.print(".");
+        Serial.println(config.subnet[3]);
+        Serial.print("  Modbus Port: "); Serial.println(config.modbusPort);
+        Serial.print("  Hostname: "); Serial.println(config.hostname);
+        Serial.println("============================================");
     }
     
     file.close();
@@ -3233,6 +3250,95 @@ void setupUSBNetwork() {
     Serial.println("  RP2040 Pico USB network is enabled via board build flags.");
     Serial.println("  USB IP: 192.168.7.1 (auto-configured)");
     Serial.println("  Web interface will be available on USB when HTTP server is bound to USB network.");
+}
+
+// Reapply sensor configuration without full reboot
+// Called after sensor config changes to reload sensors and restart polling queues
+void reapplySensorConfig() {
+    Serial.println("\n=== Reapplying Sensor Configuration ===");
+    
+    // Stop EZO sensors and clear polling state
+    Serial.println("Stopping EZO sensor polling...");
+    for (int i = 0; i < numConfiguredSensors; i++) {
+        if (ezoSensors[i] != nullptr) {
+            delete ezoSensors[i];
+            ezoSensors[i] = nullptr;
+        }
+    }
+    
+    // Clear all queues
+    Serial.println("Clearing polling queues...");
+    i2cQueueSize = 0;
+    uartQueueSize = 0;
+    oneWireQueueSize = 0;
+    i2cCommands.clear();
+    uartCommands.clear();
+    oneWireCommands.clear();
+    
+    // Reload sensor configuration from file
+    Serial.println("Reloading sensor configuration from file...");
+    loadSensorConfig();
+    applySensorPresets();
+    
+    // Reinitialize command queues
+    for (int i = 0; i < numConfiguredSensors; i++) {
+        if (configuredSensors[i].enabled) {
+            SensorCommand cmd = {
+                .sensorIndex = (uint8_t)i,
+                .nextExecutionMs = millis(),
+                .intervalMs = configuredSensors[i].updateInterval,
+                .command = (strcmp(configuredSensors[i].type, "GENERIC") == 0) ? configuredSensors[i].command : nullptr,
+                .isGeneric = (strcmp(configuredSensors[i].type, "GENERIC") == 0)
+            };
+            
+            // Add to appropriate command array
+            if (strncmp(configuredSensors[i].protocol, "I2C", 3) == 0) {
+                i2cCommands.add(cmd);
+                enqueueBusOperation(i, "I2C");
+            } else if (strncmp(configuredSensors[i].protocol, "UART", 4) == 0) {
+                uartCommands.add(cmd);
+                enqueueBusOperation(i, "UART");
+            } else if (strncmp(configuredSensors[i].protocol, "One-Wire", 8) == 0) {
+                oneWireCommands.add(cmd);
+                enqueueBusOperation(i, "One-Wire");
+            }
+        }
+    }
+    
+    // Reinitialize EZO sensors if needed
+    initializeEzoSensors();
+    
+    Serial.printf("Sensor configuration reapplied. %d sensors configured.\n", numConfiguredSensors);
+    Serial.println("=== Sensor Configuration Reapplied Successfully ===\n");
+}
+
+// Reapply network configuration without full reboot
+// Called after config changes to update Ethernet and Modbus binding
+void reapplyNetworkConfig() {
+    Serial.println("\n=== Reapplying Network Configuration ===");
+    
+    // Stop existing services
+    Serial.println("Stopping existing Ethernet connection...");
+    eth.end();
+    delay(500);
+    
+    // Restart Ethernet with new config
+    Serial.println("Restarting Ethernet with new settings...");
+    setupEthernet();
+    
+    // Restart Modbus server with new port
+    Serial.println("Restarting Modbus server with new port...");
+    for (int i = 0; i < MAX_MODBUS_CLIENTS; i++) {
+        modbusClients[i].connected = false;
+        modbusClients[i].server.end();
+    }
+    delay(200);
+    
+    setupModbus();
+    
+    // Restart web server on new IP
+    Serial.println("Web server automatically follows new IP...");
+    Serial.println("=== Network Configuration Reapplied Successfully ===\n");
 }
 
 void setupModbus() {
@@ -4459,11 +4565,14 @@ void handlePOSTConfig(WiFiClient& client, String body) {
     if (configChanged) {
         saveConfig();
         
+        // Immediately apply network changes without requiring reboot
+        reapplyNetworkConfig();
+        
         client.println("HTTP/1.1 200 OK");
         client.println("Content-Type: application/json");
         client.println("Connection: close");
         client.println();
-        client.println("{\"success\":true,\"message\":\"Network configuration saved. Please manually reboot device for changes to take effect.\"}");
+        client.println("{\"success\":true,\"message\":\"Network configuration saved and applied immediately.\",\"reboot\":false}");
         client.stop();
     } else {
         client.println("HTTP/1.1 200 OK");
@@ -4868,6 +4977,9 @@ void handlePOSTSensorConfig(WiFiClient& client, String body) {
     }
     saveSensorConfig();
     
+    // Immediately apply sensor changes without requiring reboot
+    reapplySensorConfig();
+    
     // Small delay to ensure file save completes before response
     delay(100);
     
@@ -4876,7 +4988,7 @@ void handlePOSTSensorConfig(WiFiClient& client, String body) {
     client.println("Access-Control-Allow-Origin: *");
     client.println("Connection: close");
     client.println();
-    client.println("{\"success\":true}");
+    client.println("{\"success\":true,\"message\":\"Sensor configuration saved and applied immediately.\"}");
 }
 
 void handlePOSTSensorCommand(WiFiClient& client, String body) {
