@@ -73,6 +73,29 @@ const ALL_PINS = {
         { label: 'GP27 (Pin 32) - ADC1 alt', pins: [27] },
         { label: 'GP28 (Pin 34) - ADC2 alt - Your DS18B20 is here!', pins: [28] }
     ],
+    'SPI': [
+        // Chip Select pins (all GPIO available for CS)
+        { label: 'GP0 (Pin 1) - CS', pins: [0] },
+        { label: 'GP1 (Pin 2) - CS', pins: [1] },
+        { label: 'GP2 (Pin 4) - CS / SPI0 CLK', pins: [2] },
+        { label: 'GP3 (Pin 5) - CS / SPI0 MOSI', pins: [3] },
+        { label: 'GP4 (Pin 6) - CS / SPI0 MISO', pins: [4] },
+        { label: 'GP5 (Pin 7) - CS', pins: [5] },
+        { label: 'GP6 (Pin 9) - CS', pins: [6] },
+        { label: 'GP7 (Pin 10) - CS', pins: [7] },
+        { label: 'GP8 (Pin 11) - CS', pins: [8] },
+        { label: 'GP9 (Pin 12) - CS', pins: [9] },
+        { label: 'GP10 (Pin 14) - CS / SPI1 CLK', pins: [10] },
+        { label: 'GP11 (Pin 15) - CS / SPI1 MOSI', pins: [11] },
+        { label: 'GP12 (Pin 16) - CS / SPI1 MISO', pins: [12] },
+        { label: 'GP13 (Pin 17) - CS', pins: [13] },
+        { label: 'GP14 (Pin 19) - CS', pins: [14] },
+        { label: 'GP15 (Pin 20) - CS', pins: [15] },
+        { label: 'GP22 (Pin 29) - CS (safe, not used by W5500)', pins: [22] },
+        { label: 'GP26 (Pin 31) - CS', pins: [26] },
+        { label: 'GP27 (Pin 32) - CS', pins: [27] },
+        { label: 'GP28 (Pin 34) - CS', pins: [28] }
+    ],
     'Digital Counter': [
         // Same as One-Wire but labeled for digital counting
         { label: 'GP0 (Pin 1)', pins: [0] },
@@ -103,6 +126,10 @@ const DATA_PARSING_OPTIONS = {
     'I2C': {
         methods: ['raw_bytes', 'int16_be', 'int16_le', 'float32_be', 'float32_le', 'custom_bits'],
         description: 'How to interpret I2C response data'
+    },
+    'SPI': {
+        methods: ['raw_bytes', 'int16_be', 'int16_le', 'float32_be', 'float32_le', 'custom_bits'],
+        description: 'How to interpret SPI response data'
     },
     'UART': {
         methods: ['ascii_string', 'binary_data', 'modbus_rtu', 'custom_protocol'],
@@ -441,7 +468,7 @@ window.updateSensorProtocolFields = function updateSensorProtocolFields() {
     });
 
     // Show/hide multi-value option based on protocol type
-    const digitalProtocols = ['I2C', 'UART', 'One-Wire'];
+    const digitalProtocols = ['I2C', 'UART', 'One-Wire', 'SPI'];
     if (digitalProtocols.includes(protocolType)) {
         multiValueOption.style.display = 'block';
     } else {
@@ -460,6 +487,35 @@ window.updateSensorProtocolFields = function updateSensorProtocolFields() {
             if (field.id === 'sensor-i2c-address') field.required = true;
         });
         loadAvailablePins('I2C');
+    } else if (protocolType === 'SPI') {
+        protocolConfig.style.display = 'block';
+        const spiConfig = document.getElementById('spi-config');
+        spiConfig.style.display = 'block';
+        spiConfig.querySelectorAll('input,select').forEach(field => {
+            if (field.id === 'sensor-spi-chip-select') field.required = true;
+        });
+        loadAvailablePins('SPI');
+        // Handle SPI bus mode change
+        const spiBusSelect = document.getElementById('sensor-spi-bus');
+        if (spiBusSelect) {
+            spiBusSelect.addEventListener('change', (e) => {
+                const softPinsDiv = document.getElementById('spi-soft-pins');
+                const hwInfoDiv = document.getElementById('spi-hw-info');
+                if (e.target.value === 'soft') {
+                    softPinsDiv.style.display = 'block';
+                    hwInfoDiv.style.display = 'none';
+                    document.getElementById('sensor-spi-mosi').required = true;
+                    document.getElementById('sensor-spi-miso').required = true;
+                    document.getElementById('sensor-spi-clk').required = true;
+                } else {
+                    softPinsDiv.style.display = 'none';
+                    hwInfoDiv.style.display = 'block';
+                    document.getElementById('sensor-spi-mosi').required = false;
+                    document.getElementById('sensor-spi-miso').required = false;
+                    document.getElementById('sensor-spi-clk').required = false;
+                }
+            });
+        }
     } else if (protocolType === 'UART') {
         protocolConfig.style.display = 'block';
         const uartConfig = document.getElementById('uart-config');
@@ -516,6 +572,52 @@ window.loadAvailablePins = function loadAvailablePins(protocol) {
             option.textContent = pair.label;
             pinsSelect.appendChild(option);
         });
+    } else if (protocol === 'SPI') {
+        // Load CS pins
+        const csSelect = document.getElementById('sensor-spi-chip-select');
+        csSelect.innerHTML = '<option value="">Select CS pin...</option>';
+        available.forEach(pair => {
+            const option = document.createElement('option');
+            option.value = pair.pins[0];
+            option.textContent = pair.label;
+            csSelect.appendChild(option);
+        });
+        
+        // Load MOSI pins (same as available, since any GPIO can be bit-banged)
+        const mosiSelect = document.getElementById('sensor-spi-mosi');
+        if (mosiSelect) {
+            mosiSelect.innerHTML = '<option value="">Select MOSI pin...</option>';
+            available.forEach(pair => {
+                const option = document.createElement('option');
+                option.value = pair.pins[0];
+                option.textContent = pair.label;
+                mosiSelect.appendChild(option);
+            });
+        }
+        
+        // Load MISO pins
+        const misoSelect = document.getElementById('sensor-spi-miso');
+        if (misoSelect) {
+            misoSelect.innerHTML = '<option value="">Select MISO pin...</option>';
+            available.forEach(pair => {
+                const option = document.createElement('option');
+                option.value = pair.pins[0];
+                option.textContent = pair.label;
+                misoSelect.appendChild(option);
+            });
+        }
+        
+        // Load CLK pins
+        const clkSelect = document.getElementById('sensor-spi-clk');
+        if (clkSelect) {
+            clkSelect.innerHTML = '<option value="">Select CLK pin...</option>';
+            available.forEach(pair => {
+                const option = document.createElement('option');
+                option.value = pair.pins[0];
+                option.textContent = pair.label;
+                clkSelect.appendChild(option);
+            });
+        }
     } else if (protocol === 'UART') {
         const pinsSelect = document.getElementById('sensor-uart-pins');
         pinsSelect.innerHTML = '<option value="">Select UART pins...</option>';
@@ -636,6 +738,20 @@ window.updateSensorTypeOptions = function updateSensorTypeOptions() {
                 { value: 'SIM_ANALOG_CURRENT', text: 'Simulated Analog Current' }
             ]
         });
+    } else if (protocolType === 'SPI') {
+        optgroups.push({
+            label: 'Real SPI Sensors',
+            options: [
+                { value: 'LIS3DH_SPI', text: 'LIS3DH (3-Axis Accelerometer via SPI)' },
+                { value: 'GENERIC_SPI', text: 'Generic SPI Device' }
+            ]
+        });
+        optgroups.push({
+            label: 'Simulated SPI Sensors',
+            options: [
+                { value: 'SIM_SPI_ACCEL', text: 'Simulated SPI Accelerometer' }
+            ]
+        });
     } else if (protocolType === 'One-Wire') {
         optgroups.push({
             label: 'Real One-Wire Sensors',
@@ -718,7 +834,7 @@ window.updateSensorFormFields = function updateSensorFormFields() {
     
     // Show/hide data parsing section based on protocol
     const dataParsingSection = document.getElementById('data-parsing-section');
-    if (protocol === 'I2C' || protocol === 'UART' || protocol === 'One-Wire' || protocol === 'Digital Counter') {
+    if (protocol === 'I2C' || protocol === 'UART' || protocol === 'One-Wire' || protocol === 'Digital Counter' || protocol === 'SPI') {
         dataParsingSection.style.display = 'block';
     } else {
         dataParsingSection.style.display = 'none';
@@ -1256,6 +1372,41 @@ window.editSensor = function editSensor(index) {
         }, 100);
     } else if (sensor.protocol === 'Digital Counter' && sensor.digitalPin !== undefined) {
         document.getElementById('sensor-digital-pin').value = sensor.digitalPin.toString();
+    } else if (sensor.protocol === 'SPI') {
+        // Load SPI configuration
+        setTimeout(() => {
+            if (sensor.spiChipSelect !== undefined) {
+                const csSelect = document.getElementById('sensor-spi-chip-select');
+                if (csSelect) csSelect.value = sensor.spiChipSelect.toString();
+            }
+            if (sensor.spiBus) {
+                const busSelect = document.getElementById('sensor-spi-bus');
+                if (busSelect) {
+                    busSelect.value = sensor.spiBus;
+                    // Trigger change event to show/hide software pins if needed
+                    busSelect.dispatchEvent(new Event('change'));
+                }
+            }
+            if (sensor.spiFrequency) {
+                const freqSelect = document.getElementById('sensor-spi-frequency');
+                if (freqSelect) freqSelect.value = sensor.spiFrequency.toString();
+            }
+            // Load software SPI pins if applicable
+            if (sensor.spiBus === 'soft') {
+                if (sensor.spiMosiPin !== undefined) {
+                    const mosiSelect = document.getElementById('sensor-spi-mosi');
+                    if (mosiSelect) mosiSelect.value = sensor.spiMosiPin.toString();
+                }
+                if (sensor.spiMisoPin !== undefined) {
+                    const misoSelect = document.getElementById('sensor-spi-miso');
+                    if (misoSelect) misoSelect.value = sensor.spiMisoPin.toString();
+                }
+                if (sensor.spiClkPin !== undefined) {
+                    const clkSelect = document.getElementById('sensor-spi-clk');
+                    if (clkSelect) clkSelect.value = sensor.spiClkPin.toString();
+                }
+            }
+        }, 100);
     }
     document.getElementById('sensor-i2c-address').value = sensor.i2cAddress ? `0x${sensor.i2cAddress.toString(16).toUpperCase().padStart(2, '0')}` : '';
     document.getElementById('sensor-modbus-register').value = sensor.modbusRegister || '';
@@ -1784,6 +1935,31 @@ window.saveSensor = function saveSensor() {
             const digitalPin = document.getElementById('sensor-digital-pin').value;
             if (digitalPin) {
                 pinAssignments.digitalPin = parseInt(digitalPin);
+            }
+            break;
+            
+        case 'SPI':
+            // SPI specific configuration
+            const spiChipSelect = document.getElementById('sensor-spi-chip-select').value;
+            if (spiChipSelect) {
+                pinAssignments.spiChipSelect = parseInt(spiChipSelect);
+            }
+            
+            const spiBus = document.getElementById('sensor-spi-bus').value;
+            pinAssignments.spiBus = spiBus || 'hw0';
+            
+            const spiFrequency = document.getElementById('sensor-spi-frequency').value;
+            pinAssignments.spiFrequency = parseInt(spiFrequency) || 500000;
+            
+            // If software SPI is selected, get the pin assignments
+            if (spiBus === 'soft') {
+                const spiMosiPin = document.getElementById('sensor-spi-mosi').value;
+                const spiMisoPin = document.getElementById('sensor-spi-miso').value;
+                const spiClkPin = document.getElementById('sensor-spi-clk').value;
+                
+                if (spiMosiPin) pinAssignments.spiMosiPin = parseInt(spiMosiPin);
+                if (spiMisoPin) pinAssignments.spiMisoPin = parseInt(spiMisoPin);
+                if (spiClkPin) pinAssignments.spiClkPin = parseInt(spiClkPin);
             }
             break;
     }

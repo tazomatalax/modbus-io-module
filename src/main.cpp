@@ -1,4 +1,6 @@
 #include "sys_init.h"
+#include <Adafruit_LIS3DH.h>
+#include <Adafruit_Sensor.h>
 
 // Sensor reading functions
 bool readSHT30(uint8_t sensorIndex, float& temperature, float& humidity);
@@ -10,8 +12,12 @@ float evaluateCalibrationExpression(float x, const SensorConfig& sensor);
 float applyCalibration(float rawValue, const SensorConfig& sensor);
 float applyCalibrationB(float rawValue, const SensorConfig& sensor);
 float applyCalibrationC(float rawValue, const SensorConfig& sensor);
+void handleLIS3DHSensors();  // Forward declaration for LIS3DH polling handler
 // Use ANALOG_INPUTS from sys_init.h instead of ADC_PINS
 #include "Ezo_i2c.h"
+
+// LIS3DH accelerometer instances (one per sensor, max 8 sensors)
+Adafruit_LIS3DH* lis3dhSensors[MAX_SENSORS] = {nullptr};
 
 // SensorConfig array definition (from sys_init.h extern)
 SensorConfig configuredSensors[MAX_SENSORS] = {};
@@ -272,27 +278,51 @@ void processI2CQueue() {
             
             // Special handling for LIS3DH: atomic write+read without losing register pointer
             if (strcmp(configuredSensors[op.sensorIndex].type, "LIS3DH") == 0) {
-                // LIS3DH: Perform register address write + data read in single atomic I2C operation
-                // This prevents the register pointer from being lost between transactions
+                // LIS3DH: Write register address then read data
+                // Try normal transaction with full STOP and new START (more reliable than repeated START)
                 logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "TX", 
-                                "Register address: 0xA8 (OUT_X_L with auto-increment) for LIS3DH", 
+                                "Register address: 0x28 (OUT_X_L, no auto-increment for first byte)", 
                                 String(configuredSensors[op.sensorIndex].name));
                 
-                // BEGIN I2C TRANSMISSION FIRST
+                // Step 1: Write register address WITHOUT auto-increment bit for first read
                 Wire.beginTransmission(configuredSensors[op.sensorIndex].i2cAddress);
-                
-                // Write register address 0xA8 = 0x28 with auto-increment bit (bit 7) enabled
-                // This enables automatic address increment for multi-byte reads
-                Wire.write(0xA8);  // 0x28 | 0x80 = 0xA8 (enables auto-increment)
-                int writeResult = Wire.endTransmission(false);  // false = send REPEATED START, NOT STOP
+                Wire.write(0x28);  // Just 0x28, NO auto-increment yet - verify we're at the right register
+                int writeResult = Wire.endTransmission(true);  // true = STOP
                 
                 if (writeResult == 0) {
                     logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "ACK", 
-                                    "Register address set with repeated START", 
+                                    "Register 0x28 selected", 
                                     String(configuredSensors[op.sensorIndex].name));
                     
-                    // Immediately request 6 bytes in the same I2C session (repeated START)
-                    delayMicroseconds(10);  // Brief delay for register pointer to settle
+                    delayMicroseconds(100);
+                    
+                    // Step 2: Read 1 byte from OUT_X_L to verify it's X data
+                    Wire.requestFrom((int)configuredSensors[op.sensorIndex].i2cAddress, 1);
+                    uint8_t x_low = 0;
+                    if (Wire.available()) {
+                        x_low = Wire.read();
+                        Serial.printf("[DEBUG] Single byte read from 0x28: 0x%02X\n", x_low);
+                    }
+                    
+                    // Step 3: Now read X_H from 0x29
+                    Wire.beginTransmission(configuredSensors[op.sensorIndex].i2cAddress);
+                    Wire.write(0x29);
+                    Wire.endTransmission(true);
+                    delayMicroseconds(100);
+                    
+                    Wire.requestFrom((int)configuredSensors[op.sensorIndex].i2cAddress, 1);
+                    uint8_t x_high = 0;
+                    if (Wire.available()) {
+                        x_high = Wire.read();
+                        Serial.printf("[DEBUG] Single byte read from 0x29: 0x%02X\n", x_high);
+                    }
+                    
+                    // Step 4: Now try auto-increment read of all 6 bytes starting from 0x28
+                    Wire.beginTransmission(configuredSensors[op.sensorIndex].i2cAddress);
+                    Wire.write(0xA8);  // 0x28 with auto-increment
+                    Wire.endTransmission(true);
+                    delayMicroseconds(100);
+                    
                     Wire.requestFrom((int)configuredSensors[op.sensorIndex].i2cAddress, 6);
                     
                     if (Wire.available()) {
@@ -312,12 +342,23 @@ void processI2CQueue() {
                                         "Raw: [" + rawHex + "]", 
                                         String(configuredSensors[op.sensorIndex].name));
                         
+                        Serial.printf("[DEBUG] Full 6-byte read: [0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X]\n",
+                                    (uint8_t)response[0], (uint8_t)response[1],
+                                    (uint8_t)response[2], (uint8_t)response[3],
+                                    (uint8_t)response[4], (uint8_t)response[5]);
+                        
+                        Serial.printf("[DEBUG] Single bytes: X_L=0x%02X, X_H=0x%02X\n", x_low, x_high);
+                        
                         // Parse LIS3DH data immediately in IDLE state
                         if (idx >= 6) {
                             // Extract raw 16-bit signed integers (little-endian)
                             int16_t x_raw = ((uint8_t)response[1] << 8) | (uint8_t)response[0];
                             int16_t y_raw = ((uint8_t)response[3] << 8) | (uint8_t)response[2];
                             int16_t z_raw = ((uint8_t)response[5] << 8) | (uint8_t)response[4];
+                            
+                            // Debug: log raw values before shifting
+                            Serial.printf("[DEBUG] LIS3DH raw (before shift): X=0x%04X (%d), Y=0x%04X (%d), Z=0x%04X (%d)\n", 
+                                         (uint16_t)x_raw, x_raw, (uint16_t)y_raw, y_raw, (uint16_t)z_raw, z_raw);
                             
                             // LIS3DH in standard 10-bit mode (±2g range):
                             // - Data occupies upper 10 bits (bits 15-6)
@@ -327,6 +368,8 @@ void processI2CQueue() {
                             x_raw >>= 6;
                             y_raw >>= 6;
                             z_raw >>= 6;
+                            
+                            Serial.printf("[DEBUG] LIS3DH raw (after shift): X=%d, Y=%d, Z=%d\n", x_raw, y_raw, z_raw);
                             
                             float x_mg = (float)x_raw * 3.906f;  // ±2g standard mode: 3.906 mg/LSB
                             float y_mg = (float)y_raw * 3.906f;
@@ -1378,16 +1421,21 @@ void sendJSON(WiFiClient& client, String json) {
     String responseData = "200 OK (JSON: " + json.substring(0, min(50, (int)json.length())) + (json.length() > 50 ? "..." : "") + ")";
     logNetworkTransaction("HTTP", "TX", localIP, remoteIP, responseData);
     
-    client.println("HTTP/1.1 200 OK");
-    client.println("Content-Type: application/json");
-    client.println("Access-Control-Allow-Origin: *");
-    client.println("Access-Control-Allow-Methods: GET, POST, OPTIONS");
-    client.println("Access-Control-Allow-Headers: Content-Type");
-    client.println("Connection: close");
-    client.print("Content-Length: ");
-    client.println(json.length());
-    client.println();
+    // Build complete HTTP response
+    String response = "";
+    response += "HTTP/1.1 200 OK\r\n";
+    response += "Content-Type: application/json\r\n";
+    response += "Access-Control-Allow-Origin: *\r\n";
+    response += "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n";
+    response += "Access-Control-Allow-Headers: Content-Type\r\n";
+    response += "Connection: close\r\n";
+    response += "Content-Length: " + String(json.length()) + "\r\n";
+    response += "\r\n";
+    
+    // Send headers and body
+    client.print(response);
     client.print(json);
+    client.flush();
 }
 
 // Send 404 response helper
@@ -1397,14 +1445,20 @@ void send404(WiFiClient& client) {
     String localIP = eth.localIP().toString() + ":" + String(HTTP_PORT);
     logNetworkTransaction("HTTP", "TX", localIP, remoteIP, "404 Not Found");
     
-    client.println("HTTP/1.1 404 Not Found");
-    client.println("Content-Type: text/plain");
-    client.println("Access-Control-Allow-Origin: *");
-    client.println("Access-Control-Allow-Methods: GET, POST, OPTIONS");
-    client.println("Access-Control-Allow-Headers: Content-Type");
-    client.println("Connection: close");
-    client.println();
-    client.println("404 Not Found");
+    String notFoundBody = "404 Not Found";
+    String response = "";
+    response += "HTTP/1.1 404 Not Found\r\n";
+    response += "Content-Type: text/plain\r\n";
+    response += "Access-Control-Allow-Origin: *\r\n";
+    response += "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n";
+    response += "Access-Control-Allow-Headers: Content-Type\r\n";
+    response += "Connection: close\r\n";
+    response += "Content-Length: " + String(notFoundBody.length()) + "\r\n";
+    response += "\r\n";
+    
+    client.print(response);
+    client.print(notFoundBody);
+    client.flush();
 }
 
 String executeTerminalCommand(String command, String pin, String protocol) {
@@ -2774,6 +2828,7 @@ void loop() {
     updateIOpins();
     // updateSensorReadings();  // DISABLED - SHT30 sensors now handled in queue system
     handleEzoSensors(); // Handle EZO sensor communications with logging
+    handleLIS3DHSensors(); // Handle LIS3DH accelerometer polling using Adafruit library (low-freq, non-blocking)
     
     // Debug: Web server check (every 30 seconds)
     static unsigned long lastWebDebug = 0;
@@ -2856,6 +2911,81 @@ void initializeEzoSensors() {
     }
     ezoSensorsInitialized = true;
 }
+
+// Handle LIS3DH sensor polling (separate from I2C queue to use Adafruit library)
+// Non-blocking, low-frequency polling to avoid interfering with web server
+void handleLIS3DHSensors() {
+    static unsigned long lastLIS3DHCheck = 0;
+    unsigned long currentTime = millis();
+    
+    // Poll at very low frequency - only every 5 seconds max to avoid I2C contention
+    if (currentTime - lastLIS3DHCheck < 5000) return;
+    lastLIS3DHCheck = currentTime;
+    
+    // Poll each enabled LIS3DH sensor
+    for (int i = 0; i < numConfiguredSensors; i++) {
+        if (!configuredSensors[i].enabled) continue;
+        if (strcmp(configuredSensors[i].type, "LIS3DH") != 0) continue;
+        
+        // Check if it's time for next reading based on updateInterval
+        if (currentTime - configuredSensors[i].lastReadTime < configuredSensors[i].updateInterval) {
+            continue;
+        }
+        
+        // Initialize Adafruit_LIS3DH if not already done for this sensor
+        if (lis3dhSensors[i] == nullptr) {
+            lis3dhSensors[i] = new Adafruit_LIS3DH();
+            
+            // Non-blocking initialization check
+            noInterrupts();  // Briefly disable interrupts for I2C
+            bool initOk = lis3dhSensors[i]->begin(configuredSensors[i].i2cAddress);
+            interrupts();
+            
+            if (!initOk) {
+                Serial.printf("[LIS3DH] Failed to init sensor %d (%s) at 0x%02X\n", 
+                             i, configuredSensors[i].name, configuredSensors[i].i2cAddress);
+                delete lis3dhSensors[i];
+                lis3dhSensors[i] = nullptr;
+                continue;
+            }
+            Serial.printf("[LIS3DH] Initialized sensor %d (%s) at 0x%02X\n", 
+                         i, configuredSensors[i].name, configuredSensors[i].i2cAddress);
+        }
+        
+        if (lis3dhSensors[i] == nullptr) continue;
+        
+        // Read accelerometer data - brief I2C transaction
+        noInterrupts();  // Disable interrupts during I2C read to prevent contention
+        lis3dhSensors[i]->read();
+        float x_mg = lis3dhSensors[i]->x;
+        float y_mg = lis3dhSensors[i]->y;
+        float z_mg = lis3dhSensors[i]->z;
+        interrupts();  // Re-enable interrupts
+        
+        // Store raw values (in milligravity)
+        configuredSensors[i].rawValue = x_mg;
+        configuredSensors[i].rawValueB = y_mg;
+        configuredSensors[i].rawValueC = z_mg;
+        
+        // Apply calibration to all three axes
+        float calibratedX = applyCalibration(x_mg, configuredSensors[i]);
+        float calibratedY = applyCalibrationB(y_mg, configuredSensors[i]);
+        float calibratedZ = applyCalibrationC(z_mg, configuredSensors[i]);
+        
+        configuredSensors[i].calibratedValue = calibratedX;
+        configuredSensors[i].calibratedValueB = calibratedY;
+        configuredSensors[i].calibratedValueC = calibratedZ;
+        
+        // Convert to Modbus values (scaled by 100 for decimal precision)
+        configuredSensors[i].modbusValue = (int)(calibratedX * 100);
+        configuredSensors[i].modbusValueB = (int)(calibratedY * 100);
+        configuredSensors[i].modbusValueC = (int)(calibratedZ * 100);
+        
+        // Update timestamp
+        configuredSensors[i].lastReadTime = currentTime;
+    }
+}
+
 
 void handleEzoSensors() {
     static bool initialized = false;
@@ -3702,7 +3832,14 @@ void handleSimpleHTTP() {
                 int secondSpace = line.indexOf(' ', firstSpace + 1);
                 if (firstSpace > 0 && secondSpace > firstSpace) {
                     method = line.substring(0, firstSpace);
-                    path = line.substring(firstSpace + 1, secondSpace);
+                    String fullPath = line.substring(firstSpace + 1, secondSpace);
+                    // Strip query string if present
+                    int queryPos = fullPath.indexOf('?');
+                    if (queryPos > 0) {
+                        path = fullPath.substring(0, queryPos);
+                    } else {
+                        path = fullPath;
+                    }
                 }
                 request = line;
                 Serial.println("HTTP Request: " + method + " " + path);
@@ -3733,6 +3870,7 @@ void handleSimpleHTTP() {
         Serial.println("Routing request...");
         Serial.println("DEBUG: Method='" + method + "' Path='" + path + "'");
         routeRequest(client, method, path, body);
+        delay(50);  // Give W5500 time to buffer response
         client.stop();
         Serial.println("=== WEB CLIENT DISCONNECTED ===");
     }
@@ -3840,6 +3978,8 @@ void routeRequest(WiFiClient& client, String method, String path, String body) {
     }
     
     // Simple routing to existing handler functions
+    Serial.printf("[HTTP] Method: %s, Path: '%s' (length: %d)\n", method.c_str(), path.c_str(), path.length());
+    
     if (method == "GET") {
         if (path == "/" || path == "/index.html") {
             Serial.println("Serving embedded index.html");
@@ -3908,6 +4048,7 @@ void routeRequest(WiFiClient& client, String method, String path, String body) {
             serializeJson(terminalDoc, response);
             sendJSON(client, response);
         } else {
+            Serial.printf("[HTTP 404] No handler for GET %s\n", path.c_str());
             send404(client);
         }
     } else if (method == "POST") {
@@ -5160,6 +5301,16 @@ void handlePOSTSensorConfig(WiFiClient& client, String body) {
         configuredSensors[numConfiguredSensors].oneWireConversionTime = sensor["oneWireConversionTime"] | 750; // Default 750ms
         configuredSensors[numConfiguredSensors].oneWireAutoMode = sensor["oneWireAutoMode"] | true; // Default auto mode on
         configuredSensors[numConfiguredSensors].lastOneWireCmd = 0; // Initialize timing
+        
+        // SPI specific configuration - for LIS3DH_SPI and other SPI sensors
+        configuredSensors[numConfiguredSensors].spiChipSelect = sensor["spiChipSelect"] | 22; // Default GP22
+        const char* spiBus = sensor["spiBus"] | "hw0"; // Default hardware SPI0
+        strncpy(configuredSensors[numConfiguredSensors].spiBus, spiBus, sizeof(configuredSensors[numConfiguredSensors].spiBus) - 1);
+        configuredSensors[numConfiguredSensors].spiBus[sizeof(configuredSensors[numConfiguredSensors].spiBus) - 1] = '\0';
+        configuredSensors[numConfiguredSensors].spiFrequency = sensor["spiFrequency"] | 500000; // Default 500 kHz
+        configuredSensors[numConfiguredSensors].spiMosiPin = sensor["spiMosiPin"] | 3; // Default GP3 for SPI0 MOSI
+        configuredSensors[numConfiguredSensors].spiMisoPin = sensor["spiMisoPin"] | 4; // Default GP4 for SPI0 MISO
+        configuredSensors[numConfiguredSensors].spiClkPin = sensor["spiClkPin"] | 2; // Default GP2 for SPI0 CLK
         
         // Calibration data - handle both nested and direct formats
         if (sensor.containsKey("calibration") && sensor["calibration"].is<JsonObject>()) {

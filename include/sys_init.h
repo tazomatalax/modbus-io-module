@@ -220,6 +220,14 @@ struct SensorConfig {
     int oneWireConversionTime; // Time in ms to wait after command before reading
     unsigned long lastOneWireCmd; // When last command was sent
     bool oneWireAutoMode;     // Enable automatic periodic commands
+    
+    // SPI specific configuration
+    uint8_t spiChipSelect;    // GPIO pin for chip select
+    char spiBus[8];           // "hw0", "hw1", or "soft" for software SPI
+    uint32_t spiFrequency;    // SPI clock frequency in Hz
+    uint8_t spiMosiPin;       // MOSI pin for software SPI
+    uint8_t spiMisoPin;       // MISO pin for software SPI
+    uint8_t spiClkPin;        // CLK pin for software SPI
 };
 
 // Extern declarations for global variables
