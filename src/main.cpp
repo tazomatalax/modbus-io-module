@@ -4181,12 +4181,43 @@ void sendJSONIOStatus(WiFiClient& client) {
             // Modbus register value (what gets sent to Modbus)
             sensor["modbus_value"] = configuredSensors[i].modbusValue;
             
-            // Multi-output sensor support (for SHT30 humidity, BME280 pressure, etc.)
+            // Multi-output sensor support (for SHT30 humidity, BME280 pressure, LIS3DH Y/Z, etc.)
             if (strcmp(configuredSensors[i].type, "SHT30") == 0 && configuredSensors[i].rawValueB != 0) {
                 sensor["raw_value_b"] = configuredSensors[i].rawValueB;        // Humidity raw
                 sensor["calibrated_value_b"] = configuredSensors[i].calibratedValueB;  // Humidity calibrated
                 sensor["modbus_value_b"] = configuredSensors[i].modbusValueB;  // Humidity modbus (register+1)
                 sensor["modbus_register_b"] = configuredSensors[i].modbusRegister + 1;
+            }
+            else if (strcmp(configuredSensors[i].type, "LIS3DH") == 0 || strcmp(configuredSensors[i].type, "LIS3DH_SPI") == 0) {
+                // LIS3DH: Y-axis (register+1)
+                if (configuredSensors[i].rawValueB != 0) {
+                    sensor["raw_value_b"] = configuredSensors[i].rawValueB;        // Y-axis raw
+                    sensor["calibrated_value_b"] = configuredSensors[i].calibratedValueB;  // Y-axis calibrated
+                    sensor["modbus_value_b"] = configuredSensors[i].modbusValueB;  // Y-axis modbus (register+1)
+                    sensor["modbus_register_b"] = configuredSensors[i].modbusRegister + 1;
+                }
+                // LIS3DH: Z-axis (register+2)
+                if (configuredSensors[i].rawValueC != 0) {
+                    sensor["raw_value_c"] = configuredSensors[i].rawValueC;        // Z-axis raw
+                    sensor["calibrated_value_c"] = configuredSensors[i].calibratedValueC;  // Z-axis calibrated
+                    sensor["modbus_value_c"] = configuredSensors[i].modbusValueC;  // Z-axis modbus (register+2)
+                    sensor["modbus_register_c"] = configuredSensors[i].modbusRegister + 2;
+                }
+            }
+            else if (strcmp(configuredSensors[i].type, "BME280") == 0) {
+                // BME280: Humidity (register+1), Pressure (register+2)
+                if (configuredSensors[i].rawValueB != 0) {
+                    sensor["raw_value_b"] = configuredSensors[i].rawValueB;        // Humidity raw
+                    sensor["calibrated_value_b"] = configuredSensors[i].calibratedValueB;  // Humidity calibrated
+                    sensor["modbus_value_b"] = configuredSensors[i].modbusValueB;  // Humidity modbus (register+1)
+                    sensor["modbus_register_b"] = configuredSensors[i].modbusRegister + 1;
+                }
+                if (configuredSensors[i].rawValueC != 0) {
+                    sensor["raw_value_c"] = configuredSensors[i].rawValueC;        // Pressure raw
+                    sensor["calibrated_value_c"] = configuredSensors[i].calibratedValueC;  // Pressure calibrated
+                    sensor["modbus_value_c"] = configuredSensors[i].modbusValueC;  // Pressure modbus (register+2)
+                    sensor["modbus_register_c"] = configuredSensors[i].modbusRegister + 2;
+                }
             }
             
             // Include calibration info for dataflow display

@@ -620,6 +620,9 @@
                         <label for="sensor-modbus-register">Modbus Register</label>
                         <input type="number" id="sensor-modbus-register" min="0" max="65535" placeholder="Enter register (0-65535)" required>
                         <small class="form-help">Modbus input register (0-65535). Multi-output sensors use consecutive registers.</small>
+                        <div id="register-info" style="margin-top: 8px; padding: 8px; background-color: #f0f8ff; border-left: 3px solid #2196F3; border-radius: 3px; display: none; font-size: 0.9em;">
+                            <strong>Register Range:</strong> <span id="register-range-display"></span>
+                        </div>
                     </div>
                 </div>
                 <div class="form-group">
