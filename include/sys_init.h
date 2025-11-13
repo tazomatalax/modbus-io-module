@@ -72,9 +72,9 @@ struct CommandArray {
 #define PIN_ETH_IRQ 21
 #define PIN_EXT_LED 22
 
-// Add I2C Pin Definitions
-#define I2C_SDA_PIN 24
-#define I2C_SCL_PIN 25
+// Default I2C Pin Definitions (GP4/GP5 are safest for W5500-EVB-PoE-Pico)
+#define I2C_SDA_PIN 4
+#define I2C_SCL_PIN 5
 
 // Constants
 #define CONFIG_FILE "/config.json"
@@ -220,6 +220,14 @@ struct SensorConfig {
     int oneWireConversionTime; // Time in ms to wait after command before reading
     unsigned long lastOneWireCmd; // When last command was sent
     bool oneWireAutoMode;     // Enable automatic periodic commands
+    
+    // SPI specific configuration
+    uint8_t spiChipSelect;    // GPIO pin for chip select
+    char spiBus[8];           // "hw0", "hw1", or "soft" for software SPI
+    uint32_t spiFrequency;    // SPI clock frequency in Hz
+    uint8_t spiMosiPin;       // MOSI pin for software SPI
+    uint8_t spiMisoPin;       // MISO pin for software SPI
+    uint8_t spiClkPin;        // CLK pin for software SPI
 };
 
 // Extern declarations for global variables
@@ -249,7 +257,7 @@ extern int connectedClients;
 // Default configuration
 const Config DEFAULT_CONFIG = {
     .version = CONFIG_VERSION,
-    .dhcpEnabled = true,
+    .dhcpEnabled = false,
     .ip = {192, 168, 1, 10},
     .gateway = {192, 168, 1, 1},
     .subnet = {255, 255, 255, 0},

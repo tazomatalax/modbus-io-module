@@ -73,6 +73,29 @@ const ALL_PINS = {
         { label: 'GP27 (Pin 32) - ADC1 alt', pins: [27] },
         { label: 'GP28 (Pin 34) - ADC2 alt - Your DS18B20 is here!', pins: [28] }
     ],
+    'SPI': [
+        // Chip Select pins (all GPIO available for CS)
+        { label: 'GP0 (Pin 1) - CS', pins: [0] },
+        { label: 'GP1 (Pin 2) - CS', pins: [1] },
+        { label: 'GP2 (Pin 4) - CS / SPI0 CLK', pins: [2] },
+        { label: 'GP3 (Pin 5) - CS / SPI0 MOSI', pins: [3] },
+        { label: 'GP4 (Pin 6) - CS / SPI0 MISO', pins: [4] },
+        { label: 'GP5 (Pin 7) - CS', pins: [5] },
+        { label: 'GP6 (Pin 9) - CS', pins: [6] },
+        { label: 'GP7 (Pin 10) - CS', pins: [7] },
+        { label: 'GP8 (Pin 11) - CS', pins: [8] },
+        { label: 'GP9 (Pin 12) - CS', pins: [9] },
+        { label: 'GP10 (Pin 14) - CS / SPI1 CLK', pins: [10] },
+        { label: 'GP11 (Pin 15) - CS / SPI1 MOSI', pins: [11] },
+        { label: 'GP12 (Pin 16) - CS / SPI1 MISO', pins: [12] },
+        { label: 'GP13 (Pin 17) - CS', pins: [13] },
+        { label: 'GP14 (Pin 19) - CS', pins: [14] },
+        { label: 'GP15 (Pin 20) - CS', pins: [15] },
+        { label: 'GP22 (Pin 29) - CS (safe, not used by W5500)', pins: [22] },
+        { label: 'GP26 (Pin 31) - CS', pins: [26] },
+        { label: 'GP27 (Pin 32) - CS', pins: [27] },
+        { label: 'GP28 (Pin 34) - CS', pins: [28] }
+    ],
     'Digital Counter': [
         // Same as One-Wire but labeled for digital counting
         { label: 'GP0 (Pin 1)', pins: [0] },
@@ -104,6 +127,10 @@ const DATA_PARSING_OPTIONS = {
         methods: ['raw_bytes', 'int16_be', 'int16_le', 'float32_be', 'float32_le', 'custom_bits'],
         description: 'How to interpret I2C response data'
     },
+    'SPI': {
+        methods: ['raw_bytes', 'int16_be', 'int16_le', 'float32_be', 'float32_le', 'custom_bits'],
+        description: 'How to interpret SPI response data'
+    },
     'UART': {
         methods: ['ascii_string', 'binary_data', 'modbus_rtu', 'custom_protocol'],
         description: 'How to parse UART/RS485 data packets'
@@ -116,6 +143,150 @@ const DATA_PARSING_OPTIONS = {
         methods: ['bit_field', 'counter_value', 'status_register'],
         description: 'How to extract data from digital signals'
     }
+};
+
+// ========== NETWORK CONFIGURATION FUNCTIONS ==========
+
+// Parse IP string to array (e.g., "192.168.1.10" -> [192, 168, 1, 10])
+function parseIPString(ipStr) {
+    if (!ipStr) return null;
+    const parts = ipStr.trim().split('.');
+    if (parts.length !== 4) return null;
+    const octets = parts.map(p => {
+        const num = parseInt(p);
+        return (num >= 0 && num <= 255) ? num : null;
+    });
+    return octets.includes(null) ? null : octets;
+}
+
+// Format IP array to string (e.g., [192, 168, 1, 10] -> "192.168.1.10")
+function formatIPArray(arr) {
+    if (!arr || arr.length !== 4) return '';
+    return arr.join('.');
+}
+
+// Load network configuration from device
+window.loadNetworkConfig = function loadNetworkConfig() {
+    const attemptLoad = (retries = 0) => {
+        fetch('/config', { timeout: 5000 })
+            .then(response => {
+                if (!response.ok) throw new Error('Response status: ' + response.status);
+                return response.json();
+            })
+            .then(data => {
+                // Update form fields with current configuration
+                if (data.ip) {
+                    document.getElementById('ip').value = formatIPArray(data.ip);
+                } else {
+                    document.getElementById('ip').value = '192.168.1.10';
+                }
+                
+                if (data.gateway) {
+                    document.getElementById('gateway').value = formatIPArray(data.gateway);
+                } else {
+                    document.getElementById('gateway').value = '192.168.1.1';
+                }
+                
+                if (data.subnet) {
+                    document.getElementById('subnet').value = formatIPArray(data.subnet);
+                } else {
+                    document.getElementById('subnet').value = '255.255.255.0';
+                }
+                
+                document.getElementById('dhcp').checked = data.dhcpEnabled || false;
+                document.getElementById('hostname').value = data.hostname || 'modbus-io-module';
+                document.getElementById('modbus_port').value = data.modbusPort || 502;
+                
+                showToast('Network configuration loaded', 'success');
+            })
+            .catch(error => {
+                console.error('Error loading network config (attempt ' + (retries + 1) + '):', error);
+                
+                // Retry up to 3 times with 1 second delays
+                if (retries < 3) {
+                    setTimeout(() => attemptLoad(retries + 1), 1000);
+                } else {
+                    // Set safe defaults after retries exhausted
+                    document.getElementById('ip').value = '192.168.1.10';
+                    document.getElementById('gateway').value = '192.168.1.1';
+                    document.getElementById('subnet').value = '255.255.255.0';
+                    document.getElementById('dhcp').checked = false;
+                    document.getElementById('hostname').value = 'modbus-io-module';
+                    document.getElementById('modbus_port').value = 502;
+                }
+            });
+    };
+    
+    attemptLoad();
+};
+
+// Save network configuration to device
+window.saveConfig = function saveConfig() {
+    const dhcpEnabled = document.getElementById('dhcp').checked;
+    const hostname = document.getElementById('hostname').value;
+    const ipStr = document.getElementById('ip').value;
+    const subnetStr = document.getElementById('subnet').value;
+    const gatewayStr = document.getElementById('gateway').value;
+    const modbusPort = parseInt(document.getElementById('modbus_port').value);
+    
+    // Validate IP addresses
+    const ip = parseIPString(ipStr);
+    const subnet = parseIPString(subnetStr);
+    const gateway = parseIPString(gatewayStr);
+    
+    if (!ip) {
+        showToast('Invalid IP address format', 'error');
+        return;
+    }
+    if (!subnet) {
+        showToast('Invalid subnet mask format', 'error');
+        return;
+    }
+    if (!gateway) {
+        showToast('Invalid gateway address format', 'error');
+        return;
+    }
+    if (!hostname || hostname.length === 0) {
+        showToast('Hostname cannot be empty', 'error');
+        return;
+    }
+    if (modbusPort < 1 || modbusPort > 65535) {
+        showToast('Modbus port must be between 1 and 65535', 'error');
+        return;
+    }
+    
+    // Prepare configuration object
+    const config = {
+        dhcpEnabled: dhcpEnabled,
+        hostname: hostname,
+        ip: ip,
+        subnet: subnet,
+        gateway: gateway,
+        modbusPort: modbusPort
+    };
+    
+    // Send to device
+    fetch('/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config)
+    })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                showToast('Network configuration saved. Device will reboot...', 'success', true);
+                // Device will reboot, page will disconnect
+                setTimeout(() => {
+                    showToast('Device rebooted. Reconnecting...', 'info', true);
+                }, 2000);
+            } else {
+                showToast('Failed to save network configuration', 'error');
+            }
+        })
+        .catch(error => {
+            console.error('Error saving config:', error);
+            showToast('Error saving network configuration', 'error');
+        });
 };
 
 // Helper to get used pins (except for bus protocols)
@@ -297,7 +468,7 @@ window.updateSensorProtocolFields = function updateSensorProtocolFields() {
     });
 
     // Show/hide multi-value option based on protocol type
-    const digitalProtocols = ['I2C', 'UART', 'One-Wire'];
+    const digitalProtocols = ['I2C', 'UART', 'One-Wire', 'SPI'];
     if (digitalProtocols.includes(protocolType)) {
         multiValueOption.style.display = 'block';
     } else {
@@ -316,6 +487,35 @@ window.updateSensorProtocolFields = function updateSensorProtocolFields() {
             if (field.id === 'sensor-i2c-address') field.required = true;
         });
         loadAvailablePins('I2C');
+    } else if (protocolType === 'SPI') {
+        protocolConfig.style.display = 'block';
+        const spiConfig = document.getElementById('spi-config');
+        spiConfig.style.display = 'block';
+        spiConfig.querySelectorAll('input,select').forEach(field => {
+            if (field.id === 'sensor-spi-chip-select') field.required = true;
+        });
+        loadAvailablePins('SPI');
+        // Handle SPI bus mode change
+        const spiBusSelect = document.getElementById('sensor-spi-bus');
+        if (spiBusSelect) {
+            spiBusSelect.addEventListener('change', (e) => {
+                const softPinsDiv = document.getElementById('spi-soft-pins');
+                const hwInfoDiv = document.getElementById('spi-hw-info');
+                if (e.target.value === 'soft') {
+                    softPinsDiv.style.display = 'block';
+                    hwInfoDiv.style.display = 'none';
+                    document.getElementById('sensor-spi-mosi').required = true;
+                    document.getElementById('sensor-spi-miso').required = true;
+                    document.getElementById('sensor-spi-clk').required = true;
+                } else {
+                    softPinsDiv.style.display = 'none';
+                    hwInfoDiv.style.display = 'block';
+                    document.getElementById('sensor-spi-mosi').required = false;
+                    document.getElementById('sensor-spi-miso').required = false;
+                    document.getElementById('sensor-spi-clk').required = false;
+                }
+            });
+        }
     } else if (protocolType === 'UART') {
         protocolConfig.style.display = 'block';
         const uartConfig = document.getElementById('uart-config');
@@ -372,6 +572,52 @@ window.loadAvailablePins = function loadAvailablePins(protocol) {
             option.textContent = pair.label;
             pinsSelect.appendChild(option);
         });
+    } else if (protocol === 'SPI') {
+        // Load CS pins
+        const csSelect = document.getElementById('sensor-spi-chip-select');
+        csSelect.innerHTML = '<option value="">Select CS pin...</option>';
+        available.forEach(pair => {
+            const option = document.createElement('option');
+            option.value = pair.pins[0];
+            option.textContent = pair.label;
+            csSelect.appendChild(option);
+        });
+        
+        // Load MOSI pins (same as available, since any GPIO can be bit-banged)
+        const mosiSelect = document.getElementById('sensor-spi-mosi');
+        if (mosiSelect) {
+            mosiSelect.innerHTML = '<option value="">Select MOSI pin...</option>';
+            available.forEach(pair => {
+                const option = document.createElement('option');
+                option.value = pair.pins[0];
+                option.textContent = pair.label;
+                mosiSelect.appendChild(option);
+            });
+        }
+        
+        // Load MISO pins
+        const misoSelect = document.getElementById('sensor-spi-miso');
+        if (misoSelect) {
+            misoSelect.innerHTML = '<option value="">Select MISO pin...</option>';
+            available.forEach(pair => {
+                const option = document.createElement('option');
+                option.value = pair.pins[0];
+                option.textContent = pair.label;
+                misoSelect.appendChild(option);
+            });
+        }
+        
+        // Load CLK pins
+        const clkSelect = document.getElementById('sensor-spi-clk');
+        if (clkSelect) {
+            clkSelect.innerHTML = '<option value="">Select CLK pin...</option>';
+            available.forEach(pair => {
+                const option = document.createElement('option');
+                option.value = pair.pins[0];
+                option.textContent = pair.label;
+                clkSelect.appendChild(option);
+            });
+        }
     } else if (protocol === 'UART') {
         const pinsSelect = document.getElementById('sensor-uart-pins');
         pinsSelect.innerHTML = '<option value="">Select UART pins...</option>';
@@ -439,6 +685,7 @@ window.updateSensorTypeOptions = function updateSensorTypeOptions() {
             options: [
                 { value: 'BME280', text: 'BME280 (Temperature, Humidity, Pressure)' },
                 { value: 'SHT30', text: 'SHT30 (Temperature, Humidity)' },
+                { value: 'LIS3DH', text: 'LIS3DH (3-Axis Accelerometer)' },
                 { value: 'EZO_PH', text: 'EZO-pH (pH Sensor)' },
                 { value: 'EZO_EC', text: 'EZO-EC (Conductivity)' },
                 { value: 'EZO_DO', text: 'EZO-DO (Dissolved Oxygen)' },
@@ -489,6 +736,20 @@ window.updateSensorTypeOptions = function updateSensorTypeOptions() {
             options: [
                 { value: 'SIM_ANALOG_VOLTAGE', text: 'Simulated Analog Voltage' },
                 { value: 'SIM_ANALOG_CURRENT', text: 'Simulated Analog Current' }
+            ]
+        });
+    } else if (protocolType === 'SPI') {
+        optgroups.push({
+            label: 'Real SPI Sensors',
+            options: [
+                { value: 'LIS3DH_SPI', text: 'LIS3DH (3-Axis Accelerometer via SPI)' },
+                { value: 'GENERIC_SPI', text: 'Generic SPI Device' }
+            ]
+        });
+        optgroups.push({
+            label: 'Simulated SPI Sensors',
+            options: [
+                { value: 'SIM_SPI_ACCEL', text: 'Simulated SPI Accelerometer' }
             ]
         });
     } else if (protocolType === 'One-Wire') {
@@ -573,7 +834,7 @@ window.updateSensorFormFields = function updateSensorFormFields() {
     
     // Show/hide data parsing section based on protocol
     const dataParsingSection = document.getElementById('data-parsing-section');
-    if (protocol === 'I2C' || protocol === 'UART' || protocol === 'One-Wire' || protocol === 'Digital Counter') {
+    if (protocol === 'I2C' || protocol === 'UART' || protocol === 'One-Wire' || protocol === 'Digital Counter' || protocol === 'SPI') {
         dataParsingSection.style.display = 'block';
     } else {
         dataParsingSection.style.display = 'none';
@@ -584,6 +845,34 @@ window.updateSensorFormFields = function updateSensorFormFields() {
     if (!modbusRegField.value && !modbusRegField.hasAttribute('data-user-set')) {
         const nextRegister = getNextAvailableRegister();
         modbusRegField.value = nextRegister;
+    }
+    
+    // Update register range display
+    updateRegisterRangeDisplay();
+}
+
+// Update the visual display of register range
+window.updateRegisterRangeDisplay = function updateRegisterRangeDisplay() {
+    const sensorType = document.getElementById('sensor-type').value;
+    const modbusRegField = document.getElementById('sensor-modbus-register');
+    const registerInfoDiv = document.getElementById('register-info');
+    const registerRangeDisplay = document.getElementById('register-range-display');
+    
+    if (!sensorType || !modbusRegField.value) {
+        registerInfoDiv.style.display = 'none';
+        return;
+    }
+    
+    const baseRegister = parseInt(modbusRegField.value);
+    const registerCount = getRegisterCountForSensor(sensorType);
+    
+    if (registerCount > 1) {
+        // Multi-output sensor: show the range
+        const endRegister = baseRegister + registerCount - 1;
+        registerRangeDisplay.textContent = `${baseRegister}-${endRegister} (${registerCount} consecutive registers for ${registerCount === 3 ? 'X, Y, Z axes' : registerCount === 2 ? 'primary and secondary outputs' : 'outputs'})`;
+        registerInfoDiv.style.display = 'block';
+    } else {
+        registerInfoDiv.style.display = 'none';
     }
 }
 
@@ -763,6 +1052,49 @@ window.autoConfigureSensorType = function autoConfigureSensorType() {
                 { name: 'Temperature', register: 'auto', units: '°C' },
                 { name: 'Humidity', register: 'auto+1', units: '%RH' },
                 { name: 'Pressure', register: 'auto+2', units: 'hPa' }
+            ]
+        },
+        'EZO_PH': {
+            protocol: 'I2C',
+            i2cAddress: '0x63',
+            command: { command: 'R', waitTime: 900 },
+            units: 'pH',
+            calibrationSlope: 1.0,
+            calibrationOffset: 0.0
+        },
+        'EZO_EC': {
+            protocol: 'I2C',
+            i2cAddress: '0x64',
+            command: { command: 'R', waitTime: 900 },
+            units: 'µS/cm',
+            calibrationSlope: 1.0,
+            calibrationOffset: 0.0
+        },
+        'EZO_DO': {
+            protocol: 'I2C',
+            i2cAddress: '0x61',
+            command: { command: 'R', waitTime: 900 },
+            units: 'mg/L',
+            calibrationSlope: 1.0,
+            calibrationOffset: 0.0
+        },
+        'EZO_RTD': {
+            protocol: 'I2C',
+            i2cAddress: '0x66',
+            command: { command: 'R', waitTime: 900 },
+            units: '°C',
+            calibrationSlope: 1.0,
+            calibrationOffset: 0.0
+        },
+        'LIS3DH': {
+            protocol: 'I2C',
+            i2cAddress: '0x18',
+            units: ['X: mg', 'Y: mg', 'Z: mg'],
+            multiValue: true,
+            values: [
+                { name: 'X-Axis Acceleration', register: 'auto', units: 'mg' },
+                { name: 'Y-Axis Acceleration', register: 'auto+1', units: 'mg' },
+                { name: 'Z-Axis Acceleration', register: 'auto+2', units: 'mg' }
             ]
         }
     };
@@ -944,6 +1276,19 @@ window.updateDataParsingFields = function updateDataParsingFields() {
     }
 }
 
+// Helper function to get the number of consecutive registers a sensor needs
+window.getRegisterCountForSensor = function getRegisterCountForSensor(sensorType) {
+    // Multi-output sensors that need consecutive registers
+    const multiOutputSensors = {
+        'LIS3DH': 3,        // X, Y, Z axes (3 consecutive registers)
+        'LIS3DH_SPI': 3,    // X, Y, Z axes on SPI (3 consecutive registers)
+        'SHT30': 2,         // Temperature, Humidity (2 consecutive registers)
+        'BME280': 3,        // Temperature, Humidity, Pressure (3 consecutive registers)
+        'BME680': 4         // Temperature, Humidity, Pressure, Gas resistance (4 consecutive registers)
+    };
+    return multiOutputSensors[sensorType] || 1; // Default to 1 register for single-output sensors
+};
+
 // Helper function to get the next available modbus register
 window.getNextAvailableRegister = function getNextAvailableRegister() {
     let maxRegister = 2; // System reserves 0-2
@@ -951,14 +1296,15 @@ window.getNextAvailableRegister = function getNextAvailableRegister() {
     
     sensorConfigData.forEach(sensor => {
         if (sensor.modbusRegister !== undefined) {
-            usedRegisters.add(sensor.modbusRegister);
+            // Determine how many consecutive registers this sensor uses
+            const registerCount = getRegisterCountForSensor(sensor.type);
             
-            // For SHT30, also mark the next register as used
-            if (sensor.type === 'SHT30') {
-                usedRegisters.add(sensor.modbusRegister + 1);
+            // Mark all registers used by this sensor
+            for (let i = 0; i < registerCount; i++) {
+                usedRegisters.add(sensor.modbusRegister + i);
             }
             
-            // For multi-value sensors, mark all their registers as used
+            // For multi-value sensors (dynamic multi-output), also mark their registers as used
             if (sensor.multiValues && Array.isArray(sensor.multiValues)) {
                 sensor.multiValues.forEach(value => {
                     if (value.register !== undefined) {
@@ -967,6 +1313,7 @@ window.getNextAvailableRegister = function getNextAvailableRegister() {
                 });
             }
             
+            // Track the highest register used
             if (sensor.modbusRegister > maxRegister) {
                 maxRegister = sensor.modbusRegister;
             }
@@ -975,7 +1322,8 @@ window.getNextAvailableRegister = function getNextAvailableRegister() {
     
     // Find the first available register starting from maxRegister + 1
     let candidate = maxRegister + 1;
-    while (usedRegisters.has(candidate) || usedRegisters.has(candidate + 1)) {
+    const searchLimit = candidate + 100; // Prevent infinite loop
+    while (candidate < searchLimit && usedRegisters.has(candidate)) {
         candidate++;
     }
     
@@ -1068,6 +1416,41 @@ window.editSensor = function editSensor(index) {
         }, 100);
     } else if (sensor.protocol === 'Digital Counter' && sensor.digitalPin !== undefined) {
         document.getElementById('sensor-digital-pin').value = sensor.digitalPin.toString();
+    } else if (sensor.protocol === 'SPI') {
+        // Load SPI configuration
+        setTimeout(() => {
+            if (sensor.spiChipSelect !== undefined) {
+                const csSelect = document.getElementById('sensor-spi-chip-select');
+                if (csSelect) csSelect.value = sensor.spiChipSelect.toString();
+            }
+            if (sensor.spiBus) {
+                const busSelect = document.getElementById('sensor-spi-bus');
+                if (busSelect) {
+                    busSelect.value = sensor.spiBus;
+                    // Trigger change event to show/hide software pins if needed
+                    busSelect.dispatchEvent(new Event('change'));
+                }
+            }
+            if (sensor.spiFrequency) {
+                const freqSelect = document.getElementById('sensor-spi-frequency');
+                if (freqSelect) freqSelect.value = sensor.spiFrequency.toString();
+            }
+            // Load software SPI pins if applicable
+            if (sensor.spiBus === 'soft') {
+                if (sensor.spiMosiPin !== undefined) {
+                    const mosiSelect = document.getElementById('sensor-spi-mosi');
+                    if (mosiSelect) mosiSelect.value = sensor.spiMosiPin.toString();
+                }
+                if (sensor.spiMisoPin !== undefined) {
+                    const misoSelect = document.getElementById('sensor-spi-miso');
+                    if (misoSelect) misoSelect.value = sensor.spiMisoPin.toString();
+                }
+                if (sensor.spiClkPin !== undefined) {
+                    const clkSelect = document.getElementById('sensor-spi-clk');
+                    if (clkSelect) clkSelect.value = sensor.spiClkPin.toString();
+                }
+            }
+        }, 100);
     }
     document.getElementById('sensor-i2c-address').value = sensor.i2cAddress ? `0x${sensor.i2cAddress.toString(16).toUpperCase().padStart(2, '0')}` : '';
     document.getElementById('sensor-modbus-register').value = sensor.modbusRegister || '';
@@ -1374,53 +1757,28 @@ window.saveSensor = function saveSensor() {
     }
     
     // Check for modbus register conflicts (including multi-output sensors)
+    // Determine how many consecutive registers this sensor type needs
+    const newSensorRegisterCount = getRegisterCountForSensor(type);
+    
     const conflictingSensor = sensorConfigData.find((sensor, index) => {
         if (index === editingSensorIndex) return false; // Skip self when editing
         
-        // Check if the new register conflicts with existing sensor's primary register
-        if (sensor.modbusRegister === modbusRegister) {
-            return true;
-        }
+        // Determine how many consecutive registers the existing sensor uses
+        const existingSensorRegisterCount = getRegisterCountForSensor(sensor.type);
         
-        // Check for SHT30 specific conflicts (uses consecutive registers)
-        if (sensor.type === 'SHT30') {
-            // SHT30 uses register N for temperature and N+1 for humidity
-            if (sensor.modbusRegister + 1 === modbusRegister) {
-                return true; // New register conflicts with SHT30's humidity register
-            }
-        }
-        
-        // Check if current sensor is SHT30 and would conflict
-        if (type === 'SHT30') {
-            // Current SHT30 needs registers N and N+1
-            if (sensor.modbusRegister === modbusRegister + 1) {
-                return true; // Existing sensor conflicts with new SHT30's humidity register
-            }
-            if (sensor.type === 'SHT30' && Math.abs(sensor.modbusRegister - modbusRegister) < 2) {
-                return true; // Two SHT30 sensors with overlapping register ranges
-            }
-        }
-        
-        // Check if the new register conflicts with multi-output sensor's secondary registers
-        if (sensor.multiValues && Array.isArray(sensor.multiValues)) {
-            for (const value of sensor.multiValues) {
-                if (value.register === modbusRegister) {
-                    return true;
+        // Check if any of the new sensor's registers conflict with existing sensor's registers
+        for (let i = 0; i < newSensorRegisterCount; i++) {
+            for (let j = 0; j < existingSensorRegisterCount; j++) {
+                if (modbusRegister + i === sensor.modbusRegister + j) {
+                    return true; // Conflict found
                 }
             }
         }
         
-        // Check if current sensor's multi-output registers conflict with existing sensor
-        const isMultiValue = document.getElementById('sensor-multi-value').checked;
-        if (isMultiValue) {
-            // Get the actual number of multi-value fields configured
-            const multiValueContainer = document.getElementById('multi-value-fields');
-            const outputCount = multiValueContainer ? multiValueContainer.children.length : 1;
-            for (let i = 0; i < outputCount; i++) {
-                const registerValue = modbusRegister + i;
-                if (sensor.modbusRegister === registerValue || 
-                    (sensor.type === 'SHT30' && sensor.modbusRegister + 1 === registerValue) ||
-                    (sensor.multiValues && sensor.multiValues.some(mv => mv.register === registerValue))) {
+        // Also check custom multi-value registers if defined
+        if (sensor.multiValues && Array.isArray(sensor.multiValues)) {
+            for (let i = 0; i < newSensorRegisterCount; i++) {
+                if (sensor.multiValues.some(mv => mv.register === modbusRegister + i)) {
                     return true;
                 }
             }
@@ -1430,7 +1788,14 @@ window.saveSensor = function saveSensor() {
     });
     
     if (conflictingSensor) {
-        showToast(`Modbus register conflict with sensor "${conflictingSensor.name}"`, 'error');
+        const newSensorInfo = type === 'LIS3DH' || type === 'LIS3DH_SPI' ? 
+            `${type} (needs ${newSensorRegisterCount} consecutive registers starting at ${modbusRegister})` : 
+            type === 'SHT30' ? 
+            `${type} (needs ${newSensorRegisterCount} consecutive registers starting at ${modbusRegister})` :
+            type === 'BME280' ?
+            `${type} (needs ${newSensorRegisterCount} consecutive registers starting at ${modbusRegister})` :
+            `${type}`;
+        showToast(`Register conflict: ${newSensorInfo} conflicts with "${conflictingSensor.name}" (registers ${conflictingSensor.modbusRegister}-${conflictingSensor.modbusRegister + getRegisterCountForSensor(conflictingSensor.type) - 1})`, 'error');
         return;
     }
     
@@ -1596,6 +1961,31 @@ window.saveSensor = function saveSensor() {
             const digitalPin = document.getElementById('sensor-digital-pin').value;
             if (digitalPin) {
                 pinAssignments.digitalPin = parseInt(digitalPin);
+            }
+            break;
+            
+        case 'SPI':
+            // SPI specific configuration
+            const spiChipSelect = document.getElementById('sensor-spi-chip-select').value;
+            if (spiChipSelect) {
+                pinAssignments.spiChipSelect = parseInt(spiChipSelect);
+            }
+            
+            const spiBus = document.getElementById('sensor-spi-bus').value;
+            pinAssignments.spiBus = spiBus || 'hw0';
+            
+            const spiFrequency = document.getElementById('sensor-spi-frequency').value;
+            pinAssignments.spiFrequency = parseInt(spiFrequency) || 500000;
+            
+            // If software SPI is selected, get the pin assignments
+            if (spiBus === 'soft') {
+                const spiMosiPin = document.getElementById('sensor-spi-mosi').value;
+                const spiMisoPin = document.getElementById('sensor-spi-miso').value;
+                const spiClkPin = document.getElementById('sensor-spi-clk').value;
+                
+                if (spiMosiPin) pinAssignments.spiMosiPin = parseInt(spiMosiPin);
+                if (spiMisoPin) pinAssignments.spiMisoPin = parseInt(spiMisoPin);
+                if (spiClkPin) pinAssignments.spiClkPin = parseInt(spiClkPin);
             }
             break;
     }
@@ -2324,6 +2714,91 @@ function updateProtocolSensorFlow(protocol, sensors, containerId) {
             
             dataflowHTML += `</div>`;
             
+        } else if (isMultiValue && (sensor.type === 'LIS3DH' || sensor.type === 'LIS3DH_SPI')) {
+            // Special handling for LIS3DH 3-axis accelerometer (X, Y, Z)
+            dataflowHTML = `<div class="multi-value-dataflow">`;
+            
+            // X-axis (primary value)
+            dataflowHTML += `
+                <div class="value-dataflow ${staleData ? 'stale-data' : ''}">
+                    <div class="value-label">X-Axis (mg)</div>
+                    <div class="dataflow-chain">
+                        <div class="dataflow-step raw-step">
+                            <div class="step-label">Raw</div>
+                            <div class="step-value">${sensor.raw_value !== undefined ? sensor.raw_value.toFixed(2) : 'N/A'}</div>
+                        </div>
+                        <div class="dataflow-arrow">→</div>
+                        <div class="dataflow-step calibrated-step">
+                            <div class="step-label">Calibrated</div>
+                            <div class="step-value">${sensor.calibrated_value !== undefined ? sensor.calibrated_value.toFixed(2) : 'N/A'}</div>
+                            <div class="calibration-info">
+                                <small>${getCalibrationEquationDisplay(sensor, 0)}</small>
+                            </div>
+                        </div>
+                        <div class="dataflow-arrow">→</div>
+                        <div class="dataflow-step modbus-step">
+                            <div class="step-label">Modbus Reg ${sensor.modbus_register}</div>
+                            <div class="step-value">${sensor.modbus_value !== undefined ? sensor.modbus_value : 'N/A'}</div>
+                        </div>
+                    </div>
+                </div>`;
+            
+            // Y-axis (secondary value)
+            if (sensor.raw_value_b !== undefined) {
+                dataflowHTML += `
+                    <div class="value-dataflow ${staleData ? 'stale-data' : ''}">
+                        <div class="value-label">Y-Axis (mg)</div>
+                        <div class="dataflow-chain">
+                            <div class="dataflow-step raw-step">
+                                <div class="step-label">Raw</div>
+                                <div class="step-value">${sensor.raw_value_b.toFixed(2)}</div>
+                            </div>
+                            <div class="dataflow-arrow">→</div>
+                            <div class="dataflow-step calibrated-step">
+                                <div class="step-label">Calibrated</div>
+                                <div class="step-value">${sensor.calibrated_value_b !== undefined ? sensor.calibrated_value_b.toFixed(2) : 'N/A'}</div>
+                                <div class="calibration-info">
+                                    <small>${getCalibrationEquationDisplay(sensor, 1)}</small>
+                                </div>
+                            </div>
+                            <div class="dataflow-arrow">→</div>
+                            <div class="dataflow-step modbus-step">
+                                <div class="step-label">Modbus Reg ${sensor.modbus_register_b || (sensor.modbus_register + 1)}</div>
+                                <div class="step-value">${sensor.modbus_value_b !== undefined ? sensor.modbus_value_b : 'N/A'}</div>
+                            </div>
+                        </div>
+                    </div>`;
+            }
+            
+            // Z-axis (tertiary value)
+            if (sensor.raw_value_c !== undefined) {
+                dataflowHTML += `
+                    <div class="value-dataflow ${staleData ? 'stale-data' : ''}">
+                        <div class="value-label">Z-Axis (mg)</div>
+                        <div class="dataflow-chain">
+                            <div class="dataflow-step raw-step">
+                                <div class="step-label">Raw</div>
+                                <div class="step-value">${sensor.raw_value_c.toFixed(2)}</div>
+                            </div>
+                            <div class="dataflow-arrow">→</div>
+                            <div class="dataflow-step calibrated-step">
+                                <div class="step-label">Calibrated</div>
+                                <div class="step-value">${sensor.calibrated_value_c !== undefined ? sensor.calibrated_value_c.toFixed(2) : 'N/A'}</div>
+                                <div class="calibration-info">
+                                    <small>${getCalibrationEquationDisplay(sensor, 2)}</small>
+                                </div>
+                            </div>
+                            <div class="dataflow-arrow">→</div>
+                            <div class="dataflow-step modbus-step">
+                                <div class="step-label">Modbus Reg ${sensor.modbus_register_c || (sensor.modbus_register + 2)}</div>
+                                <div class="step-value">${sensor.modbus_value_c !== undefined ? sensor.modbus_value_c : 'N/A'}</div>
+                            </div>
+                        </div>
+                    </div>`;
+            }
+            
+            dataflowHTML += `</div>`;
+            
         } else if (isMultiValue) {
             // Multi-value sensor: show each value's dataflow
             dataflowHTML = `<div class="multi-value-dataflow">`;
@@ -3022,6 +3497,9 @@ General:
 document.addEventListener('DOMContentLoaded', function() {
     // Load initial sensor configuration
     loadSensorConfig();
+    
+    // Load network configuration
+    loadNetworkConfig();
     
     updateTerminalInterface();
     
@@ -3840,16 +4318,24 @@ window.sendDataToConfig = function sendDataToConfig() {
 // Add event listener to track manual register field changes
 document.addEventListener('DOMContentLoaded', function() {
     const modbusRegField = document.getElementById('sensor-modbus-register');
+    const sensorTypeField = document.getElementById('sensor-type');
+    
     if (modbusRegField) {
         // Mark field as user-set when user manually types or changes value
         modbusRegField.addEventListener('input', function() {
             this.setAttribute('data-user-set', 'true');
+            updateRegisterRangeDisplay();
         });
         
         // Also mark as user-set when field gains focus and user interacts
         modbusRegField.addEventListener('focus', function() {
             this.setAttribute('data-user-set', 'true');
         });
+    }
+    
+    if (sensorTypeField) {
+        // Update register range display when sensor type changes
+        sensorTypeField.addEventListener('change', updateRegisterRangeDisplay);
     }
 });
 

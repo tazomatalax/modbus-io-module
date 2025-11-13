@@ -1,4 +1,6 @@
 #include "sys_init.h"
+#include <Adafruit_LIS3DH.h>
+#include <Adafruit_Sensor.h>
 
 // Sensor reading functions
 bool readSHT30(uint8_t sensorIndex, float& temperature, float& humidity);
@@ -10,8 +12,12 @@ float evaluateCalibrationExpression(float x, const SensorConfig& sensor);
 float applyCalibration(float rawValue, const SensorConfig& sensor);
 float applyCalibrationB(float rawValue, const SensorConfig& sensor);
 float applyCalibrationC(float rawValue, const SensorConfig& sensor);
+void handleLIS3DHSensors();  // Forward declaration for LIS3DH polling handler
 // Use ANALOG_INPUTS from sys_init.h instead of ADC_PINS
 #include "Ezo_i2c.h"
+
+// LIS3DH accelerometer instances (one per sensor, max 8 sensors)
+Adafruit_LIS3DH* lis3dhSensors[MAX_SENSORS] = {nullptr};
 
 // SensorConfig array definition (from sys_init.h extern)
 SensorConfig configuredSensors[MAX_SENSORS] = {};
@@ -30,6 +36,15 @@ struct SensorPreset {
 const SensorPreset sensorPresets[] = {
     // SHT30: I2C command 0x2C 0x06, 1s polling, 15ms delay
     { "SHT30", "I2C", {0x2C, 0x06}, 2, 1000, 15 },
+    // DS18B20: One-Wire, 2s polling, 750ms conversion time
+    { "DS18B20", "One-Wire", {0x44, 0x00}, 1, 2000, 750 },
+    // EZO Sensors: I2C read command 'R' = 0x52, 5s polling, 900ms response time
+    { "EZO_PH", "I2C", {0x52, 0x00}, 1, 5000, 900 },
+    { "EZO_EC", "I2C", {0x52, 0x00}, 1, 5000, 900 },
+    { "EZO_DO", "I2C", {0x52, 0x00}, 1, 5000, 900 },
+    { "EZO_RTD", "I2C", {0x52, 0x00}, 1, 5000, 900 },
+    // LIS3DH: 3-axis accelerometer, I2C, 1s polling, direct register read (no command)
+    { "LIS3DH", "I2C", {0x00, 0x00}, 0, 1000, 0 },
     // Add more named sensors here as needed
 };
 
@@ -43,7 +58,6 @@ void applySensorPresets() {
             if (ezoPhCount > 1) {
                 // Disable duplicate EZO-PH sensors
                 configuredSensors[i].enabled = false;
-                Serial.println("Duplicate EZO-PH sensor disabled");
                 continue;
             }
             if (configuredSensors[i].i2cAddress == 0) configuredSensors[i].i2cAddress = 0x63;
@@ -52,29 +66,24 @@ void applySensorPresets() {
             if (strlen(configuredSensors[i].protocol) == 0) strcpy(configuredSensors[i].protocol, "I2C");
             if (configuredSensors[i].updateInterval == 0) configuredSensors[i].updateInterval = 5000;
             if (configuredSensors[i].modbusRegister == 0) configuredSensors[i].modbusRegister = 10;
-            Serial.printf("Auto-configured EZO-PH sensor (preserved user settings: addr=%d, cmd='%s', interval=%d)\n", 
-                         configuredSensors[i].i2cAddress, configuredSensors[i].command, configuredSensors[i].updateInterval);
         } else if (strcmp(configuredSensors[i].type, "EZO-EC") == 0) {
             if (configuredSensors[i].i2cAddress == 0) configuredSensors[i].i2cAddress = 0x64;
             if (strlen(configuredSensors[i].command) == 0) strcpy(configuredSensors[i].command, "R");
             if (strlen(configuredSensors[i].protocol) == 0) strcpy(configuredSensors[i].protocol, "I2C");
             if (configuredSensors[i].updateInterval == 0) configuredSensors[i].updateInterval = 5000;
             if (configuredSensors[i].modbusRegister == 0) configuredSensors[i].modbusRegister = 11;
-            Serial.println("Auto-configured EZO-EC sensor");
         } else if (strcmp(configuredSensors[i].type, "EZO-DO") == 0) {
             if (configuredSensors[i].i2cAddress == 0) configuredSensors[i].i2cAddress = 0x61;
             if (strlen(configuredSensors[i].command) == 0) strcpy(configuredSensors[i].command, "R");
             if (strlen(configuredSensors[i].protocol) == 0) strcpy(configuredSensors[i].protocol, "I2C");
             if (configuredSensors[i].updateInterval == 0) configuredSensors[i].updateInterval = 5000;
             if (configuredSensors[i].modbusRegister == 0) configuredSensors[i].modbusRegister = 12;
-            Serial.println("Auto-configured EZO-DO sensor");
         } else if (strcmp(configuredSensors[i].type, "EZO-RTD") == 0) {
             if (configuredSensors[i].i2cAddress == 0) configuredSensors[i].i2cAddress = 0x66;
             if (strlen(configuredSensors[i].command) == 0) strcpy(configuredSensors[i].command, "R");
             if (strlen(configuredSensors[i].protocol) == 0) strcpy(configuredSensors[i].protocol, "I2C");
             if (configuredSensors[i].updateInterval == 0) configuredSensors[i].updateInterval = 5000;
             if (configuredSensors[i].modbusRegister == 0) configuredSensors[i].modbusRegister = 13;
-            Serial.println("Auto-configured EZO-RTD sensor");
         } else if (strcmp(configuredSensors[i].type, "SHT30") == 0) {
             if (configuredSensors[i].i2cAddress == 0) configuredSensors[i].i2cAddress = 0x44;
             if (strlen(configuredSensors[i].command) == 0) strcpy(configuredSensors[i].command, "0x2C06");  // SHT30 measurement command
@@ -82,28 +91,30 @@ void applySensorPresets() {
             if (configuredSensors[i].updateInterval == 0) configuredSensors[i].updateInterval = 1000;
             // Don't override manually configured modbus register!
             if (configuredSensors[i].modbusRegister == 0) configuredSensors[i].modbusRegister = 15;
-            Serial.printf("Auto-configured SHT30 sensor (register preserved: %d)\n", configuredSensors[i].modbusRegister);
         } else if (strcmp(configuredSensors[i].type, "BME280") == 0) {
             if (configuredSensors[i].i2cAddress == 0) configuredSensors[i].i2cAddress = 0x76;
             if (strlen(configuredSensors[i].protocol) == 0) strcpy(configuredSensors[i].protocol, "I2C");
             if (configuredSensors[i].updateInterval == 0) configuredSensors[i].updateInterval = 1000;
             if (configuredSensors[i].modbusRegister == 0) configuredSensors[i].modbusRegister = 16;
-            Serial.println("Auto-configured BME280 sensor");
         } else if (strcmp(configuredSensors[i].type, "DS18B20") == 0) {
             if (strlen(configuredSensors[i].protocol) == 0) strcpy(configuredSensors[i].protocol, "One-Wire");
             if (configuredSensors[i].updateInterval == 0) configuredSensors[i].updateInterval = 2000;
             if (configuredSensors[i].modbusRegister == 0) configuredSensors[i].modbusRegister = 14;
-            Serial.println("Auto-configured DS18B20 sensor");
+        } else if (strcmp(configuredSensors[i].type, "LIS3DH") == 0) {
+            if (configuredSensors[i].i2cAddress == 0) configuredSensors[i].i2cAddress = 0x18;
+            // LIS3DH uses direct register read, NOT a command - clear any existing command
+            memset(configuredSensors[i].command, 0, sizeof(configuredSensors[i].command));
+            if (strlen(configuredSensors[i].protocol) == 0) strcpy(configuredSensors[i].protocol, "I2C");
+            if (configuredSensors[i].updateInterval == 0) configuredSensors[i].updateInterval = 1000;
+            if (configuredSensors[i].modbusRegister == 0) configuredSensors[i].modbusRegister = 20;
         } else if (strcmp(configuredSensors[i].type, "Generic One-Wire") == 0) {
             if (strlen(configuredSensors[i].protocol) == 0) strcpy(configuredSensors[i].protocol, "One-Wire");
             if (configuredSensors[i].updateInterval == 0) configuredSensors[i].updateInterval = 2000;
             if (configuredSensors[i].modbusRegister == 0) configuredSensors[i].modbusRegister = 17; // Next available register
-            Serial.println("Auto-configured Generic One-Wire sensor");
         } else if (strcmp(configuredSensors[i].type, "Generic I2C") == 0) {
             if (strlen(configuredSensors[i].protocol) == 0) strcpy(configuredSensors[i].protocol, "I2C");
             if (configuredSensors[i].updateInterval == 0) configuredSensors[i].updateInterval = 1000;
             if (configuredSensors[i].modbusRegister == 0) configuredSensors[i].modbusRegister = 18; // Next available register
-            Serial.println("Auto-configured Generic I2C sensor");
         } else if (strcmp(configuredSensors[i].type, "GENERIC_UART") == 0) {
             if (strlen(configuredSensors[i].protocol) == 0) strcpy(configuredSensors[i].protocol, "UART");
             // Don't override updateInterval - use what was configured in web UI
@@ -111,7 +122,6 @@ void applySensorPresets() {
             // Set default UART pins if not configured
             if (configuredSensors[i].uartTxPin == 0) configuredSensors[i].uartTxPin = 0; // GP0
             if (configuredSensors[i].uartRxPin == 0) configuredSensors[i].uartRxPin = 1; // GP1
-            Serial.printf("Auto-configured GENERIC_UART sensor (updateInterval preserved: %d)\n", configuredSensors[i].updateInterval);
         }
         
         // Set default pins if not configured
@@ -228,6 +238,8 @@ bool validateCRC(uint8_t* data, size_t length) {
 
 void setPinModes();
 void setupEthernet();
+void reapplyNetworkConfig();
+void reapplySensorConfig();
 void setupModbus();
 void setupWebServer();
 
@@ -264,7 +276,148 @@ void processI2CQueue() {
             // Check if sensor has a command to send
             bool hasCommand = strlen(configuredSensors[op.sensorIndex].command) > 0;
             
-            if (hasCommand) {
+            // Special handling for LIS3DH: atomic write+read without losing register pointer
+            if (strcmp(configuredSensors[op.sensorIndex].type, "LIS3DH") == 0) {
+                // LIS3DH: Write register address then read data
+                // Try normal transaction with full STOP and new START (more reliable than repeated START)
+                logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "TX", 
+                                "Register address: 0x28 (OUT_X_L, no auto-increment for first byte)", 
+                                String(configuredSensors[op.sensorIndex].name));
+                
+                // Step 1: Write register address WITHOUT auto-increment bit for first read
+                Wire.beginTransmission(configuredSensors[op.sensorIndex].i2cAddress);
+                Wire.write(0x28);  // Just 0x28, NO auto-increment yet - verify we're at the right register
+                int writeResult = Wire.endTransmission(true);  // true = STOP
+                
+                if (writeResult == 0) {
+                    logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "ACK", 
+                                    "Register 0x28 selected", 
+                                    String(configuredSensors[op.sensorIndex].name));
+                    
+                    delayMicroseconds(100);
+                    
+                    // Step 2: Read 1 byte from OUT_X_L to verify it's X data
+                    Wire.requestFrom((int)configuredSensors[op.sensorIndex].i2cAddress, 1);
+                    uint8_t x_low = 0;
+                    if (Wire.available()) {
+                        x_low = Wire.read();
+                        Serial.printf("[DEBUG] Single byte read from 0x28: 0x%02X\n", x_low);
+                    }
+                    
+                    // Step 3: Now read X_H from 0x29
+                    Wire.beginTransmission(configuredSensors[op.sensorIndex].i2cAddress);
+                    Wire.write(0x29);
+                    Wire.endTransmission(true);
+                    delayMicroseconds(100);
+                    
+                    Wire.requestFrom((int)configuredSensors[op.sensorIndex].i2cAddress, 1);
+                    uint8_t x_high = 0;
+                    if (Wire.available()) {
+                        x_high = Wire.read();
+                        Serial.printf("[DEBUG] Single byte read from 0x29: 0x%02X\n", x_high);
+                    }
+                    
+                    // Step 4: Now try auto-increment read of all 6 bytes starting from 0x28
+                    Wire.beginTransmission(configuredSensors[op.sensorIndex].i2cAddress);
+                    Wire.write(0xA8);  // 0x28 with auto-increment
+                    Wire.endTransmission(true);
+                    delayMicroseconds(100);
+                    
+                    Wire.requestFrom((int)configuredSensors[op.sensorIndex].i2cAddress, 6);
+                    
+                    if (Wire.available()) {
+                        char response[32] = {0};
+                        String rawHex = "";
+                        int idx = 0;
+                        
+                        while(Wire.available() && idx < 6) {
+                            uint8_t byte = Wire.read();
+                            response[idx++] = byte;
+                            if (rawHex.length() > 0) rawHex += " ";
+                            rawHex += "0x" + String(byte, HEX);
+                        }
+                        response[idx] = '\0';
+                        
+                        logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "RX", 
+                                        "Raw: [" + rawHex + "]", 
+                                        String(configuredSensors[op.sensorIndex].name));
+                        
+                        Serial.printf("[DEBUG] Full 6-byte read: [0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X]\n",
+                                    (uint8_t)response[0], (uint8_t)response[1],
+                                    (uint8_t)response[2], (uint8_t)response[3],
+                                    (uint8_t)response[4], (uint8_t)response[5]);
+                        
+                        Serial.printf("[DEBUG] Single bytes: X_L=0x%02X, X_H=0x%02X\n", x_low, x_high);
+                        
+                        // Parse LIS3DH data immediately in IDLE state
+                        if (idx >= 6) {
+                            // Extract raw 16-bit signed integers (little-endian)
+                            int16_t x_raw = ((uint8_t)response[1] << 8) | (uint8_t)response[0];
+                            int16_t y_raw = ((uint8_t)response[3] << 8) | (uint8_t)response[2];
+                            int16_t z_raw = ((uint8_t)response[5] << 8) | (uint8_t)response[4];
+                            
+                            // Debug: log raw values before shifting
+                            Serial.printf("[DEBUG] LIS3DH raw (before shift): X=0x%04X (%d), Y=0x%04X (%d), Z=0x%04X (%d)\n", 
+                                         (uint16_t)x_raw, x_raw, (uint16_t)y_raw, y_raw, (uint16_t)z_raw, z_raw);
+                            
+                            // LIS3DH in standard 10-bit mode (±2g range):
+                            // - Data occupies upper 10 bits (bits 15-6)
+                            // - Lower 6 bits are padding
+                            // - Right-shift by 6 to get actual 10-bit value (-512 to +511)
+                            // - Scale: ±2g / 512 LSB = 3.906 mg/LSB
+                            x_raw >>= 6;
+                            y_raw >>= 6;
+                            z_raw >>= 6;
+                            
+                            Serial.printf("[DEBUG] LIS3DH raw (after shift): X=%d, Y=%d, Z=%d\n", x_raw, y_raw, z_raw);
+                            
+                            float x_mg = (float)x_raw * 3.906f;  // ±2g standard mode: 3.906 mg/LSB
+                            float y_mg = (float)y_raw * 3.906f;
+                            float z_mg = (float)z_raw * 3.906f;
+                            
+                            configuredSensors[op.sensorIndex].rawValue = x_mg;
+                            configuredSensors[op.sensorIndex].rawValueB = y_mg;
+                            configuredSensors[op.sensorIndex].rawValueC = z_mg;
+                            
+                            float calibratedX = applyCalibration(x_mg, configuredSensors[op.sensorIndex]);
+                            float calibratedY = applyCalibrationB(y_mg, configuredSensors[op.sensorIndex]);
+                            float calibratedZ = applyCalibrationC(z_mg, configuredSensors[op.sensorIndex]);
+                            
+                            configuredSensors[op.sensorIndex].calibratedValue = calibratedX;
+                            configuredSensors[op.sensorIndex].calibratedValueB = calibratedY;
+                            configuredSensors[op.sensorIndex].calibratedValueC = calibratedZ;
+                            
+                            configuredSensors[op.sensorIndex].modbusValue = (int)(calibratedX * 100);
+                            configuredSensors[op.sensorIndex].modbusValueB = (int)(calibratedY * 100);
+                            configuredSensors[op.sensorIndex].modbusValueC = (int)(calibratedZ * 100);
+                            
+                            logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "VAL", 
+                                            "X: " + String(x_mg, 2) + " mg, Y: " + String(y_mg, 2) + " mg, Z: " + String(z_mg, 2) + " mg", 
+                                            String(configuredSensors[op.sensorIndex].name));
+                        } else {
+                            logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "ERR", 
+                                            "LIS3DH response too short: " + String(idx) + " bytes", 
+                                            String(configuredSensors[op.sensorIndex].name));
+                        }
+                    } else {
+                        logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "TIMEOUT", 
+                                        "No response after register set", 
+                                        String(configuredSensors[op.sensorIndex].name));
+                    }
+                } else {
+                    logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "NACK", 
+                                    "Failed to set register address, error: " + String(writeResult), 
+                                    String(configuredSensors[op.sensorIndex].name));
+                }
+                
+                // Move to next operation - LIS3DH handled completely in IDLE state
+                for(int i = 0; i < i2cQueueSize - 1; i++) {
+                    i2cQueue[i] = i2cQueue[i + 1];
+                }
+                i2cQueueSize--;
+                rp2040.wdt_reset();
+                return;
+            } else if (hasCommand) {
                 // Sanitize command: remove control chars except explicit \r or \n
                 String rawCmd = String(configuredSensors[op.sensorIndex].command);
                 String command = "";
@@ -342,6 +495,8 @@ void processI2CQueue() {
             if (result == 0) {
                 // Check if sensor needs delay before reading
                 bool hasCommand = strlen(configuredSensors[op.sensorIndex].command) > 0;
+                
+                // LIS3DH is handled completely in IDLE state, so skip state transitions for it
                 if (hasCommand && op.conversionTime > 0) {
                     op.state = BusOpState::REQUEST_SENT;
                     op.startTime = currentTime;
@@ -371,12 +526,40 @@ void processI2CQueue() {
             }
             break;
         }
+        
+        case BusOpState::WAITING_CONVERSION: {
+            // Wait for conversion/delay time to elapse (used for LIS3DH register pointer setup)
+            if (currentTime - op.startTime >= op.conversionTime) {
+                op.state = BusOpState::READY_TO_READ;
+            }
+            break;
+        }
             
         case BusOpState::READY_TO_READ: {
+            // Per-op timeout: abort if this operation has been pending too long (3 seconds)
+            if (op.startTime > 0 && currentTime - op.startTime > 3000) {
+                Serial.printf("[I2C] TIMEOUT: Sensor %d stuck in READY_TO_READ for 3s, removing from queue\n", op.sensorIndex);
+                configuredSensors[op.sensorIndex].rawValue = -1000.0;  // Mark as error
+                for(int i = 0; i < i2cQueueSize - 1; i++) {
+                    i2cQueue[i] = i2cQueue[i + 1];
+                }
+                i2cQueueSize--;
+                rp2040.wdt_reset();
+                return;
+            }
+            
+            // Determine how many bytes to request based on sensor type
+            int bytesToRequest = 32;  // Default for most sensors
+            if (strcmp(configuredSensors[op.sensorIndex].type, "LIS3DH") == 0) {
+                bytesToRequest = 6;  // LIS3DH: OUT_X_L, OUT_X_H, OUT_Y_L, OUT_Y_H, OUT_Z_L, OUT_Z_H
+            } else if (strcmp(configuredSensors[op.sensorIndex].type, "SHT30") == 0) {
+                bytesToRequest = 6;  // SHT30: 6 bytes (temp MSB/LSB/CRC + hum MSB/LSB/CRC)
+            }
+            
             logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "REQ", 
-                            "Requesting 32 bytes from " + String(configuredSensors[op.sensorIndex].name), 
+                            "Requesting " + String(bytesToRequest) + " bytes from " + String(configuredSensors[op.sensorIndex].name), 
                             String(configuredSensors[op.sensorIndex].name));
-            Wire.requestFrom((int)configuredSensors[op.sensorIndex].i2cAddress, 32);
+            Wire.requestFrom((int)configuredSensors[op.sensorIndex].i2cAddress, bytesToRequest);
             
             if (Wire.available()) {
                 char response[32] = {0};
@@ -422,7 +605,7 @@ void processI2CQueue() {
                         configuredSensors[op.sensorIndex].rawValue = temperature;
                         configuredSensors[op.sensorIndex].rawValueB = humidity;
                         
-                        Serial.printf("[DEBUG] SHT30 parsed: Temp=%.2f°C, Hum=%.2f%%\n", temperature, humidity);
+
                         
                         // Apply calibration to both values using new expression-capable functions
                         float calibratedTemp = applyCalibration(temperature, configuredSensors[op.sensorIndex]);
@@ -470,16 +653,18 @@ void processI2CQueue() {
                                 logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "ERR", "EZO-PH: Empty data after success code", String(configuredSensors[op.sensorIndex].name));
                             }
                         } else if (statusCode == 254) {
-                            // Processing: retry up to 3 times with delay
+                            // Processing: use non-blocking retry (don't use delay!)
                             if (op.retryCount < 3) {
                                 op.retryCount++;
-                                delay(100); // Wait 100ms before retry
-                                op.state = BusOpState::READY_TO_READ;
-                                logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "WARN", "EZO-PH: Processing, retry " + String(op.retryCount), String(configuredSensors[op.sensorIndex].name));
-                                return; // Do not advance queue
+                                // Reschedule as REQUEST_SENT with short conversion time to retry after 100ms
+                                op.state = BusOpState::REQUEST_SENT;
+                                op.conversionTime = 100;
+                                op.startTime = currentTime;
+                                logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "WARN", "EZO-PH: Processing, will retry " + String(op.retryCount), String(configuredSensors[op.sensorIndex].name));
+                                return; // Do not dequeue yet, will process again next loop
                             } else {
                                 configuredSensors[op.sensorIndex].rawValue = -996.0;
-                                logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "ERR", "EZO-PH: Processing timeout", String(configuredSensors[op.sensorIndex].name));
+                                logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "ERR", "EZO-PH: Processing timeout after 3 retries", String(configuredSensors[op.sensorIndex].name));
                             }
                         } else if (statusCode == 2) {
                             configuredSensors[op.sensorIndex].rawValue = -997.0;
@@ -549,6 +734,55 @@ void processI2CQueue() {
                                         "Parsed: " + String(primaryValue), 
                                         String(configuredSensors[op.sensorIndex].name));
                     }
+                } else if (strcmp(configuredSensors[op.sensorIndex].type, "LIS3DH") == 0) {
+                    // LIS3DH returns 6 bytes: X_LSB, X_MSB, Y_LSB, Y_MSB, Z_LSB, Z_MSB (signed 16-bit little-endian)
+                    if (idx >= 6) {
+                        // Extract 16-bit signed integers from raw response bytes (little-endian format)
+                        // LIS3DH auto-increments through: 0x28(X_L), 0x29(X_H), 0x2A(Y_L), 0x2B(Y_H), 0x2C(Z_L), 0x2D(Z_H)
+                        int16_t x_raw = ((uint8_t)response[1] << 8) | (uint8_t)response[0];
+                        int16_t y_raw = ((uint8_t)response[3] << 8) | (uint8_t)response[2];
+                        int16_t z_raw = ((uint8_t)response[5] << 8) | (uint8_t)response[4];
+                        
+                        // LIS3DH in standard 10-bit mode (±2g range):
+                        // - Data occupies upper 10 bits (bits 15-6)
+                        // - Lower 6 bits are padding
+                        // - Right-shift by 6 to get actual 10-bit value (-512 to +511)
+                        // - Scale: ±2g / 512 LSB = 3.906 mg/LSB
+                        x_raw >>= 6;
+                        y_raw >>= 6;
+                        z_raw >>= 6;
+                        
+                        float x_mg = (float)x_raw * 3.906f;  // ±2g standard mode: 3.906 mg/LSB
+                        float y_mg = (float)y_raw * 3.906f;
+                        float z_mg = (float)z_raw * 3.906f;
+                        
+                        // Store raw values in multi-axis structure
+                        configuredSensors[op.sensorIndex].rawValue = x_mg;
+                        configuredSensors[op.sensorIndex].rawValueB = y_mg;
+                        configuredSensors[op.sensorIndex].rawValueC = z_mg;
+                        
+                        // Apply calibration to all three axes using new expression-capable functions
+                        float calibratedX = applyCalibration(x_mg, configuredSensors[op.sensorIndex]);
+                        float calibratedY = applyCalibrationB(y_mg, configuredSensors[op.sensorIndex]);
+                        float calibratedZ = applyCalibrationC(z_mg, configuredSensors[op.sensorIndex]);
+                        
+                        configuredSensors[op.sensorIndex].calibratedValue = calibratedX;
+                        configuredSensors[op.sensorIndex].calibratedValueB = calibratedY;
+                        configuredSensors[op.sensorIndex].calibratedValueC = calibratedZ;
+                        
+                        // Convert to Modbus values (scaled by 100 for decimal precision)
+                        configuredSensors[op.sensorIndex].modbusValue = (int)(calibratedX * 100);
+                        configuredSensors[op.sensorIndex].modbusValueB = (int)(calibratedY * 100);
+                        configuredSensors[op.sensorIndex].modbusValueC = (int)(calibratedZ * 100);
+                        
+                        logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "VAL", 
+                                        "X: " + String(x_mg, 2) + " mg, Y: " + String(y_mg, 2) + " mg, Z: " + String(z_mg, 2) + " mg", 
+                                        String(configuredSensors[op.sensorIndex].name));
+                    } else {
+                        logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "ERR", 
+                                        "LIS3DH response too short: " + String(idx) + " bytes", 
+                                        String(configuredSensors[op.sensorIndex].name));
+                    }
                 } else {
                     // Fallback: log raw value for all other I2C sensors
                     logI2CTransaction(configuredSensors[op.sensorIndex].i2cAddress, "VAL", "Raw: " + String(response), String(configuredSensors[op.sensorIndex].name));
@@ -590,8 +824,7 @@ void processUARTQueue() {
     // Declare variables outside switch to avoid 'crosses initialization' error
     int txPin, rxPin;
     
-    Serial.printf("[DEBUG] UART: Processing sensor %d (%s) - state %d\n", 
-                 op.sensorIndex, configuredSensors[op.sensorIndex].name, (int)op.state);
+
     
     switch(op.state) {
         case BusOpState::IDLE:
@@ -614,7 +847,7 @@ void processUARTQueue() {
                     if (strlen(command) > 0) {
                         Serial1.print(command);
                         Serial1.print("\r\n");
-                        Serial.printf("[DEBUG] UART: Sent command '%s' to TX:%d\n", command, txPin);
+
                         
                         // Log the UART transaction for terminal watch
                         String pinStr = String(txPin) + "," + String(rxPin);
@@ -641,7 +874,7 @@ void processUARTQueue() {
                             
                             strncpy(configuredSensors[op.sensorIndex].rawDataString, response.c_str(), 
                                    sizeof(configuredSensors[op.sensorIndex].rawDataString)-1);
-                            Serial.printf("[DEBUG] UART: Received response '%s'\n", response.c_str());
+
                             
                             // Parse the response to extract numeric value
                             float value = 0.0;
@@ -660,12 +893,12 @@ void processUARTQueue() {
                             configuredSensors[op.sensorIndex].modbusValue = (int)(calibratedValue * 100);
                             
                         } else {
-                            Serial.printf("[DEBUG] UART: No response received\n");
+
                             configuredSensors[op.sensorIndex].rawValue = 0.0;
                             strcpy(configuredSensors[op.sensorIndex].rawDataString, "NO_RESPONSE");
                         }
                     } else {
-                        Serial.printf("[DEBUG] UART: No command configured, reading available data\n");
+
                         // Just read any available data
                         String response = "";
                         while (Serial1.available() && response.length() < 120) {
@@ -681,12 +914,12 @@ void processUARTQueue() {
                     
                     Serial1.end(); // Close UART to free pins for other sensors
                 } else {
-                    Serial.printf("[DEBUG] UART: Invalid pin combination TX:%d RX:%d\n", txPin, rxPin);
+
                     configuredSensors[op.sensorIndex].rawValue = 0.0;
                     strcpy(configuredSensors[op.sensorIndex].rawDataString, "INVALID_PINS");
                 }
             } else {
-                Serial.printf("[DEBUG] UART: Invalid pins TX:%d RX:%d\n", txPin, rxPin);
+
                 configuredSensors[op.sensorIndex].rawValue = 0.0;
                 strcpy(configuredSensors[op.sensorIndex].rawDataString, "INVALID_PINS");
             }
@@ -725,7 +958,7 @@ void processOneWireQueue() {
     
     switch(op.state) {
         case BusOpState::IDLE:
-            Serial.printf("[DEBUG] One-Wire: Sensor %d (%s) IDLE, pin %d\n", op.sensorIndex, configuredSensors[op.sensorIndex].name, owPin);
+
             // Initialize One-Wire transaction
             pinMode(owPin, OUTPUT);
             digitalWrite(owPin, LOW);
@@ -736,7 +969,7 @@ void processOneWireQueue() {
             delayMicroseconds(410);
 
             if (presence) {
-                Serial.printf("[DEBUG] One-Wire: Presence detected for sensor %d, sending convert command\n", op.sensorIndex);
+
                 
                 // Log the One-Wire transaction for terminal watch
                 logOneWireTransaction(String(owPin), "TX", "0xCC 0x44 (Skip ROM + Convert T)");
@@ -776,9 +1009,9 @@ void processOneWireQueue() {
                 op.startTime = currentTime;
                 configuredSensors[op.sensorIndex].lastOneWireCmd = currentTime;
             } else {
-                Serial.printf("[DEBUG] One-Wire: No presence detected for sensor %d, retry %d\n", op.sensorIndex, op.retryCount+1);
+
                 if (++op.retryCount >= 3) {
-                    Serial.printf("[DEBUG] One-Wire: Max retries exceeded for sensor %d, removing from queue\n", op.sensorIndex);
+
                     for(int i = 0; i < oneWireQueueSize - 1; i++) {
                         oneWireQueue[i] = oneWireQueue[i + 1];
                     }
@@ -789,14 +1022,14 @@ void processOneWireQueue() {
 
         case BusOpState::REQUEST_SENT:
             if (currentTime - op.startTime >= op.conversionTime) {
-                Serial.printf("[DEBUG] One-Wire: Conversion time elapsed for sensor %d\n", op.sensorIndex);
+
                 op.state = BusOpState::READY_TO_READ;
             }
             break;
 
         case BusOpState::READY_TO_READ:
             readOk = true;
-            Serial.printf("[DEBUG] One-Wire: Ready to read sensor %d\n", op.sensorIndex);
+
             // Send read scratchpad command
             pinMode(owPin, OUTPUT);
             digitalWrite(owPin, LOW);
@@ -807,7 +1040,7 @@ void processOneWireQueue() {
             delayMicroseconds(410);
 
             if (presence) {
-                Serial.printf("[DEBUG] One-Wire: Presence detected for read sensor %d\n", op.sensorIndex);
+
                 
                 // Send Skip ROM (0xCC) + Read Scratchpad (0xBE) command
                 // Skip ROM command
@@ -858,17 +1091,14 @@ void processOneWireQueue() {
                 }
                 
                 // Print scratchpad for debugging
-                Serial.printf("[DEBUG] One-Wire: Scratchpad: ");
-                for (int i = 0; i < 9; i++) {
-                    Serial.printf("%02X ", scratchpad[i]);
-                }
-                Serial.println();
-
+                // (Disabled for cleaner serial output)
+                /*
                 // Skip CRC validation for now - DS18B20 often has CRC issues with bit-banged implementation
                 // if (op.needsCRC && !validateCRC(scratchpad, 9)) {
                 //     Serial.printf("[DEBUG] One-Wire: CRC failed for sensor %d\n", op.sensorIndex);
                 //     readOk = false;
                 // }
+                */
 
                 if (readOk) {
                     // Convert raw data to temperature (DS18B20 format)
@@ -890,8 +1120,7 @@ void processOneWireQueue() {
                     configuredSensors[op.sensorIndex].modbusValue = (int)(calibratedTemp * 100);
                     configuredSensors[op.sensorIndex].lastReadTime = currentTime;
 
-                    Serial.printf("[DEBUG] One-Wire: Sensor %d read value %.2f°C (raw=0x%04X, calibrated=%.2f, modbus=%d)\n", 
-                                 op.sensorIndex, temp, raw, calibratedTemp, configuredSensors[op.sensorIndex].modbusValue);
+
 
                     // Format raw data string
                     char dataStr[32];
@@ -899,10 +1128,10 @@ void processOneWireQueue() {
                     strncpy(configuredSensors[op.sensorIndex].rawDataString, dataStr, 
                             sizeof(configuredSensors[op.sensorIndex].rawDataString)-1);
                 } else {
-                    Serial.printf("[DEBUG] One-Wire: Read failed for sensor %d\n", op.sensorIndex);
+
                 }
             } else {
-                Serial.printf("[DEBUG] One-Wire: No presence detected for read sensor %d\n", op.sensorIndex);
+
             }
 
             // Move to next operation
@@ -913,7 +1142,7 @@ void processOneWireQueue() {
             break;
 
         case BusOpState::ERROR:
-            Serial.printf("[DEBUG] One-Wire: ERROR state for sensor %d\n", op.sensorIndex);
+
             // Move to next operation
             for(int i = 0; i < oneWireQueueSize - 1; i++) {
                 oneWireQueue[i] = oneWireQueue[i + 1];
@@ -925,6 +1154,31 @@ void processOneWireQueue() {
 
 void enqueueBusOperation(uint8_t sensorIndex, const char* protocol) {
     if (!configuredSensors[sensorIndex].enabled) return;
+    
+    // Prevent duplicate operations in queue for the same sensor
+    // This avoids queuing up multiple pending reads while one is still processing
+    if (strcmp(protocol, "One-Wire") == 0) {
+        for (int i = 0; i < oneWireQueueSize; i++) {
+            if (oneWireQueue[i].sensorIndex == sensorIndex) {
+                // Operation for this sensor already pending, skip
+                return;
+            }
+        }
+    } else if (strcmp(protocol, "I2C") == 0) {
+        for (int i = 0; i < i2cQueueSize; i++) {
+            if (i2cQueue[i].sensorIndex == sensorIndex) {
+                // Operation for this sensor already pending, skip
+                return;
+            }
+        }
+    } else if (strcmp(protocol, "UART") == 0) {
+        for (int i = 0; i < uartQueueSize; i++) {
+            if (uartQueue[i].sensorIndex == sensorIndex) {
+                // Operation for this sensor already pending, skip
+                return;
+            }
+        }
+    }
     
     BusOperation op = {
         .sensorIndex = sensorIndex,
@@ -940,6 +1194,8 @@ void enqueueBusOperation(uint8_t sensorIndex, const char* protocol) {
         op.conversionTime = 900; // Atlas Scientific pH spec: 900ms
     } else if (strcmp(configuredSensors[sensorIndex].type, "EZO-EC") == 0) {
         op.conversionTime = 900;
+    } else if (strcmp(configuredSensors[sensorIndex].type, "LIS3DH") == 0) {
+        op.conversionTime = 0; // Direct register read, no conversion time needed (just 1ms in WAITING_CONVERSION state)
     } else if (strcmp(configuredSensors[sensorIndex].type, "DS18B20") == 0) {
         op.conversionTime = configuredSensors[sensorIndex].oneWireConversionTime;
         if (op.conversionTime <= 0) op.conversionTime = 750;
@@ -969,33 +1225,19 @@ void updateBusQueues() {
         
         // Add to queue if it's time for next reading
         if (currentTime - configuredSensors[i].lastReadTime >= configuredSensors[i].updateInterval) {
-            Serial.printf("[DEBUG] Sensor %d (%s) ready for polling. Protocol: %s\n", 
-                         i, configuredSensors[i].name, configuredSensors[i].protocol);
             if (strncmp(configuredSensors[i].protocol, "I2C", 3) == 0) {
-                Serial.printf("[DEBUG] Adding sensor %d to I2C queue (current size: %d)\n", i, i2cQueueSize);
                 enqueueBusOperation(i, "I2C");
             } else if (strncmp(configuredSensors[i].protocol, "UART", 4) == 0) {
-                Serial.printf("[DEBUG] Adding sensor %d to UART queue (current size: %d)\n", i, uartQueueSize);
                 enqueueBusOperation(i, "UART");
             } else if (strncmp(configuredSensors[i].protocol, "One-Wire", 8) == 0) {
-                Serial.printf("[DEBUG] Adding sensor %d to One-Wire queue (current size: %d)\n", i, oneWireQueueSize);
                 enqueueBusOperation(i, "One-Wire");
             }
         }
     }
     
     // Process queues
-    if (i2cQueueSize > 0) {
-        Serial.printf("[DEBUG] Processing I2C queue (size: %d)\n", i2cQueueSize);
-    }
     processI2CQueue();
-    if (uartQueueSize > 0) {
-        Serial.printf("[DEBUG] Processing UART queue (size: %d)\n", uartQueueSize);
-    }
     processUARTQueue();
-    if (oneWireQueueSize > 0) {
-        Serial.printf("[DEBUG] Processing One-Wire queue (size: %d)\n", oneWireQueueSize);
-    }
     processOneWireQueue();
 }
 
@@ -1077,12 +1319,7 @@ void logI2CTransaction(int address, String direction, String data, String pin) {
             String logMsg = "I2C [0x" + String(address, HEX) + "] " + direction + ": " + data;
             addTerminalLog(logMsg);
             Serial.println("TERMINAL_LOG: " + logMsg);
-        } else {
-            Serial.printf("DEBUG logI2C: Protocol check failed or shouldLog=false (protocol=%s, shouldLog=%d)\n", 
-                         watchedProtocolUpper.c_str(), shouldLog);
         }
-    } else {
-        Serial.println("DEBUG logI2C: terminalWatchActive=false");
     }
 }
 
@@ -1184,16 +1421,21 @@ void sendJSON(WiFiClient& client, String json) {
     String responseData = "200 OK (JSON: " + json.substring(0, min(50, (int)json.length())) + (json.length() > 50 ? "..." : "") + ")";
     logNetworkTransaction("HTTP", "TX", localIP, remoteIP, responseData);
     
-    client.println("HTTP/1.1 200 OK");
-    client.println("Content-Type: application/json");
-    client.println("Access-Control-Allow-Origin: *");
-    client.println("Access-Control-Allow-Methods: GET, POST, OPTIONS");
-    client.println("Access-Control-Allow-Headers: Content-Type");
-    client.println("Connection: close");
-    client.print("Content-Length: ");
-    client.println(json.length());
-    client.println();
+    // Build complete HTTP response
+    String response = "";
+    response += "HTTP/1.1 200 OK\r\n";
+    response += "Content-Type: application/json\r\n";
+    response += "Access-Control-Allow-Origin: *\r\n";
+    response += "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n";
+    response += "Access-Control-Allow-Headers: Content-Type\r\n";
+    response += "Connection: close\r\n";
+    response += "Content-Length: " + String(json.length()) + "\r\n";
+    response += "\r\n";
+    
+    // Send headers and body
+    client.print(response);
     client.print(json);
+    client.flush();
 }
 
 // Send 404 response helper
@@ -1203,14 +1445,20 @@ void send404(WiFiClient& client) {
     String localIP = eth.localIP().toString() + ":" + String(HTTP_PORT);
     logNetworkTransaction("HTTP", "TX", localIP, remoteIP, "404 Not Found");
     
-    client.println("HTTP/1.1 404 Not Found");
-    client.println("Content-Type: text/plain");
-    client.println("Access-Control-Allow-Origin: *");
-    client.println("Access-Control-Allow-Methods: GET, POST, OPTIONS");
-    client.println("Access-Control-Allow-Headers: Content-Type");
-    client.println("Connection: close");
-    client.println();
-    client.println("404 Not Found");
+    String notFoundBody = "404 Not Found";
+    String response = "";
+    response += "HTTP/1.1 404 Not Found\r\n";
+    response += "Content-Type: text/plain\r\n";
+    response += "Access-Control-Allow-Origin: *\r\n";
+    response += "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n";
+    response += "Access-Control-Allow-Headers: Content-Type\r\n";
+    response += "Connection: close\r\n";
+    response += "Content-Length: " + String(notFoundBody.length()) + "\r\n";
+    response += "\r\n";
+    
+    client.print(response);
+    client.print(notFoundBody);
+    client.flush();
 }
 
 String executeTerminalCommand(String command, String pin, String protocol) {
@@ -1298,10 +1546,6 @@ void setup() {
 
 
 
-    Serial.println("Loading config...");
-    delay(500);
-    loadConfig();
-
     // Initialize LittleFS for web file serving
     Serial.println("Initializing filesystem...");
     if (!LittleFS.begin()) {
@@ -1309,6 +1553,27 @@ void setup() {
     } else {
         Serial.println("LittleFS mounted successfully");
     }
+
+    // Load configuration after filesystem is available
+    Serial.println("Loading config...");
+    delay(100);
+    loadConfig();
+    
+    // Print loaded configuration for boot diagnostics
+    Serial.println("=== Loaded Network Configuration ===");
+    Serial.print("  IP: "); Serial.print(config.ip[0]); Serial.print(".");
+    Serial.print(config.ip[1]); Serial.print("."); Serial.print(config.ip[2]); Serial.print(".");
+    Serial.println(config.ip[3]);
+    Serial.print("  Gateway: "); Serial.print(config.gateway[0]); Serial.print(".");
+    Serial.print(config.gateway[1]); Serial.print("."); Serial.print(config.gateway[2]); Serial.print(".");
+    Serial.println(config.gateway[3]);
+    Serial.print("  Subnet: "); Serial.print(config.subnet[0]); Serial.print(".");
+    Serial.print(config.subnet[1]); Serial.print("."); Serial.print(config.subnet[2]); Serial.print(".");
+    Serial.println(config.subnet[3]);
+    Serial.print("  Modbus Port: "); Serial.println(config.modbusPort);
+    Serial.print("  DHCP: "); Serial.println(config.dhcpEnabled ? "Enabled" : "Disabled");
+    Serial.print("  Hostname: "); Serial.println(config.hostname);
+    Serial.println("===================================");
 
     // Debug: dump sensors file existence and a short preview to help troubleshoot persistence
     Serial.println("Checking sensors file on filesystem...");
@@ -1343,15 +1608,13 @@ void setup() {
     delay(200);
     dumpSensorsFile();
 
-    Serial.println("Loading sensor configuration...");
-    delay(500);
+    // Loading sensor configuration - reduced logging
     loadSensorConfig();
     // Ensure presets are applied after initial config load
     applySensorPresets();
     
     // Initialize command queues
-    
-    Serial.printf("Loaded %d sensors\n", numConfiguredSensors);
+    Serial.printf("Sensors: %d configured\n", numConfiguredSensors);
     
     // Initialize bus queues and command arrays
     i2cQueueSize = 0;
@@ -1419,6 +1682,80 @@ void setup() {
     }
     if (!foundDevice) {
         Serial.println("No I2C devices found");
+    }
+    
+    // Initialize any LIS3DH sensors that are configured and enabled
+    for (int i = 0; i < numConfiguredSensors; i++) {
+        if (configuredSensors[i].enabled && strcmp(configuredSensors[i].type, "LIS3DH") == 0) {
+            uint8_t addr = configuredSensors[i].i2cAddress;
+            Serial.printf("[Setup] Initializing LIS3DH at 0x%02X\n", addr);
+            
+            // First verify WHO_AM_I register (0x0F should return 0x33)
+            Wire.beginTransmission(addr);
+            Wire.write(0x0F);  // WHO_AM_I register
+            Wire.endTransmission();
+            delay(5);
+            Wire.requestFrom(addr, 1);
+            if (Wire.available()) {
+                uint8_t whoami = Wire.read();
+                Serial.printf("[Setup] LIS3DH WHO_AM_I = 0x%02X (expect 0x33)\n", whoami);
+                if (whoami != 0x33) {
+                    Serial.printf("[Setup] WARNING: Unexpected WHO_AM_I value! Device may not be LIS3DH\n");
+                }
+            } else {
+                Serial.printf("[Setup] WARNING: Could not read WHO_AM_I from LIS3DH\n");
+            }
+            delay(10);
+            
+            // Configure LIS3DH: CTRL_REG1 (0x20) = 0x96
+            // Bit 7-4: ODR[3:0] = 1001 (1344 Hz, fastest normal mode)
+            // Bit 3: Zen = 1 - Enable Z-axis
+            // Bit 2: Yen = 1 - Enable Y-axis
+            // Bit 1: Xen = 1 - Enable X-axis
+            // Bit 0: LP = 0 - Normal mode (not low power)
+            // 0x96 = 10010110 = 1344 Hz, all axes enabled, normal mode
+            Wire.beginTransmission(addr);
+            Wire.write(0x20);  // CTRL_REG1
+            Wire.write(0x96);  // 1344 Hz, all axes enabled, normal mode
+            if (Wire.endTransmission() == 0) {
+                Serial.printf("[Setup] LIS3DH CTRL_REG1 (0x20) set to 0x96 OK (1344 Hz, all axes, normal mode)\n");
+            } else {
+                Serial.printf("[Setup] LIS3DH CTRL_REG1 config failed\n");
+            }
+            
+            // Configure LIS3DH: CTRL_REG4 (0x23) = 0x80
+            // Bit 7: BDU (1) - Block Data Update (wait for both MSB/LSB before reading)
+            // Bit 6: BLE (0) - Big Endian (0 = Little Endian)
+            // Bits 5-4: FS1, FS0 (00) - Full Scale ±2g (Raspberry Pi reference uses this)
+            // Bit 3: HR (0) - High Resolution disabled (standard 10-bit mode)
+            // 0x80 = 1000 0000 = ±2g range, BDU enabled
+            // Per RP reference: sensitivity = 0.004g per LSB in this standard mode
+            delay(10);
+            Wire.beginTransmission(addr);
+            Wire.write(0x23);  // CTRL_REG4
+            Wire.write(0x80);  // ±2g range with BDU enabled (standard mode, per RP reference)
+            if (Wire.endTransmission() == 0) {
+                Serial.printf("[Setup] LIS3DH CTRL_REG4 (0x23) set to 0x80 OK (±2g, standard mode)\n");
+            } else {
+                Serial.printf("[Setup] LIS3DH CTRL_REG4 config failed\n");
+            }
+            
+            // Turn auxiliary ADC on (for temperature sensing, optional but included per RP reference)
+            delay(10);
+            Wire.beginTransmission(addr);
+            Wire.write(0x1F);  // TEMP_CFG_REG
+            Wire.write(0xC0);  // Temperature sensor enabled
+            if (Wire.endTransmission() == 0) {
+                Serial.printf("[Setup] LIS3DH TEMP_CFG_REG (0x1F) set to 0xC0 OK\n");
+            } else {
+                Serial.printf("[Setup] LIS3DH TEMP_CFG_REG config failed\n");
+            }
+            
+            Serial.printf("[Setup] LIS3DH at 0x%02X initialized successfully\n", addr);
+            
+            // Give sensor time to start outputting data after initialization
+            delay(500);  // Wait 500ms for first data to be available
+        }
     }
 
     // Start watchdog
@@ -2491,6 +2828,7 @@ void loop() {
     updateIOpins();
     // updateSensorReadings();  // DISABLED - SHT30 sensors now handled in queue system
     handleEzoSensors(); // Handle EZO sensor communications with logging
+    handleLIS3DHSensors(); // Handle LIS3DH accelerometer polling using Adafruit library (low-freq, non-blocking)
     
     // Debug: Web server check (every 30 seconds)
     static unsigned long lastWebDebug = 0;
@@ -2574,6 +2912,81 @@ void initializeEzoSensors() {
     ezoSensorsInitialized = true;
 }
 
+// Handle LIS3DH sensor polling (separate from I2C queue to use Adafruit library)
+// Non-blocking, low-frequency polling to avoid interfering with web server
+void handleLIS3DHSensors() {
+    static unsigned long lastLIS3DHCheck = 0;
+    unsigned long currentTime = millis();
+    
+    // Poll at very low frequency - only every 5 seconds max to avoid I2C contention
+    if (currentTime - lastLIS3DHCheck < 5000) return;
+    lastLIS3DHCheck = currentTime;
+    
+    // Poll each enabled LIS3DH sensor
+    for (int i = 0; i < numConfiguredSensors; i++) {
+        if (!configuredSensors[i].enabled) continue;
+        if (strcmp(configuredSensors[i].type, "LIS3DH") != 0) continue;
+        
+        // Check if it's time for next reading based on updateInterval
+        if (currentTime - configuredSensors[i].lastReadTime < configuredSensors[i].updateInterval) {
+            continue;
+        }
+        
+        // Initialize Adafruit_LIS3DH if not already done for this sensor
+        if (lis3dhSensors[i] == nullptr) {
+            lis3dhSensors[i] = new Adafruit_LIS3DH();
+            
+            // Non-blocking initialization check
+            noInterrupts();  // Briefly disable interrupts for I2C
+            bool initOk = lis3dhSensors[i]->begin(configuredSensors[i].i2cAddress);
+            interrupts();
+            
+            if (!initOk) {
+                Serial.printf("[LIS3DH] Failed to init sensor %d (%s) at 0x%02X\n", 
+                             i, configuredSensors[i].name, configuredSensors[i].i2cAddress);
+                delete lis3dhSensors[i];
+                lis3dhSensors[i] = nullptr;
+                continue;
+            }
+            Serial.printf("[LIS3DH] Initialized sensor %d (%s) at 0x%02X\n", 
+                         i, configuredSensors[i].name, configuredSensors[i].i2cAddress);
+        }
+        
+        if (lis3dhSensors[i] == nullptr) continue;
+        
+        // Read accelerometer data - brief I2C transaction
+        noInterrupts();  // Disable interrupts during I2C read to prevent contention
+        lis3dhSensors[i]->read();
+        float x_mg = lis3dhSensors[i]->x;
+        float y_mg = lis3dhSensors[i]->y;
+        float z_mg = lis3dhSensors[i]->z;
+        interrupts();  // Re-enable interrupts
+        
+        // Store raw values (in milligravity)
+        configuredSensors[i].rawValue = x_mg;
+        configuredSensors[i].rawValueB = y_mg;
+        configuredSensors[i].rawValueC = z_mg;
+        
+        // Apply calibration to all three axes
+        float calibratedX = applyCalibration(x_mg, configuredSensors[i]);
+        float calibratedY = applyCalibrationB(y_mg, configuredSensors[i]);
+        float calibratedZ = applyCalibrationC(z_mg, configuredSensors[i]);
+        
+        configuredSensors[i].calibratedValue = calibratedX;
+        configuredSensors[i].calibratedValueB = calibratedY;
+        configuredSensors[i].calibratedValueC = calibratedZ;
+        
+        // Convert to Modbus values (scaled by 100 for decimal precision)
+        configuredSensors[i].modbusValue = (int)(calibratedX * 100);
+        configuredSensors[i].modbusValueB = (int)(calibratedY * 100);
+        configuredSensors[i].modbusValueC = (int)(calibratedZ * 100);
+        
+        // Update timestamp
+        configuredSensors[i].lastReadTime = currentTime;
+    }
+}
+
+
 void handleEzoSensors() {
     static bool initialized = false;
     
@@ -2641,38 +3054,221 @@ void handleEzoSensors() {
 }
 
 void loadConfig() {
-    // Use hardcoded defaults for config (RAM only)
+    Serial.println("Loading network configuration...");
+    
+    // Start with defaults
     config = DEFAULT_CONFIG;
-    config.modbusPort = 502;
-    // If your Config struct has a deviceName field, set it here. Otherwise, remove this line.
-    // All old JSON/file logic removed.
-    return;
+    
+    // Try to load from persistent storage (config.json)
+    if (!LittleFS.exists(CONFIG_FILE)) {
+        Serial.println("No config file found, using defaults");
+        return;
+    }
+    
+    File file = LittleFS.open(CONFIG_FILE, "r");
+    if (!file) {
+        Serial.println("Failed to open config file");
+        return;
+    }
+    
+    size_t size = file.size();
+    if (size == 0) {
+        Serial.println("Config file is empty, using defaults");
+        file.close();
+        return;
+    }
+    
+    // Parse JSON from file
+    StaticJsonDocument<1024> doc;
+    DeserializationError err = deserializeJson(doc, file);
+    file.close();
+    
+    if (err) {
+        Serial.printf("Failed to parse config JSON: %s, using defaults\n", err.c_str());
+        return;
+    }
+    
+    // Load network settings from JSON
+    config.version = doc["version"] | CONFIG_VERSION;
+    config.dhcpEnabled = doc["dhcpEnabled"] | false;
+    config.modbusPort = doc["modbusPort"] | 502;
+    
+    // Load hostname
+    const char* hostname = doc["hostname"] | "modbus-io-module";
+    strncpy(config.hostname, hostname, HOSTNAME_MAX_LENGTH - 1);
+    config.hostname[HOSTNAME_MAX_LENGTH - 1] = '\0';
+    
+    // Load IP address
+    if (doc.containsKey("ip") && doc["ip"].is<JsonArray>()) {
+        JsonArray ipArray = doc["ip"];
+        if (ipArray.size() == 4) {
+            for (int i = 0; i < 4; i++) {
+                config.ip[i] = ipArray[i] | 0;
+            }
+        }
+    }
+    
+    // Load gateway
+    if (doc.containsKey("gateway") && doc["gateway"].is<JsonArray>()) {
+        JsonArray gwArray = doc["gateway"];
+        if (gwArray.size() == 4) {
+            for (int i = 0; i < 4; i++) {
+                config.gateway[i] = gwArray[i] | 0;
+            }
+        }
+    }
+    
+    // Load subnet mask
+    if (doc.containsKey("subnet") && doc["subnet"].is<JsonArray>()) {
+        JsonArray subnetArray = doc["subnet"];
+        if (subnetArray.size() == 4) {
+            for (int i = 0; i < 4; i++) {
+                config.subnet[i] = subnetArray[i] | 0;
+            }
+        }
+    }
+    
+    // Load IO configuration
+    if (doc.containsKey("diPullup") && doc["diPullup"].is<JsonArray>()) {
+        JsonArray diPullupArray = doc["diPullup"];
+        for (int i = 0; i < 8 && i < (int)diPullupArray.size(); i++) {
+            config.diPullup[i] = diPullupArray[i] | true;
+        }
+    }
+    
+    if (doc.containsKey("diInvert") && doc["diInvert"].is<JsonArray>()) {
+        JsonArray diInvertArray = doc["diInvert"];
+        for (int i = 0; i < 8 && i < (int)diInvertArray.size(); i++) {
+            config.diInvert[i] = diInvertArray[i] | false;
+        }
+    }
+    
+    if (doc.containsKey("diLatch") && doc["diLatch"].is<JsonArray>()) {
+        JsonArray diLatchArray = doc["diLatch"];
+        for (int i = 0; i < 8 && i < (int)diLatchArray.size(); i++) {
+            config.diLatch[i] = diLatchArray[i] | false;
+        }
+    }
+    
+    if (doc.containsKey("doInvert") && doc["doInvert"].is<JsonArray>()) {
+        JsonArray doInvertArray = doc["doInvert"];
+        for (int i = 0; i < 8 && i < (int)doInvertArray.size(); i++) {
+            config.doInvert[i] = doInvertArray[i] | false;
+        }
+    }
+    
+    if (doc.containsKey("doInitialState") && doc["doInitialState"].is<JsonArray>()) {
+        JsonArray doInitialArray = doc["doInitialState"];
+        for (int i = 0; i < 8 && i < (int)doInitialArray.size(); i++) {
+            config.doInitialState[i] = doInitialArray[i] | false;
+        }
+    }
+    
+    Serial.println("Network configuration loaded successfully");
+    Serial.print("  DHCP: "); Serial.println(config.dhcpEnabled ? "enabled" : "disabled");
+    Serial.print("  IP: "); Serial.print(config.ip[0]); Serial.print("."); Serial.print(config.ip[1]); Serial.print("."); Serial.print(config.ip[2]); Serial.print("."); Serial.println(config.ip[3]);
+    Serial.print("  Hostname: "); Serial.println(config.hostname);
 }
 
 void saveConfig() {
-    Serial.println("Config save (RAM only, not persisted)");
+    Serial.println("Saving network configuration to LittleFS...");
+    
+    // Create JSON document
+    StaticJsonDocument<1024> doc;
+    
+    doc["version"] = config.version;
+    doc["dhcpEnabled"] = config.dhcpEnabled;
+    doc["modbusPort"] = config.modbusPort;
+    doc["hostname"] = config.hostname;
+    
+    // Save IP address as array
+    JsonArray ipArray = doc.createNestedArray("ip");
+    for (int i = 0; i < 4; i++) {
+        ipArray.add(config.ip[i]);
+    }
+    
+    // Save gateway as array
+    JsonArray gwArray = doc.createNestedArray("gateway");
+    for (int i = 0; i < 4; i++) {
+        gwArray.add(config.gateway[i]);
+    }
+    
+    // Save subnet as array
+    JsonArray subnetArray = doc.createNestedArray("subnet");
+    for (int i = 0; i < 4; i++) {
+        subnetArray.add(config.subnet[i]);
+    }
+    
+    // Save IO configuration
+    JsonArray diPullupArray = doc.createNestedArray("diPullup");
+    for (int i = 0; i < 8; i++) {
+        diPullupArray.add(config.diPullup[i]);
+    }
+    
+    JsonArray diInvertArray = doc.createNestedArray("diInvert");
+    for (int i = 0; i < 8; i++) {
+        diInvertArray.add(config.diInvert[i]);
+    }
+    
+    JsonArray diLatchArray = doc.createNestedArray("diLatch");
+    for (int i = 0; i < 8; i++) {
+        diLatchArray.add(config.diLatch[i]);
+    }
+    
+    JsonArray doInvertArray = doc.createNestedArray("doInvert");
+    for (int i = 0; i < 8; i++) {
+        doInvertArray.add(config.doInvert[i]);
+    }
+    
+    JsonArray doInitialArray = doc.createNestedArray("doInitialState");
+    for (int i = 0; i < 8; i++) {
+        doInitialArray.add(config.doInitialState[i]);
+    }
+    
+    // Write to file
+    File file = LittleFS.open(CONFIG_FILE, "w");
+    if (!file) {
+        Serial.println("Failed to open config file for writing");
+        return;
+    }
+    
+    if (serializeJson(doc, file) == 0) {
+        Serial.println("Failed to write config JSON");
+    } else {
+        Serial.println("=== Network Configuration Saved Successfully ===");
+        Serial.print("  IP: "); Serial.print(config.ip[0]); Serial.print(".");
+        Serial.print(config.ip[1]); Serial.print("."); Serial.print(config.ip[2]); Serial.print(".");
+        Serial.println(config.ip[3]);
+        Serial.print("  Gateway: "); Serial.print(config.gateway[0]); Serial.print(".");
+        Serial.print(config.gateway[1]); Serial.print("."); Serial.print(config.gateway[2]); Serial.print(".");
+        Serial.println(config.gateway[3]);
+        Serial.print("  Subnet: "); Serial.print(config.subnet[0]); Serial.print(".");
+        Serial.print(config.subnet[1]); Serial.print("."); Serial.print(config.subnet[2]); Serial.print(".");
+        Serial.println(config.subnet[3]);
+        Serial.print("  Modbus Port: "); Serial.println(config.modbusPort);
+        Serial.print("  Hostname: "); Serial.println(config.hostname);
+        Serial.println("============================================");
+    }
+    
+    file.close();
 }
 
 void loadSensorConfig() {
-    Serial.println("Loading sensor configuration...");
     // Initialize sensors array
     numConfiguredSensors = 0;
     memset(configuredSensors, 0, sizeof(configuredSensors));
 
     if (!LittleFS.exists(SENSORS_FILE)) {
-        Serial.println("No sensors file found on LittleFS");
         return;
     }
 
     File file = LittleFS.open(SENSORS_FILE, "r");
     if (!file) {
-        Serial.println("Failed to open sensors file");
         return;
     }
 
     size_t size = file.size();
     if (size == 0) {
-        Serial.println("Sensors file is empty");
         file.close();
         return;
     }
@@ -2682,17 +3278,15 @@ void loadSensorConfig() {
     DeserializationError err = deserializeJson(doc, file);
     file.close();
     if (err) {
-        Serial.printf("Failed to parse sensors JSON: %s\n", err.c_str());
+        Serial.printf("Sensor JSON parse error: %s\n", err.c_str());
         return;
     }
 
     if (!doc.containsKey("sensors") || !doc["sensors"].is<JsonArray>()) {
-        Serial.println("sensors array missing or invalid in JSON");
         return;
     }
 
     JsonArray sensorsArray = doc["sensors"].as<JsonArray>();
-    Serial.printf("Found %u sensors in file\n", (unsigned)sensorsArray.size());
 
     for (JsonObject sensor : sensorsArray) {
         if (numConfiguredSensors >= MAX_SENSORS) break;
@@ -2818,14 +3412,12 @@ void loadSensorConfig() {
         numConfiguredSensors++;
     }
 
-    Serial.printf("Loaded %d sensors from filesystem\n", numConfiguredSensors);
 
     // Apply presets after loading
     applySensorPresets();
 }
 
 void saveSensorConfig() {
-    Serial.println("Saving sensor configuration...");
     // Create JSON document
     StaticJsonDocument<2048> doc;
     JsonArray sensorsArray = doc.createNestedArray("sensors");
@@ -2976,8 +3568,28 @@ void setupEthernet() {
     Serial.print("  Gateway: "); Serial.print(config.gateway[0]); Serial.print("."); Serial.print(config.gateway[1]); Serial.print("."); Serial.print(config.gateway[2]); Serial.print("."); Serial.println(config.gateway[3]);
     Serial.print("  Subnet: "); Serial.print(config.subnet[0]); Serial.print("."); Serial.print(config.subnet[1]); Serial.print("."); Serial.print(config.subnet[2]); Serial.print("."); Serial.println(config.subnet[3]);
 
-    if (config.dhcpEnabled) {
-        // Try DHCP first
+    if (!config.dhcpEnabled) {
+        // Use static IP configuration (default behavior)
+        Serial.println("Using static IP configuration");
+        IPAddress ip(config.ip[0], config.ip[1], config.ip[2], config.ip[3]);
+        IPAddress gateway(config.gateway[0], config.gateway[1], config.gateway[2], config.gateway[3]);
+        IPAddress subnet(config.subnet[0], config.subnet[1], config.subnet[2], config.subnet[3]);
+        
+        eth.config(ip, gateway, subnet);
+        if (eth.begin()) {
+            delay(1000);  // Give it time to initialize with static IP
+            IPAddress currentIP = eth.localIP();
+            if (currentIP[0] != 0 || currentIP[1] != 0 || currentIP[2] != 0 || currentIP[3] != 0) {
+                connected = true;
+                Serial.println("Static IP configuration successful");
+            } else {
+                Serial.println("Static IP configuration failed - IP not assigned");
+            }
+        } else {
+            Serial.println("Failed to start Ethernet with static IP");
+        }
+    } else {
+        // Try DHCP when enabled
         Serial.println("Attempting to use DHCP...");
         if (eth.begin()) {
             // Wait for DHCP to complete
@@ -2997,35 +3609,40 @@ void setupEthernet() {
             
             if (!connected) {
                 Serial.println("\nDHCP timeout, falling back to static IP");
+                // Fall back to static IP on DHCP timeout
+                IPAddress ip(config.ip[0], config.ip[1], config.ip[2], config.ip[3]);
+                IPAddress gateway(config.gateway[0], config.gateway[1], config.gateway[2], config.gateway[3]);
+                IPAddress subnet(config.subnet[0], config.subnet[1], config.subnet[2], config.subnet[3]);
+                
+                eth.end();
+                delay(500);
+                
+                eth.config(ip, gateway, subnet);
+                if (eth.begin()) {
+                    delay(1000);
+                    IPAddress currentIP = eth.localIP();
+                    if (currentIP[0] != 0 || currentIP[1] != 0 || currentIP[2] != 0 || currentIP[3] != 0) {
+                        connected = true;
+                        Serial.println("Fallback to static IP successful");
+                    }
+                }
             }
         } else {
             Serial.println("Failed to start DHCP process, falling back to static IP");
-        }
-    }
-    
-    // If DHCP failed or not enabled, use static IP
-    if (!connected) {
-        Serial.println("Using static IP configuration");
-        IPAddress ip(config.ip[0], config.ip[1], config.ip[2], config.ip[3]);
-        IPAddress gateway(config.gateway[0], config.gateway[1], config.gateway[2], config.gateway[3]);
-        IPAddress subnet(config.subnet[0], config.subnet[1], config.subnet[2], config.subnet[3]);
-        
-        // Stop current connection attempt if any
-        eth.end();
-        delay(500);  // Short delay to ensure clean restart
-        
-        eth.config(ip, gateway, subnet);
-        if (eth.begin()) {
-            delay(1000);  // Give it time to initialize with static IP
-            IPAddress currentIP = eth.localIP();
-            if (currentIP[0] != 0 || currentIP[1] != 0 || currentIP[2] != 0 || currentIP[3] != 0) {
-                connected = true;
-                Serial.println("Static IP configuration successful");
-            } else {
-                Serial.println("Static IP configuration failed - IP not assigned");
+            // Fall back to static IP
+            IPAddress ip(config.ip[0], config.ip[1], config.ip[2], config.ip[3]);
+            IPAddress gateway(config.gateway[0], config.gateway[1], config.gateway[2], config.gateway[3]);
+            IPAddress subnet(config.subnet[0], config.subnet[1], config.subnet[2], config.subnet[3]);
+            
+            eth.config(ip, gateway, subnet);
+            if (eth.begin()) {
+                delay(1000);
+                IPAddress currentIP = eth.localIP();
+                if (currentIP[0] != 0 || currentIP[1] != 0 || currentIP[2] != 0 || currentIP[3] != 0) {
+                    connected = true;
+                    Serial.println("Fallback to static IP successful");
+                }
             }
-        } else {
-            Serial.println("Failed to start Ethernet with static IP");
         }
     }
 
@@ -3046,6 +3663,95 @@ void setupUSBNetwork() {
     Serial.println("  RP2040 Pico USB network is enabled via board build flags.");
     Serial.println("  USB IP: 192.168.7.1 (auto-configured)");
     Serial.println("  Web interface will be available on USB when HTTP server is bound to USB network.");
+}
+
+// Reapply sensor configuration without full reboot
+// Called after sensor config changes to reload sensors and restart polling queues
+void reapplySensorConfig() {
+    Serial.println("\n=== Reapplying Sensor Configuration ===");
+    
+    // Stop EZO sensors and clear polling state
+    Serial.println("Stopping EZO sensor polling...");
+    for (int i = 0; i < numConfiguredSensors; i++) {
+        if (ezoSensors[i] != nullptr) {
+            delete ezoSensors[i];
+            ezoSensors[i] = nullptr;
+        }
+    }
+    
+    // Clear all queues
+    Serial.println("Clearing polling queues...");
+    i2cQueueSize = 0;
+    uartQueueSize = 0;
+    oneWireQueueSize = 0;
+    i2cCommands.clear();
+    uartCommands.clear();
+    oneWireCommands.clear();
+    
+    // Reload sensor configuration from file
+    Serial.println("Reloading sensor configuration from file...");
+    loadSensorConfig();
+    applySensorPresets();
+    
+    // Reinitialize command queues
+    for (int i = 0; i < numConfiguredSensors; i++) {
+        if (configuredSensors[i].enabled) {
+            SensorCommand cmd = {
+                .sensorIndex = (uint8_t)i,
+                .nextExecutionMs = millis(),
+                .intervalMs = configuredSensors[i].updateInterval,
+                .command = (strcmp(configuredSensors[i].type, "GENERIC") == 0) ? configuredSensors[i].command : nullptr,
+                .isGeneric = (strcmp(configuredSensors[i].type, "GENERIC") == 0)
+            };
+            
+            // Add to appropriate command array
+            if (strncmp(configuredSensors[i].protocol, "I2C", 3) == 0) {
+                i2cCommands.add(cmd);
+                enqueueBusOperation(i, "I2C");
+            } else if (strncmp(configuredSensors[i].protocol, "UART", 4) == 0) {
+                uartCommands.add(cmd);
+                enqueueBusOperation(i, "UART");
+            } else if (strncmp(configuredSensors[i].protocol, "One-Wire", 8) == 0) {
+                oneWireCommands.add(cmd);
+                enqueueBusOperation(i, "One-Wire");
+            }
+        }
+    }
+    
+    // Reinitialize EZO sensors if needed
+    initializeEzoSensors();
+    
+    Serial.printf("Sensor configuration reapplied. %d sensors configured.\n", numConfiguredSensors);
+    Serial.println("=== Sensor Configuration Reapplied Successfully ===\n");
+}
+
+// Reapply network configuration without full reboot
+// Called after config changes to update Ethernet and Modbus binding
+void reapplyNetworkConfig() {
+    Serial.println("\n=== Reapplying Network Configuration ===");
+    
+    // Stop existing services
+    Serial.println("Stopping existing Ethernet connection...");
+    eth.end();
+    delay(500);
+    
+    // Restart Ethernet with new config
+    Serial.println("Restarting Ethernet with new settings...");
+    setupEthernet();
+    
+    // Restart Modbus server with new port
+    Serial.println("Restarting Modbus server with new port...");
+    for (int i = 0; i < MAX_MODBUS_CLIENTS; i++) {
+        modbusClients[i].connected = false;
+        modbusClients[i].server.end();
+    }
+    delay(200);
+    
+    setupModbus();
+    
+    // Restart web server on new IP
+    Serial.println("Web server automatically follows new IP...");
+    Serial.println("=== Network Configuration Reapplied Successfully ===\n");
 }
 
 void setupModbus() {
@@ -3126,7 +3832,14 @@ void handleSimpleHTTP() {
                 int secondSpace = line.indexOf(' ', firstSpace + 1);
                 if (firstSpace > 0 && secondSpace > firstSpace) {
                     method = line.substring(0, firstSpace);
-                    path = line.substring(firstSpace + 1, secondSpace);
+                    String fullPath = line.substring(firstSpace + 1, secondSpace);
+                    // Strip query string if present
+                    int queryPos = fullPath.indexOf('?');
+                    if (queryPos > 0) {
+                        path = fullPath.substring(0, queryPos);
+                    } else {
+                        path = fullPath;
+                    }
                 }
                 request = line;
                 Serial.println("HTTP Request: " + method + " " + path);
@@ -3157,6 +3870,7 @@ void handleSimpleHTTP() {
         Serial.println("Routing request...");
         Serial.println("DEBUG: Method='" + method + "' Path='" + path + "'");
         routeRequest(client, method, path, body);
+        delay(50);  // Give W5500 time to buffer response
         client.stop();
         Serial.println("=== WEB CLIENT DISCONNECTED ===");
     }
@@ -3210,7 +3924,38 @@ void sendJSON(WiFiClient& client, String json); // Ensure sendJSON is declared
 
 void sendJSONConfig(WiFiClient& client) {
     StaticJsonDocument<1024> doc;
-    doc["config"] = "placeholder";
+    
+    // Network configuration
+    doc["dhcpEnabled"] = config.dhcpEnabled;
+    
+    // Fixed IP address
+    JsonArray ipArray = doc.createNestedArray("ip");
+    for (int i = 0; i < 4; i++) {
+        ipArray.add(config.ip[i]);
+    }
+    
+    // Gateway
+    JsonArray gatewayArray = doc.createNestedArray("gateway");
+    for (int i = 0; i < 4; i++) {
+        gatewayArray.add(config.gateway[i]);
+    }
+    
+    // Subnet mask
+    JsonArray subnetArray = doc.createNestedArray("subnet");
+    for (int i = 0; i < 4; i++) {
+        subnetArray.add(config.subnet[i]);
+    }
+    
+    // Modbus and hostname
+    doc["modbusPort"] = config.modbusPort;
+    doc["hostname"] = config.hostname;
+    
+    // Current network status - use string conversion to avoid issues
+    IPAddress localIP = eth.localIP();
+    String ipStr = String(localIP[0]) + "." + String(localIP[1]) + "." + String(localIP[2]) + "." + String(localIP[3]);
+    doc["localIP"] = ipStr;
+    doc["status"] = "connected";
+    
     String response;
     serializeJson(doc, response);
     sendJSON(client, response);
@@ -3233,6 +3978,8 @@ void routeRequest(WiFiClient& client, String method, String path, String body) {
     }
     
     // Simple routing to existing handler functions
+    Serial.printf("[HTTP] Method: %s, Path: '%s' (length: %d)\n", method.c_str(), path.c_str(), path.length());
+    
     if (method == "GET") {
         if (path == "/" || path == "/index.html") {
             Serial.println("Serving embedded index.html");
@@ -3301,6 +4048,7 @@ void routeRequest(WiFiClient& client, String method, String path, String body) {
             serializeJson(terminalDoc, response);
             sendJSON(client, response);
         } else {
+            Serial.printf("[HTTP 404] No handler for GET %s\n", path.c_str());
             send404(client);
         }
     } else if (method == "POST") {
@@ -3433,12 +4181,43 @@ void sendJSONIOStatus(WiFiClient& client) {
             // Modbus register value (what gets sent to Modbus)
             sensor["modbus_value"] = configuredSensors[i].modbusValue;
             
-            // Multi-output sensor support (for SHT30 humidity, BME280 pressure, etc.)
+            // Multi-output sensor support (for SHT30 humidity, BME280 pressure, LIS3DH Y/Z, etc.)
             if (strcmp(configuredSensors[i].type, "SHT30") == 0 && configuredSensors[i].rawValueB != 0) {
                 sensor["raw_value_b"] = configuredSensors[i].rawValueB;        // Humidity raw
                 sensor["calibrated_value_b"] = configuredSensors[i].calibratedValueB;  // Humidity calibrated
                 sensor["modbus_value_b"] = configuredSensors[i].modbusValueB;  // Humidity modbus (register+1)
                 sensor["modbus_register_b"] = configuredSensors[i].modbusRegister + 1;
+            }
+            else if (strcmp(configuredSensors[i].type, "LIS3DH") == 0 || strcmp(configuredSensors[i].type, "LIS3DH_SPI") == 0) {
+                // LIS3DH: Y-axis (register+1)
+                if (configuredSensors[i].rawValueB != 0) {
+                    sensor["raw_value_b"] = configuredSensors[i].rawValueB;        // Y-axis raw
+                    sensor["calibrated_value_b"] = configuredSensors[i].calibratedValueB;  // Y-axis calibrated
+                    sensor["modbus_value_b"] = configuredSensors[i].modbusValueB;  // Y-axis modbus (register+1)
+                    sensor["modbus_register_b"] = configuredSensors[i].modbusRegister + 1;
+                }
+                // LIS3DH: Z-axis (register+2)
+                if (configuredSensors[i].rawValueC != 0) {
+                    sensor["raw_value_c"] = configuredSensors[i].rawValueC;        // Z-axis raw
+                    sensor["calibrated_value_c"] = configuredSensors[i].calibratedValueC;  // Z-axis calibrated
+                    sensor["modbus_value_c"] = configuredSensors[i].modbusValueC;  // Z-axis modbus (register+2)
+                    sensor["modbus_register_c"] = configuredSensors[i].modbusRegister + 2;
+                }
+            }
+            else if (strcmp(configuredSensors[i].type, "BME280") == 0) {
+                // BME280: Humidity (register+1), Pressure (register+2)
+                if (configuredSensors[i].rawValueB != 0) {
+                    sensor["raw_value_b"] = configuredSensors[i].rawValueB;        // Humidity raw
+                    sensor["calibrated_value_b"] = configuredSensors[i].calibratedValueB;  // Humidity calibrated
+                    sensor["modbus_value_b"] = configuredSensors[i].modbusValueB;  // Humidity modbus (register+1)
+                    sensor["modbus_register_b"] = configuredSensors[i].modbusRegister + 1;
+                }
+                if (configuredSensors[i].rawValueC != 0) {
+                    sensor["raw_value_c"] = configuredSensors[i].rawValueC;        // Pressure raw
+                    sensor["calibrated_value_c"] = configuredSensors[i].calibratedValueC;  // Pressure calibrated
+                    sensor["modbus_value_c"] = configuredSensors[i].modbusValueC;  // Pressure modbus (register+2)
+                    sensor["modbus_register_c"] = configuredSensors[i].modbusRegister + 2;
+                }
             }
             
             // Include calibration info for dataflow display
@@ -4133,24 +4912,131 @@ void handlePOSTConfig(WiFiClient& client, String body) {
         return;
     }
     
-    // Update configuration (same logic as original handleSetConfig)
-    config.dhcpEnabled = doc["dhcpEnabled"] | config.dhcpEnabled;
-    config.modbusPort = doc["modbusPort"] | config.modbusPort;
+    bool configChanged = false;
     
-    if (doc.containsKey("ip")) {
-        JsonArray ipArray = doc["ip"];
-        for (int i = 0; i < 4 && i < ipArray.size(); i++) {
-            config.ip[i] = ipArray[i];
+    // Update DHCP setting
+    if (doc.containsKey("dhcpEnabled")) {
+        bool newDhcp = doc["dhcpEnabled"];
+        if (newDhcp != config.dhcpEnabled) {
+            config.dhcpEnabled = newDhcp;
+            configChanged = true;
+            Serial.print("DHCP setting changed to: ");
+            Serial.println(config.dhcpEnabled ? "enabled" : "disabled");
         }
     }
     
-    saveConfig();
+    // Update fixed IP address
+    if (doc.containsKey("ip")) {
+        JsonArray ipArray = doc["ip"];
+        if (ipArray.size() == 4) {
+            bool ipChanged = false;
+            for (int i = 0; i < 4; i++) {
+                uint8_t newOctet = ipArray[i];
+                if (newOctet != config.ip[i]) {
+                    config.ip[i] = newOctet;
+                    ipChanged = true;
+                }
+            }
+            if (ipChanged) {
+                configChanged = true;
+                Serial.print("IP address changed to: ");
+                Serial.print(config.ip[0]); Serial.print(".");
+                Serial.print(config.ip[1]); Serial.print(".");
+                Serial.print(config.ip[2]); Serial.print(".");
+                Serial.println(config.ip[3]);
+            }
+        }
+    }
     
-    client.println("HTTP/1.1 200 OK");
-    client.println("Content-Type: application/json");
-    client.println("Connection: close");
-    client.println();
-    client.println("{\"success\":true}");
+    // Update gateway
+    if (doc.containsKey("gateway")) {
+        JsonArray gatewayArray = doc["gateway"];
+        if (gatewayArray.size() == 4) {
+            bool gatewayChanged = false;
+            for (int i = 0; i < 4; i++) {
+                uint8_t newOctet = gatewayArray[i];
+                if (newOctet != config.gateway[i]) {
+                    config.gateway[i] = newOctet;
+                    gatewayChanged = true;
+                }
+            }
+            if (gatewayChanged) {
+                configChanged = true;
+                Serial.print("Gateway changed to: ");
+                Serial.print(config.gateway[0]); Serial.print(".");
+                Serial.print(config.gateway[1]); Serial.print(".");
+                Serial.print(config.gateway[2]); Serial.print(".");
+                Serial.println(config.gateway[3]);
+            }
+        }
+    }
+    
+    // Update subnet mask
+    if (doc.containsKey("subnet")) {
+        JsonArray subnetArray = doc["subnet"];
+        if (subnetArray.size() == 4) {
+            bool subnetChanged = false;
+            for (int i = 0; i < 4; i++) {
+                uint8_t newOctet = subnetArray[i];
+                if (newOctet != config.subnet[i]) {
+                    config.subnet[i] = newOctet;
+                    subnetChanged = true;
+                }
+            }
+            if (subnetChanged) {
+                configChanged = true;
+                Serial.print("Subnet changed to: ");
+                Serial.print(config.subnet[0]); Serial.print(".");
+                Serial.print(config.subnet[1]); Serial.print(".");
+                Serial.print(config.subnet[2]); Serial.print(".");
+                Serial.println(config.subnet[3]);
+            }
+        }
+    }
+    
+    // Update Modbus port
+    if (doc.containsKey("modbusPort")) {
+        uint16_t newPort = doc["modbusPort"];
+        if (newPort != config.modbusPort) {
+            config.modbusPort = newPort;
+            configChanged = true;
+            Serial.print("Modbus port changed to: ");
+            Serial.println(config.modbusPort);
+        }
+    }
+    
+    // Update hostname
+    if (doc.containsKey("hostname")) {
+        const char* newHostname = doc["hostname"];
+        if (strcmp(newHostname, config.hostname) != 0) {
+            strncpy(config.hostname, newHostname, HOSTNAME_MAX_LENGTH - 1);
+            config.hostname[HOSTNAME_MAX_LENGTH - 1] = '\0';
+            configChanged = true;
+            Serial.print("Hostname changed to: ");
+            Serial.println(config.hostname);
+        }
+    }
+    
+    if (configChanged) {
+        saveConfig();
+        
+        // Immediately apply network changes without requiring reboot
+        reapplyNetworkConfig();
+        
+        client.println("HTTP/1.1 200 OK");
+        client.println("Content-Type: application/json");
+        client.println("Connection: close");
+        client.println();
+        client.println("{\"success\":true,\"message\":\"Network configuration saved and applied immediately.\",\"reboot\":false}");
+        client.stop();
+    } else {
+        client.println("HTTP/1.1 200 OK");
+        client.println("Content-Type: application/json");
+        client.println("Connection: close");
+        client.println();
+        client.println("{\"success\":true,\"message\":\"No changes made\"}");
+        client.stop();
+    }
 }
 
 void handlePOSTSetOutput(WiFiClient& client, String body) {
@@ -4447,6 +5333,16 @@ void handlePOSTSensorConfig(WiFiClient& client, String body) {
         configuredSensors[numConfiguredSensors].oneWireAutoMode = sensor["oneWireAutoMode"] | true; // Default auto mode on
         configuredSensors[numConfiguredSensors].lastOneWireCmd = 0; // Initialize timing
         
+        // SPI specific configuration - for LIS3DH_SPI and other SPI sensors
+        configuredSensors[numConfiguredSensors].spiChipSelect = sensor["spiChipSelect"] | 22; // Default GP22
+        const char* spiBus = sensor["spiBus"] | "hw0"; // Default hardware SPI0
+        strncpy(configuredSensors[numConfiguredSensors].spiBus, spiBus, sizeof(configuredSensors[numConfiguredSensors].spiBus) - 1);
+        configuredSensors[numConfiguredSensors].spiBus[sizeof(configuredSensors[numConfiguredSensors].spiBus) - 1] = '\0';
+        configuredSensors[numConfiguredSensors].spiFrequency = sensor["spiFrequency"] | 500000; // Default 500 kHz
+        configuredSensors[numConfiguredSensors].spiMosiPin = sensor["spiMosiPin"] | 3; // Default GP3 for SPI0 MOSI
+        configuredSensors[numConfiguredSensors].spiMisoPin = sensor["spiMisoPin"] | 4; // Default GP4 for SPI0 MISO
+        configuredSensors[numConfiguredSensors].spiClkPin = sensor["spiClkPin"] | 2; // Default GP2 for SPI0 CLK
+        
         // Calibration data - handle both nested and direct formats
         if (sensor.containsKey("calibration") && sensor["calibration"].is<JsonObject>()) {
             JsonObject calibration = sensor["calibration"];
@@ -4546,6 +5442,9 @@ void handlePOSTSensorConfig(WiFiClient& client, String body) {
     }
     saveSensorConfig();
     
+    // Immediately apply sensor changes without requiring reboot
+    reapplySensorConfig();
+    
     // Small delay to ensure file save completes before response
     delay(100);
     
@@ -4554,7 +5453,7 @@ void handlePOSTSensorConfig(WiFiClient& client, String body) {
     client.println("Access-Control-Allow-Origin: *");
     client.println("Connection: close");
     client.println();
-    client.println("{\"success\":true}");
+    client.println("{\"success\":true,\"message\":\"Sensor configuration saved and applied immediately.\"}");
 }
 
 void handlePOSTSensorCommand(WiFiClient& client, String body) {
@@ -5000,6 +5899,38 @@ void updateIOpins() {
         ioStatus.aIn[i] = valueToWrite;
     }
     
+    // Read ANALOG_CUSTOM sensors - handle analog voltage sensors directly here
+    for (int i = 0; i < numConfiguredSensors; i++) {
+        if (!configuredSensors[i].enabled) continue;
+        
+        // Check if sensor should be read based on updateInterval
+        unsigned long currentTime = millis();
+        if (currentTime - configuredSensors[i].lastReadTime >= configuredSensors[i].updateInterval) {
+            
+            if (strncmp(configuredSensors[i].protocol, "Analog", 6) == 0) {
+                // Read analog voltage sensor
+                int pin = configuredSensors[i].analogPin;
+                if (pin >= 0 && pin < 32) {
+                    uint32_t rawADC = analogRead(pin);
+                    float voltage = (rawADC * 3.3) / 4095.0;
+                    
+                    // Store raw and calibrated values to BOTH configuredSensors AND ioStatus
+                    // This ensures data flows to web UI and Modbus
+                    configuredSensors[i].rawValue = voltage;
+                    float calibrated = applyCalibration(voltage, configuredSensors[i]);
+                    configuredSensors[i].calibratedValue = calibrated;
+                    configuredSensors[i].modbusValue = (int)(calibrated * 100);
+                    configuredSensors[i].lastReadTime = currentTime;
+                    
+                    // Also store to ioStatus for web UI compatibility
+                    if (i < 3) {
+                        ioStatus.aIn[i] = (uint16_t)(calibrated * 1000); // mV format
+                    }
+                }
+            }
+        }
+    }
+    
     // I2C Sensor Reading - Dynamic sensor configuration
     static uint32_t sensorReadTime = 0;
     if (millis() - sensorReadTime > 1000) { // Update every 1 second
@@ -5047,13 +5978,17 @@ void updateIOForClient(int clientIndex) {
     // Update Modbus registers with configured sensor values
     for (int i = 0; i < numConfiguredSensors; i++) {
         if (configuredSensors[i].enabled && configuredSensors[i].modbusRegister >= 0) {
-            // Primary value (temperature for SHT30)
+            // Primary value (temperature for SHT30, X for LIS3DH)
             modbusClients[clientIndex].server.inputRegisterWrite(configuredSensors[i].modbusRegister, configuredSensors[i].modbusValue);
 
-            // Multi-output sensors (SHT30 humidity, BME280 pressure, etc.)
+            // Multi-output sensors (SHT30 humidity, BME280 pressure, LIS3DH Y-axis, etc.)
             if (strcmp(configuredSensors[i].type, "SHT30") == 0) {
                 // Always write humidity to next register
                 modbusClients[clientIndex].server.inputRegisterWrite(configuredSensors[i].modbusRegister + 1, configuredSensors[i].modbusValueB);
+            } else if (strcmp(configuredSensors[i].type, "LIS3DH") == 0) {
+                // 3-axis accelerometer: X, Y, Z on consecutive registers
+                modbusClients[clientIndex].server.inputRegisterWrite(configuredSensors[i].modbusRegister + 1, configuredSensors[i].modbusValueB);
+                modbusClients[clientIndex].server.inputRegisterWrite(configuredSensors[i].modbusRegister + 2, configuredSensors[i].modbusValueC);
             }
             // Future: Add BME280 (temp, hum, pressure) and other multi-output sensors here
         }

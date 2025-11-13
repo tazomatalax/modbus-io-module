@@ -318,6 +318,7 @@
                     <select id="sensor-protocol" required onchange="updateSensorProtocolFields()">
                         <option value="">Select protocol type</option>
                         <option value="I2C">I2C</option>
+                        <option value="SPI">SPI</option>
                         <option value="UART">UART</option>
                         <option value="Analog Voltage">Analog Voltage</option>
                         <option value="One-Wire">One-Wire</option>
@@ -331,6 +332,7 @@
                         <optgroup label="I2C Sensors">
                             <option value="BME280">BME280 (Temperature, Humidity, Pressure)</option>
                             <option value="SHT30">SHT30 (Temperature, Humidity)</option>
+                            <option value="LIS3DH">LIS3DH (3-Axis Accelerometer)</option>
                             <option value="SIM_I2C_TEMPERATURE">Simulated I2C Temperature</option>
                             <option value="SIM_I2C_HUMIDITY">Simulated I2C Humidity</option>
                             <option value="SIM_I2C_PRESSURE">Simulated I2C Pressure</option>
@@ -338,6 +340,10 @@
                             <option value="EZO_EC">EZO-EC (Conductivity)</option>
                             <option value="EZO_DO">EZO-DO (Dissolved Oxygen)</option>
                             <option value="EZO_RTD">EZO-RTD (Temperature)</option>
+                        </optgroup>
+                        <optgroup label="SPI Sensors">
+                            <option value="LIS3DH_SPI">LIS3DH (3-Axis Accelerometer via SPI)</option>
+                            <option value="GENERIC_SPI">Generic SPI Device</option>
                         </optgroup>
                         <optgroup label="UART Sensors">
                             <option value="SIM_UART_SENSOR">Simulated UART Sensor</option>
@@ -385,6 +391,75 @@
                                 <label for="sensor-i2c-address">I2C Address (Hex)</label>
                                 <input type="text" id="sensor-i2c-address" pattern="^(0x)?[0-9A-Fa-f]{1,2}$" placeholder="0x48" required>
                                 <small class="form-help">Use 0x00 for simulated sensors</small>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- SPI Configuration -->
+                    <div id="spi-config" class="protocol-config" style="display: none;">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="sensor-spi-chip-select">Chip Select (CS) Pin</label>
+                                <select id="sensor-spi-chip-select">
+                                    <option value="">Select CS pin...</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="sensor-spi-bus">SPI Bus</label>
+                                <select id="sensor-spi-bus">
+                                    <option value="hw0">Hardware SPI0 (standard)</option>
+                                    <option value="hw1">Hardware SPI1 (secondary)</option>
+                                    <option value="soft">Software SPI (bit-bang)</option>
+                                </select>
+                                <small class="form-help">Hardware SPI uses dedicated pins. Software SPI allows custom pin selection.</small>
+                            </div>
+                        </div>
+                        <div class="form-row" id="spi-hw-info" style="display: block;">
+                            <div class="form-group">
+                                <small class="form-help">
+                                    <strong>SPI0 Default Pins:</strong> MOSI=GP3, MISO=GP4, CLK=GP2<br>
+                                    <strong>SPI1 Default Pins:</strong> MOSI=GP11, MISO=GP12, CLK=GP10<br>
+                                    Ensure CS pin doesn't conflict with other devices.
+                                </small>
+                            </div>
+                        </div>
+                        <div class="form-row" id="spi-soft-pins" style="display: none;">
+                            <div class="form-group">
+                                <label for="sensor-spi-mosi">MOSI Pin</label>
+                                <select id="sensor-spi-mosi">
+                                    <option value="">Select MOSI pin...</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="sensor-spi-miso">MISO Pin</label>
+                                <select id="sensor-spi-miso">
+                                    <option value="">Select MISO pin...</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="sensor-spi-clk">CLK Pin</label>
+                                <select id="sensor-spi-clk">
+                                    <option value="">Select CLK pin...</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="sensor-spi-frequency">SPI Frequency (Hz)</label>
+                                <select id="sensor-spi-frequency">
+                                    <option value="250000">250 kHz</option>
+                                    <option value="500000" selected>500 kHz (default)</option>
+                                    <option value="1000000">1 MHz</option>
+                                    <option value="2000000">2 MHz</option>
+                                    <option value="4000000">4 MHz</option>
+                                    <option value="10000000">10 MHz</option>
+                                </select>
+                                <small class="form-help">Higher frequencies may need good PCB layout. Most sensors work at 1-4 MHz.</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="sensor-spi-polling">Polling Interval (ms)</label>
+                                <input type="number" id="sensor-spi-polling" min="100" max="60000" value="1000" placeholder="1000">
+                                <small class="form-help">How often to read from this SPI sensor</small>
                             </div>
                         </div>
                     </div>
@@ -545,6 +620,9 @@
                         <label for="sensor-modbus-register">Modbus Register</label>
                         <input type="number" id="sensor-modbus-register" min="0" max="65535" placeholder="Enter register (0-65535)" required>
                         <small class="form-help">Modbus input register (0-65535). Multi-output sensors use consecutive registers.</small>
+                        <div id="register-info" style="margin-top: 8px; padding: 8px; background-color: #f0f8ff; border-left: 3px solid #2196F3; border-radius: 3px; display: none; font-size: 0.9em;">
+                            <strong>Register Range:</strong> <span id="register-range-display"></span>
+                        </div>
                     </div>
                 </div>
                 <div class="form-group">
