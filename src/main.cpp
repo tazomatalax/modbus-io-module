@@ -3058,35 +3058,48 @@ void loadConfig() {
     
     // Start with defaults
     config = DEFAULT_CONFIG;
+    Serial.printf("[Config] Starting with defaults - IP: %d.%d.%d.%d, Version: %d\n",
+        config.ip[0], config.ip[1], config.ip[2], config.ip[3], config.version);
     
     // Try to load from persistent storage (config.json)
+    // NOTE: This file is created by saveConfig() when user changes settings via web UI
+    // It is NOT overwritten by uploadfs unless filesystem is intentionally reflashed
     if (!LittleFS.exists(CONFIG_FILE)) {
-        Serial.println("No config file found, using defaults");
+        Serial.printf("[Config] File %s not found on LittleFS, using defaults\n", CONFIG_FILE);
+        Serial.println("[Config] >>> Tip: Change network settings via web UI to save a persistent config");
         return;
     }
     
     File file = LittleFS.open(CONFIG_FILE, "r");
     if (!file) {
-        Serial.println("Failed to open config file");
+        Serial.printf("[Config] Failed to open %s\n", CONFIG_FILE);
         return;
     }
     
     size_t size = file.size();
+    Serial.printf("[Config] File exists, size: %u bytes\n", (unsigned)size);
+    
     if (size == 0) {
-        Serial.println("Config file is empty, using defaults");
+        Serial.println("[Config] Config file is empty, using defaults");
         file.close();
         return;
     }
     
     // Parse JSON from file
-    StaticJsonDocument<1024> doc;
+    // Increased to 2048 to handle larger config with all IO settings
+    StaticJsonDocument<2048> doc;
     DeserializationError err = deserializeJson(doc, file);
     file.close();
     
     if (err) {
-        Serial.printf("Failed to parse config JSON: %s, using defaults\n", err.c_str());
+        Serial.printf("[Config] JSON parse error: %s (code: %d) - file size was %u bytes\n", err.c_str(), err.code(), (unsigned)size);
+        Serial.println("[Config] This usually means: 1) File is corrupted, 2) JSON buffer too small (increase StaticJsonDocument size), or 3) Invalid JSON syntax");
         return;
     }
+    
+    // Check version compatibility
+    int fileVersion = doc["version"] | -1;
+    Serial.printf("[Config] File version: %d, Expected version: %d\n", fileVersion, CONFIG_VERSION);
     
     // Load network settings from JSON
     config.version = doc["version"] | CONFIG_VERSION;
@@ -3105,7 +3118,12 @@ void loadConfig() {
             for (int i = 0; i < 4; i++) {
                 config.ip[i] = ipArray[i] | 0;
             }
+            Serial.printf("[Config] Loaded IP: %d.%d.%d.%d\n", config.ip[0], config.ip[1], config.ip[2], config.ip[3]);
+        } else {
+            Serial.printf("[Config] IP array size mismatch: %d != 4\n", (int)ipArray.size());
         }
+    } else {
+        Serial.println("[Config] IP field missing from JSON");
     }
     
     // Load gateway
@@ -3115,7 +3133,10 @@ void loadConfig() {
             for (int i = 0; i < 4; i++) {
                 config.gateway[i] = gwArray[i] | 0;
             }
+            Serial.printf("[Config] Loaded Gateway: %d.%d.%d.%d\n", config.gateway[0], config.gateway[1], config.gateway[2], config.gateway[3]);
         }
+    } else {
+        Serial.println("[Config] Gateway field missing from JSON");
     }
     
     // Load subnet mask
@@ -3125,8 +3146,29 @@ void loadConfig() {
             for (int i = 0; i < 4; i++) {
                 config.subnet[i] = subnetArray[i] | 0;
             }
+            Serial.printf("[Config] Loaded Subnet: %d.%d.%d.%d\n", config.subnet[0], config.subnet[1], config.subnet[2], config.subnet[3]);
         }
+    } else {
+        Serial.println("[Config] Subnet field missing from JSON");
     }
+    
+    // TODO: Load diPin and doPin arrays (new in version 8)
+    // These are for the dynamic GPIO pin allocation system
+    // Deferred: to be implemented as part of GPIO configuration refactor
+    // if (doc.containsKey("diPin") && doc["diPin"].is<JsonArray>()) {
+    //     JsonArray diPinArray = doc["diPin"];
+    //     for (int i = 0; i < 8 && i < (int)diPinArray.size(); i++) {
+    //         config.diPin[i] = diPinArray[i] | 255;
+    //     }
+    //     Serial.println("[Config] Loaded diPin configuration");
+    // }
+    // if (doc.containsKey("doPin") && doc["doPin"].is<JsonArray>()) {
+    //     JsonArray doPinArray = doc["doPin"];
+    //     for (int i = 0; i < 8 && i < (int)doPinArray.size(); i++) {
+    //         config.doPin[i] = doPinArray[i] | 255;
+    //     }
+    //     Serial.println("[Config] Loaded doPin configuration");
+    // }
     
     // Load IO configuration
     if (doc.containsKey("diPullup") && doc["diPullup"].is<JsonArray>()) {
@@ -3164,7 +3206,7 @@ void loadConfig() {
         }
     }
     
-    Serial.println("Network configuration loaded successfully");
+    Serial.println("[Config] Network configuration loaded successfully from persistent storage");
     Serial.print("  DHCP: "); Serial.println(config.dhcpEnabled ? "enabled" : "disabled");
     Serial.print("  IP: "); Serial.print(config.ip[0]); Serial.print("."); Serial.print(config.ip[1]); Serial.print("."); Serial.print(config.ip[2]); Serial.print("."); Serial.println(config.ip[3]);
     Serial.print("  Hostname: "); Serial.println(config.hostname);
@@ -3199,6 +3241,18 @@ void saveConfig() {
         subnetArray.add(config.subnet[i]);
     }
     
+    // TODO: Save diPin and doPin arrays (new in version 8)
+    // These are for the dynamic GPIO pin allocation system
+    // Deferred: to be implemented as part of GPIO configuration refactor
+    // JsonArray diPinArray = doc.createNestedArray("diPin");
+    // for (int i = 0; i < 8; i++) {
+    //     diPinArray.add(config.diPin[i]);
+    // }
+    // JsonArray doPinArray = doc.createNestedArray("doPin");
+    // for (int i = 0; i < 8; i++) {
+    //     doPinArray.add(config.doPin[i]);
+    // }
+    
     // Save IO configuration
     JsonArray diPullupArray = doc.createNestedArray("diPullup");
     for (int i = 0; i < 8; i++) {
@@ -3228,29 +3282,45 @@ void saveConfig() {
     // Write to file
     File file = LittleFS.open(CONFIG_FILE, "w");
     if (!file) {
-        Serial.println("Failed to open config file for writing");
+        Serial.println("[Config] Failed to open config file for writing");
         return;
     }
     
-    if (serializeJson(doc, file) == 0) {
-        Serial.println("Failed to write config JSON");
-    } else {
-        Serial.println("=== Network Configuration Saved Successfully ===");
-        Serial.print("  IP: "); Serial.print(config.ip[0]); Serial.print(".");
-        Serial.print(config.ip[1]); Serial.print("."); Serial.print(config.ip[2]); Serial.print(".");
-        Serial.println(config.ip[3]);
-        Serial.print("  Gateway: "); Serial.print(config.gateway[0]); Serial.print(".");
-        Serial.print(config.gateway[1]); Serial.print("."); Serial.print(config.gateway[2]); Serial.print(".");
-        Serial.println(config.gateway[3]);
-        Serial.print("  Subnet: "); Serial.print(config.subnet[0]); Serial.print(".");
-        Serial.print(config.subnet[1]); Serial.print("."); Serial.print(config.subnet[2]); Serial.print(".");
-        Serial.println(config.subnet[3]);
-        Serial.print("  Modbus Port: "); Serial.println(config.modbusPort);
-        Serial.print("  Hostname: "); Serial.println(config.hostname);
-        Serial.println("============================================");
+    size_t bytesWritten = serializeJson(doc, file);
+    file.close();  // Close file first
+    
+    // CRITICAL: Force LittleFS to sync to flash - without this, data may be lost on power loss!
+    // The file is in RAM cache but not on flash yet. Ending and restarting LittleFS forces a flush.
+    LittleFS.end();
+    delay(50);  // Small delay for flash write to complete
+    LittleFS.begin();
+    
+    if (bytesWritten == 0) {
+        Serial.println("[Config] Failed to write config JSON to file");
+        return;
     }
     
-    file.close();
+    // CRITICAL: Ensure data is written to flash before returning
+    // Without this, data may be lost on power loss or reboot
+    // Use end() and begin() to force a filesystem sync on RP2040/LittleFS
+    LittleFS.end();
+    delay(100);
+    LittleFS.begin();
+    delay(100);
+    
+    Serial.println("=== Network Configuration Saved Successfully (Flushed to Flash) ===");
+    Serial.print("  IP: "); Serial.print(config.ip[0]); Serial.print(".");
+    Serial.print(config.ip[1]); Serial.print("."); Serial.print(config.ip[2]); Serial.print(".");
+    Serial.println(config.ip[3]);
+    Serial.print("  Gateway: "); Serial.print(config.gateway[0]); Serial.print(".");
+    Serial.print(config.gateway[1]); Serial.print("."); Serial.print(config.gateway[2]); Serial.print(".");
+    Serial.println(config.gateway[3]);
+    Serial.print("  Subnet: "); Serial.print(config.subnet[0]); Serial.print(".");
+    Serial.print(config.subnet[1]); Serial.print("."); Serial.print(config.subnet[2]); Serial.print(".");
+    Serial.println(config.subnet[3]);
+    Serial.print("  Modbus Port: "); Serial.println(config.modbusPort);
+    Serial.print("  Hostname: "); Serial.println(config.hostname);
+    Serial.println("================================================================");
 }
 
 void loadSensorConfig() {

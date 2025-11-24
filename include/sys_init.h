@@ -123,6 +123,9 @@ struct Config {
     uint8_t subnet[4];
     uint16_t modbusPort;
     char hostname[HOSTNAME_MAX_LENGTH];
+    // TODO: Digital IO pin mappings (version 8+) - deferred for GPIO configuration refactor
+    // uint8_t diPin[8];         // Physical GPIO pin for digital input slot (255 = unmapped/unused)
+    // uint8_t doPin[8];         // Physical GPIO pin for digital output slot (255 = unmapped/unused)
     bool diPullup[8];         // Enable internal pullup for digital inputs
     bool diInvert[8];         // Invert logic for digital inputs
     bool diLatch[8];          // Enable latching for digital inputs (stay ON until read)
