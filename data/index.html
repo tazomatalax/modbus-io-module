@@ -155,17 +155,21 @@
                 <h2>IO Configuration</h2>
             </div>
             <div class="card-body">
-                <table id="io-config-table" class="io-config-table"></table>
-                <p class="info-text"><span class="info-icon">ℹ️</span> Latched inputs remain ON until manually reset or read via Modbus. For Modbus clients, latches can be reset by writing '1' to coils 100-107.</p>
-                <div id="di-config"></div>
-                <div id="do-config"></div>
+                <p class="info-text"><span class="info-icon">ℹ️</span> Configure GPIO pins as outputs. Reserved pins (GP16-22) are used for Ethernet. Sensor pins are automatically protected.</p>
+                
+                <div class="io-config-controls">
+                    <button onclick="showAddPinModal()" class="primary-btn">Add Output Pin</button>
+                </div>
+                
+                <div id="io-pins-container" class="io-pins-container">
+                    <!-- IO pins will be rendered here by JavaScript -->
+                </div>
+                
+                <p class="info-text"><span class="info-icon">ℹ️</span> Checkboxes show current state and allow manual control. Use control logic to automatically set outputs based on Modbus register values.</p>
+                
                 <div class="button-container">
                     <button onclick="saveIOConfig()">Save IO Configuration</button>
-                    <div class="logo-container">
-                        <a href="https://peakeinnovation.com" target="_blank">
-                            <img src="logo.png" alt="Peake Electronic Innovation Logo" class="logo">
-                        </a>
-                    </div>
+                    <button onclick="loadIOConfig()" class="secondary-btn">Reload from Device</button>
                 </div>
             </div>
         </div>
@@ -1179,6 +1183,125 @@
         });
     </script>
     -->
+    
+    <!-- Add Pin Modal -->
+    <div class="modal-overlay" id="add-pin-modal-overlay" onclick="hideAddPinModal()">
+        <div class="modal modal-large" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <h3>Add Output Pin</h3>
+                <button class="modal-close" onclick="hideAddPinModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="add-pin-gp-number">GPIO Pin Number</label>
+                    <select id="add-pin-gp-number">
+                        <option value="">Select a pin...</option>
+                    </select>
+                    <small class="form-help">Reserved pins (16-22) and sensor pins are excluded</small>
+                </div>
+                
+                <div class="form-group">
+                    <label for="add-pin-label">Label</label>
+                    <input type="text" id="add-pin-label" maxlength="32" placeholder="e.g., Pump Control">
+                    <small class="form-help">User-friendly name for this output</small>
+                </div>
+                
+                <div class="form-group">
+                    <label for="add-pin-modbus-reg">Modbus Register (State Feedback)</label>
+                    <input type="number" id="add-pin-modbus-reg" min="0" max="65535" placeholder="e.g., 200">
+                    <small class="form-help">Modbus register for reading/writing this pin state</small>
+                </div>
+                
+                <hr>
+                
+                <div class="form-section">
+                    <h4>Control Logic (Optional)</h4>
+                    <p class="info-text"><small>Automatically control this output based on Modbus register values</small></p>
+                    
+                    <div class="rule-builder">
+                        <div id="conditions-container">
+                            <!-- First condition (always visible) -->
+                            <div class="condition-clause" id="condition-0">
+                                <label style="font-weight: bold;">IF</label>
+                                <div class="rule-row">
+                                    <div class="form-group">
+                                        <label>Register</label>
+                                        <input type="number" class="condition-register" min="0" max="65535" placeholder="Reg #">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Condition</label>
+                                        <select class="condition-operator">
+                                            <option value="==">==(Equals)</option>
+                                            <option value="!=">=!(Not Equals)</option>
+                                            <option value=">">>(Greater Than)</option>
+                                            <option value="<"><(Less Than)</option>
+                                            <option value=">=">>=(Greater or Equal)</option>
+                                            <option value="<="><=(Less or Equal)</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Value</label>
+                                        <input type="number" class="condition-value" placeholder="Value">
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- Additional conditions (hidden by default) -->
+                            <div id="extra-conditions"></div>
+                        </div>
+                        
+                        <div style="margin-top: 10px; text-align: center;">
+                            <button type="button" class="btn-add-condition" onclick="addCondition('AND')">+ Add AND Condition</button>
+                            <button type="button" class="btn-add-condition" onclick="addCondition('OR')">+ Add OR Condition</button>
+                        </div>
+                        
+                        <hr style="margin-top: 15px;">
+                        
+                        <label style="font-weight: bold;">THEN</label>
+                        <div class="rule-row">
+                            <div class="form-group">
+                                <label>Action</label>
+                                <select id="add-pin-action-type" onchange="updateActionFields()">
+                                    <option value="set_output">Set Output</option>
+                                    <option value="toggle_output">Toggle Output</option>
+                                    <option value="pulse_output">Pulse Output</option>
+                                    <option value="follow_condition">Follow Condition</option>
+                                </select>
+                            </div>
+                            
+                            <div class="form-group" id="action-value-group">
+                                <label>Output Value</label>
+                                <select id="add-pin-action-value">
+                                    <option value="true">ON (HIGH)</option>
+                                    <option value="false">OFF (LOW)</option>
+                                </select>
+                            </div>
+                            
+                            <div class="form-group" id="action-duration-group" style="display: none;">
+                                <label>Duration (ms)</label>
+                                <input type="number" id="add-pin-pulse-duration" min="1" value="100" placeholder="100">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <hr>
+                
+                <div class="form-section">
+                    <h4>Output Options</h4>
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="add-pin-invert">
+                        Invert Logic (ON = LOW, OFF = HIGH)
+                    </label>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" onclick="hideAddPinModal()">Cancel</button>
+                <button type="button" onclick="confirmAddPin()">Add Output Pin</button>
+            </div>
+        </div>
+    </div>
+    
     <!-- Load script.js at the end of body for global function access -->
     <script src="script.js"></script>
 </body>
