@@ -171,6 +171,10 @@ Config config; // Define the actual config object
 IOStatus ioStatus = {};
 IOConfig ioConfig = {};
 
+// Global coil state store (persists across client connections)
+// Coils 100-200 store output pin states
+uint16_t globalCoilState[201] = {0};  // Index 0-200, indices 100-200 used for output pin coils
+
 // Network configuration for W5500
 uint8_t mac[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED};
 
@@ -3079,6 +3083,14 @@ void loop() {
                     modbusClients[i].server.coilWrite(j, ioStatus.dOut[j]);
                 }
                 
+                // Restore global coil states (100-200) for all output pins
+                for (int reg = 100; reg <= 200; reg++) {
+                    if (globalCoilState[reg] != 0) {
+                        modbusClients[i].server.coilWrite(reg, globalCoilState[reg]);
+                        Serial.printf("Restored coil %d = %d to new client\n", reg, globalCoilState[reg]);
+                    }
+                }
+                
                 connectedClients++;
                 clientAdded = true;
                 digitalWrite(LED_BUILTIN, HIGH);  // Turn on LED when at least one client is connected
@@ -3932,6 +3944,7 @@ void loadIOConfig() {
             ioPin.pullup = pin["pullup"] | false;
             ioPin.invert = pin["invert"] | false;
             ioPin.latched = pin["latched"] | false;
+            ioPin.initialState = pin["initialState"] | false;
             ioPin.modbusRegister = pin["modbusRegister"] | 0xFFFF;
             ioPin.currentState = false;
             ioPin.previousState = false;
@@ -4044,6 +4057,7 @@ void saveIOConfig() {
         pinObj["pullup"] = ioPin.pullup;
         pinObj["invert"] = ioPin.invert;
         pinObj["latched"] = ioPin.latched;
+        pinObj["initialState"] = ioPin.initialState;
         pinObj["modbusRegister"] = ioPin.modbusRegister;
         
         // Save rules
@@ -4158,7 +4172,8 @@ void applyIOConfigToPins() {
                          ioPin.pullup ? "(pullup)" : "(no pullup)");
         } else {
             pinMode(ioPin.gpPin, OUTPUT);
-            // Set initial state
+            // Set initial state from configuration
+            ioPin.currentState = ioPin.initialState;
             digitalWrite(ioPin.gpPin, ioPin.invert ? !ioPin.currentState : ioPin.currentState);
             Serial.printf("[IO Config] GP%d configured as OUTPUT (initial: %s)\n", ioPin.gpPin,
                          ioPin.currentState ? "HIGH" : "LOW");
@@ -4214,9 +4229,83 @@ void applyExternalModbusOverride() {
     }
 }
 
+// Helper function to read a register value from internal sources
+// Used by both rule evaluation and status reporting for consistency
+int32_t readRegisterValue(uint16_t registerNum) {
+    int32_t registerValue = 0;
+    
+    // Analog inputs (registers 0-2) from ADC
+    if (registerNum < 3) {
+        return ioStatus.aIn[registerNum];
+    }
+    
+    // Check if this register belongs to a configured sensor
+    for (int s = 0; s < numConfiguredSensors; s++) {
+        if (!configuredSensors[s].enabled) continue;
+        
+        // Check primary register
+        if (configuredSensors[s].modbusRegister == registerNum) {
+            return configuredSensors[s].modbusValue;
+        }
+        
+        // Check secondary register (B)
+        if (configuredSensors[s].modbusRegister + 1 == registerNum) {
+            return configuredSensors[s].modbusValueB;
+        }
+        
+        // Check tertiary register (C)
+        if (configuredSensors[s].modbusRegister + 2 == registerNum) {
+            return configuredSensors[s].modbusValueC;
+        }
+    }
+    
+    // If not a sensor register, try coil/output range
+    if (registerNum >= 100 && registerNum <= 200) {
+        for (int client = 0; client < MAX_MODBUS_CLIENTS; client++) {
+            if (modbusClients[client].connected) {
+                return modbusClients[client].server.coilRead(registerNum) ? 1 : 0;
+            }
+        }
+    }
+    
+    // Fall back to Modbus client if still not found
+    for (int client = 0; client < MAX_MODBUS_CLIENTS; client++) {
+        if (modbusClients[client].connected) {
+            return modbusClients[client].server.inputRegisterRead(registerNum);
+        }
+    }
+    
+    return 0;  // Default if not found
+}
+
 // Evaluate and execute I/O automation rules
 void evaluateIOAutomationRules() {
     uint32_t now = millis();
+    
+    static bool firstRuleEval = true;
+    if (firstRuleEval) {
+        Serial.printf("\n\n[IO Rule] ⚠️  FIRST RULE EVALUATION CYCLE\n");
+        Serial.printf("[IO Rule] Configured sensors:\n");
+        for (int s = 0; s < numConfiguredSensors; s++) {
+            if (configuredSensors[s].enabled) {
+                Serial.printf("[IO Rule]   - '%s' (type=%s) reg %d = %ld\n",
+                             configuredSensors[s].name, configuredSensors[s].type,
+                             configuredSensors[s].modbusRegister, configuredSensors[s].modbusValue);
+            }
+        }
+        Serial.printf("[IO Rule] IO pins with rules:\n");
+        for (int i = 0; i < ioConfig.pinCount; i++) {
+            if (ioConfig.pins[i].ruleCount > 0) {
+                Serial.printf("[IO Rule]   - GP%d (currentState=%s, initialState=%s) - %d rules\n",
+                             ioConfig.pins[i].gpPin,
+                             ioConfig.pins[i].currentState ? "HIGH" : "LOW",
+                             ioConfig.pins[i].initialState ? "HIGH" : "LOW",
+                             ioConfig.pins[i].ruleCount);
+            }
+        }
+        firstRuleEval = false;
+        Serial.printf("[IO Rule] ========================================\n\n");
+    }
     
     // First check for external Modbus overrides (coexistence model)
     // If SCADA writes to holding register, that takes priority over rules
@@ -4244,37 +4333,36 @@ void evaluateIOAutomationRules() {
             IORule& rule = ioPin.rules[j];
             if (!rule.enabled) continue;
             
+            Serial.printf("\n[IO Rule] ========== EVALUATING RULE %d for GP%d ==========\n", j, ioPin.gpPin);
+            
             // ===== MULTI-CONDITION EVALUATION =====
             // Evaluate all conditions and combine with AND/OR logic
             bool conditionsMet = true;  // Start with true for AND logic
             bool firstCondition = true;
+            int32_t lastRegisterValue = 0;  // For logging FOLLOW_CONDITION
             
             for (int c = 0; c < rule.trigger.conditionCount && c < 3; c++) {
                 ConditionClause& clause = rule.trigger.conditions[c];
                 
-                // Read register value
-                int32_t registerValue = 0;
-                bool registerFound = false;
+                Serial.printf("[IO Rule] Condition %d: Register %d %s %ld ?\n", c,
+                             clause.modbusRegister,
+                             clause.condition == TriggerCondition::EQUAL ? "==" :
+                             clause.condition == TriggerCondition::GREATER_THAN ? ">" :
+                             clause.condition == TriggerCondition::LESS_THAN ? "<" :
+                             clause.condition == TriggerCondition::NOT_EQUAL ? "!=" :
+                             clause.condition == TriggerCondition::GREATER_EQUAL ? ">=" :
+                             clause.condition == TriggerCondition::LESS_EQUAL ? "<=" : "?",
+                             clause.triggerValue);
                 
-                // Try coils first
-                for (int client = 0; client < MAX_MODBUS_CLIENTS; client++) {
-                    if (modbusClients[client].connected && modbusClients[client].server.coilRead(clause.modbusRegister)) {
-                        registerValue = modbusClients[client].server.coilRead(clause.modbusRegister) ? 1 : 0;
-                        registerFound = true;
-                        break;
-                    }
+                // Read register value using helper function
+                int32_t registerValue = readRegisterValue(clause.modbusRegister);
+                Serial.printf("[IO Rule]   → Read register %d = %ld\n", clause.modbusRegister, registerValue);
+                
+                // Save first register value for logging
+                if (c == 0) {
+                    lastRegisterValue = registerValue;
                 }
                 
-                // Try input registers if not found in coils
-                if (!registerFound) {
-                    for (int client = 0; client < MAX_MODBUS_CLIENTS; client++) {
-                        if (modbusClients[client].connected) {
-                            registerValue = modbusClients[client].server.inputRegisterRead(clause.modbusRegister);
-                            registerFound = true;
-                            break;
-                        }
-                    }
-                }
                 
                 // Evaluate this condition
                 bool clauseTriggered = false;
@@ -4299,6 +4387,17 @@ void evaluateIOAutomationRules() {
                         break;
                 }
                 
+                Serial.printf("[IO Rule]   → Result: %ld %s %ld = %s\n",
+                             registerValue,
+                             clause.condition == TriggerCondition::EQUAL ? "==" :
+                             clause.condition == TriggerCondition::GREATER_THAN ? ">" :
+                             clause.condition == TriggerCondition::LESS_THAN ? "<" :
+                             clause.condition == TriggerCondition::NOT_EQUAL ? "!=" :
+                             clause.condition == TriggerCondition::GREATER_EQUAL ? ">=" :
+                             clause.condition == TriggerCondition::LESS_EQUAL ? "<=" : "?",
+                             clause.triggerValue,
+                             clauseTriggered ? "TRUE" : "FALSE");
+                
                 // Combine with previous conditions using AND/OR logic
                 if (firstCondition) {
                     conditionsMet = clauseTriggered;
@@ -4322,30 +4421,50 @@ void evaluateIOAutomationRules() {
             
             bool triggered = conditionsMet;
             
-            if (triggered != rule.trigger.lastTriggeredState) {
-                Serial.printf("[IO Rule DEBUG] GP%d Rule '%s': ALL CONDITIONS %s\n",
-                             ioPin.gpPin, rule.description, triggered ? "MET" : "NOT MET");
-            }
-            
             // ===== ACTION EXECUTION =====
             // For FOLLOW_CONDITION, always update the pin state (don't wait for edge)
             if (rule.action.type == IOActionType::FOLLOW_CONDITION) {
                 // FOLLOW_CONDITION: Set pin = condition result
                 bool newState = triggered;
+                Serial.printf("[IO Rule] FOLLOW_CONDITION ACTION: Condition is %s → Pin should be %s\n",
+                             triggered ? "MET" : "NOT MET", newState ? "HIGH" : "LOW");
+                
                 if (ioPin.currentState != newState) {
                     ioPin.currentState = newState;
                     digitalWrite(ioPin.gpPin, ioPin.invert ? !ioPin.currentState : ioPin.currentState);
-                    Serial.printf("[IO Rule] FOLLOW_CONDITION: Rule '%s' GP%d = %s\n",
-                                 rule.description, ioPin.gpPin, ioPin.currentState ? "HIGH" : "LOW");
-                    // Write state back to Modbus holding register
-                    if (ioPin.modbusRegister > 0) {
-                        for (int c = 0; c < MAX_MODBUS_CLIENTS; c++) {
-                            if (modbusClients[c].connected) {
-                                modbusClients[c].server.holdingRegisterWrite(ioPin.modbusRegister, ioPin.currentState ? 1 : 0);
-                                break;
-                            }
+                    Serial.printf("[IO Rule]   ✓ GPIO STATE CHANGED: GP%d = %s (physical: %s)\n",
+                                 ioPin.gpPin, ioPin.currentState ? "HIGH" : "LOW",
+                                 (ioPin.invert ? !ioPin.currentState : ioPin.currentState) ? "HIGH" : "LOW");
+                } else {
+                    Serial.printf("[IO Rule]   - No GPIO change needed for GP%d (already %s)\n",
+                                 ioPin.gpPin, ioPin.currentState ? "HIGH" : "LOW");
+                }
+                
+                // ALWAYS write state to Modbus coil for continuous monitoring
+                if (ioPin.modbusRegister > 0 && ioPin.modbusRegister <= 200) {
+                    // Write to global coil store (persists across connections)
+                    uint16_t coilValue = ioPin.currentState ? 1 : 0;
+                    globalCoilState[ioPin.modbusRegister] = coilValue;
+                    Serial.printf("[IO Rule]   ✓ COIL STORED: Register %d = %d (global store)\n",
+                                 ioPin.modbusRegister, coilValue);
+                    
+                    // Also write to all connected clients
+                    bool coilWritten = false;
+                    for (int c = 0; c < MAX_MODBUS_CLIENTS; c++) {
+                        if (modbusClients[c].connected) {
+                            modbusClients[c].server.coilWrite(ioPin.modbusRegister, coilValue);
+                            Serial.printf("[IO Rule]   ✓ COIL WRITE: Register %d = %d (client %d)\n",
+                                         ioPin.modbusRegister, coilValue, c);
+                            coilWritten = true;
+                            break;
                         }
                     }
+                    if (!coilWritten) {
+                        Serial.printf("[IO Rule]   ⚠ NO COIL WRITE: No Modbus client connected for GP%d reg %d\n",
+                                     ioPin.gpPin, ioPin.modbusRegister);
+                    }
+                } else {
+                    Serial.printf("[IO Rule]   ⚠ NO COIL: GP%d has no Modbus register configured\n", ioPin.gpPin);
                 }
             }
             // For other action types, only trigger on rising edge
@@ -4353,19 +4472,39 @@ void evaluateIOAutomationRules() {
                 rule.trigger.lastTriggeredState = true;
                 rule.lastExecutionTime = now;
                 
+                Serial.printf("\n[IO Rule] ✓✓✓ RULE FIRED (RISING EDGE): GP%d Rule %d '%s' - Condition went from FALSE→TRUE\n",
+                             ioPin.gpPin, j, rule.description);
+                
                 switch(rule.action.type) {
                     case IOActionType::SET_OUTPUT:
                         ioPin.currentState = rule.action.value;
                         digitalWrite(ioPin.gpPin, ioPin.invert ? !ioPin.currentState : ioPin.currentState);
                         Serial.printf("[IO Rule] SET_OUTPUT: Rule '%s' GP%d = %s\n", 
                                      rule.description, ioPin.gpPin, ioPin.currentState ? "HIGH" : "LOW");
-                        if (ioPin.modbusRegister > 0) {
+                        
+                        // Write to Modbus coil
+                        if (ioPin.modbusRegister > 0 && ioPin.modbusRegister <= 200) {
+                            // Write to global coil store (persists across connections)
+                            globalCoilState[ioPin.modbusRegister] = ioPin.currentState ? 1 : 0;
+                            Serial.printf("[IO Rule]   ✓ SET_OUTPUT: Stored coil %d = %d in global store\n",
+                                         ioPin.modbusRegister, ioPin.currentState ? 1 : 0);
+                            
+                            // Also write to all connected clients
+                            bool coilWritten = false;
                             for (int c = 0; c < MAX_MODBUS_CLIENTS; c++) {
                                 if (modbusClients[c].connected) {
-                                    modbusClients[c].server.holdingRegisterWrite(ioPin.modbusRegister, ioPin.currentState ? 1 : 0);
+                                    modbusClients[c].server.coilWrite(ioPin.modbusRegister, ioPin.currentState ? 1 : 0);
+                                    Serial.printf("[IO Rule]   ✓ SET_OUTPUT: Wrote coil %d = %d for GP%d (client %d)\n",
+                                                 ioPin.modbusRegister, ioPin.currentState ? 1 : 0, ioPin.gpPin, c);
+                                    coilWritten = true;
                                     break;
                                 }
                             }
+                            if (!coilWritten) {
+                                Serial.printf("[IO Rule]   ⚠ SET_OUTPUT: WARNING - No Modbus client connected, but coil stored globally\n");
+                            }
+                        } else {
+                            Serial.printf("[IO Rule]   ⚠ SET_OUTPUT: WARNING - Invalid or no Modbus register for GP%d\n", ioPin.gpPin);
                         }
                         break;
                     
@@ -4377,7 +4516,9 @@ void evaluateIOAutomationRules() {
                         if (ioPin.modbusRegister > 0) {
                             for (int c = 0; c < MAX_MODBUS_CLIENTS; c++) {
                                 if (modbusClients[c].connected) {
-                                    modbusClients[c].server.holdingRegisterWrite(ioPin.modbusRegister, ioPin.currentState ? 1 : 0);
+                                    modbusClients[c].server.coilWrite(ioPin.modbusRegister, ioPin.currentState ? 1 : 0);
+                                    Serial.printf("[IO Rule] TOGGLE_OUTPUT: Wrote coil %d = %d for GP%d\n",
+                                                 ioPin.modbusRegister, ioPin.currentState ? 1 : 0, ioPin.gpPin);
                                     break;
                                 }
                             }
@@ -4396,13 +4537,30 @@ void evaluateIOAutomationRules() {
                         digitalWrite(ioPin.gpPin, ioPin.invert ? !ioPin.currentState : ioPin.currentState);
                         Serial.printf("[IO Rule] SET_AND_LATCH: Rule '%s' GP%d latched to %s\n",
                                      rule.description, ioPin.gpPin, ioPin.currentState ? "HIGH" : "LOW");
-                        if (ioPin.modbusRegister > 0) {
+                        
+                        // Write to Modbus coil
+                        if (ioPin.modbusRegister > 0 && ioPin.modbusRegister <= 200) {
+                            // Write to global coil store (persists across connections)
+                            globalCoilState[ioPin.modbusRegister] = ioPin.currentState ? 1 : 0;
+                            Serial.printf("[IO Rule]   ✓ SET_AND_LATCH: Stored coil %d = %d in global store\n",
+                                         ioPin.modbusRegister, ioPin.currentState ? 1 : 0);
+                            
+                            // Also write to all connected clients
+                            bool coilWritten = false;
                             for (int c = 0; c < MAX_MODBUS_CLIENTS; c++) {
                                 if (modbusClients[c].connected) {
-                                    modbusClients[c].server.holdingRegisterWrite(ioPin.modbusRegister, ioPin.currentState ? 1 : 0);
+                                    modbusClients[c].server.coilWrite(ioPin.modbusRegister, ioPin.currentState ? 1 : 0);
+                                    Serial.printf("[IO Rule]   ✓ SET_AND_LATCH: Wrote coil %d = %d for GP%d (client %d)\n",
+                                                 ioPin.modbusRegister, ioPin.currentState ? 1 : 0, ioPin.gpPin, c);
+                                    coilWritten = true;
                                     break;
                                 }
                             }
+                            if (!coilWritten) {
+                                Serial.printf("[IO Rule]   ⚠ SET_AND_LATCH: WARNING - No Modbus client connected, but coil stored globally\n");
+                            }
+                        } else {
+                            Serial.printf("[IO Rule]   ⚠ SET_AND_LATCH: WARNING - Invalid or no Modbus register for GP%d\n", ioPin.gpPin);
                         }
                         break;
                     
@@ -4413,6 +4571,9 @@ void evaluateIOAutomationRules() {
             
             // Reset trigger state when condition is no longer met (for edge-triggered actions)
             if (!triggered && rule.trigger.lastTriggeredState && rule.action.type != IOActionType::FOLLOW_CONDITION) {
+                rule.trigger.lastTriggeredState = false;
+                Serial.printf("[IO Rule] ✗✗✗ CONDITION RESET (FALLING EDGE): GP%d Rule %d - Condition went from TRUE→FALSE\n",
+                             ioPin.gpPin, j);
                 rule.trigger.lastTriggeredState = false;
             }
         }
@@ -4877,29 +5038,8 @@ void sendJSONRulesStatus(WiFiClient& client) {
                 ConditionClause& clause = rule.trigger.conditions[c];
                 JsonObject condObj = conditionsArray.createNestedObject();
                 
-                // Read register value
-                int32_t registerValue = 0;
-                bool registerFound = false;
-                
-                // Try coils first
-                for (int client_idx = 0; client_idx < MAX_MODBUS_CLIENTS; client_idx++) {
-                    if (modbusClients[client_idx].connected && modbusClients[client_idx].server.coilRead(clause.modbusRegister)) {
-                        registerValue = modbusClients[client_idx].server.coilRead(clause.modbusRegister) ? 1 : 0;
-                        registerFound = true;
-                        break;
-                    }
-                }
-                
-                // Try input registers if not found in coils
-                if (!registerFound) {
-                    for (int client_idx = 0; client_idx < MAX_MODBUS_CLIENTS; client_idx++) {
-                        if (modbusClients[client_idx].connected) {
-                            registerValue = modbusClients[client_idx].server.inputRegisterRead(clause.modbusRegister);
-                            registerFound = true;
-                            break;
-                        }
-                    }
-                }
+                // Read register value using helper function (same as rule evaluation)
+                int32_t registerValue = readRegisterValue(clause.modbusRegister);
                 
                 // Build condition string
                 const char* condStr;
@@ -4953,7 +5093,6 @@ void sendJSONRulesStatus(WiFiClient& client) {
                 condObj["condition"] = condStr;
                 condObj["triggerValue"] = clause.triggerValue;
                 condObj["actualValue"] = registerValue;
-                condObj["registerFound"] = registerFound;
                 condObj["clauseMet"] = clauseMet;
                 condObj["nextOperator"] = (clause.nextOperator == LogicOperator::OR) ? "OR" : "AND";
             }
@@ -4970,8 +5109,9 @@ void sendJSONRulesStatus(WiFiClient& client) {
                 default: actionTypeStr = "set_output";
             }
             
-            ruleObj["action"]["type"] = actionTypeStr;
-            ruleObj["action"]["value"] = rule.action.value;
+            JsonObject actionObj = ruleObj.createNestedObject("action");
+            actionObj["type"] = actionTypeStr;
+            actionObj["value"] = rule.action.value;
         }
     }
     
@@ -6173,6 +6313,27 @@ void handlePOSTSetOutput(WiFiClient& client, String body) {
     if (outputIndex >= 0 && outputIndex < 8 && (state == 0 || state == 1)) {
         ioStatus.dOut[outputIndex] = state;
         digitalWrite(DIGITAL_OUTPUTS[outputIndex], config.doInvert[outputIndex] ? !state : state);
+        
+        // Find the corresponding IOPin and update it
+        uint8_t gpPin = DIGITAL_OUTPUTS[outputIndex];
+        for (int i = 0; i < ioConfig.pinCount; i++) {
+            if (ioConfig.pins[i].gpPin == gpPin) {
+                ioConfig.pins[i].currentState = (state == 1);
+                
+                // Write state to Modbus holding register (state monitoring)
+                if (ioConfig.pins[i].modbusRegister > 0 && connectedClients > 0) {
+                    for (int c = 0; c < MAX_MODBUS_CLIENTS; c++) {
+                        if (modbusClients[c].connected) {
+                            modbusClients[c].server.holdingRegisterWrite(ioConfig.pins[i].modbusRegister, state ? 1 : 0);
+                            Serial.printf("[Web UI] GP%d state written to Modbus register %d: %d\n", 
+                                         gpPin, ioConfig.pins[i].modbusRegister, state ? 1 : 0);
+                            break;
+                        }
+                    }
+                }
+                break;
+            }
+        }
         
         client.println("HTTP/1.1 200 OK");
         client.println("Content-Type: application/json");

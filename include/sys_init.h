@@ -79,7 +79,7 @@ struct CommandArray {
 // Constants
 #define CONFIG_FILE "/config.json"
 #define SENSORS_FILE "/sensors.json"
-#define CONFIG_VERSION 7  // Increment this when config structure changes
+#define CONFIG_VERSION 8  // Increment this when config structure changes
 #define HOSTNAME_MAX_LENGTH 32
 #define MAX_MODBUS_CLIENTS 4  // Maximum number of concurrent Modbus clients
 #define MAX_SENSORS 10
@@ -158,6 +158,7 @@ struct IOPin {
     bool pullup;                  // For inputs: enable pullup
     bool invert;                  // Invert logic
     bool latched;                 // For inputs: currently latched
+    bool initialState;            // Power-up/boot default state (HIGH=true, LOW=false)
     uint16_t modbusRegister;      // Associated Modbus register
     IORule rules[5];              // Up to 5 rules per pin
     uint8_t ruleCount;            // Number of active rules

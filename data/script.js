@@ -3890,14 +3890,16 @@ window.renderIOConfigTable = function renderIOConfigTable(ioConfig) {
                         ` : ''}
                         
                         <div class="io-pin-state">
+                            <label><strong>Pin State (Physical GPIO):</strong></label>
                             <label class="checkbox-label io-state-control">
                                 <input type="checkbox" ${pin.currentState ? 'checked' : ''} 
                                        onchange="setOutputManual(${pin.gpPin}, this.checked)"
                                        data-pin="${pin.gpPin}">
                                 <span class="state-indicator ${pin.currentState ? 'on' : 'off'}">
-                                    ${pin.currentState ? 'ON' : 'OFF'}
+                                    ${pin.currentState ? '🟢 HIGH' : '🔴 LOW'}
                                 </span>
                             </label>
+                            <small style="display: block; margin-top: 4px; color: #666;">Toggle to manually control pin (if not externally locked)</small>
                         </div>
                         
                         <div class="io-pin-options">
@@ -3937,8 +3939,8 @@ window.renderIOConfigTable = function renderIOConfigTable(ioConfig) {
                                         <div class="rule-display" id="rule-${pin.gpPin}-${idx}">
                                             <small>
                                                 IF ${conditionStr}
-                                                <span class="rule-status" style="float:right; font-size: 11px; padding: 2px 6px; border-radius: 3px; background: #ddd;">? </span>
-                                                THEN ${rule.action.type === 'follow_condition' ? 'FOLLOW' : (rule.action.type === 'set_output' ? (rule.action.value ? 'ON' : 'OFF') : rule.action.type)}
+                                                <span class="rule-status" id="status-${pin.gpPin}-${idx}" style="float:right; font-size: 11px; padding: 2px 8px; border-radius: 3px; background: #ffcccc; color: #cc0000; font-weight: bold;">❌ NOT MET</span>
+                                                THEN ${rule.action.type === 'follow_condition' ? 'FOLLOW Condition' : (rule.action.type === 'set_output' ? (rule.action.value ? 'Set HIGH' : 'Set LOW') : rule.action.type)}
                                             </small>
                                             <button class="rule-delete-btn" onclick="deleteRule(${pin.gpPin}, ${idx})" title="Delete rule">×</button>
                                         </div>
@@ -3965,6 +3967,9 @@ window.renderIOConfigTable = function renderIOConfigTable(ioConfig) {
     
     // Start polling rule status to show real-time condition feedback
     updateRuleStatus();
+    
+    // Start polling pin states to show live GPIO values
+    updatePinStatesDisplay();
 };
 
 window.updatePinLabel = function updatePinLabel(gpPin, label) {
@@ -4631,6 +4636,7 @@ window.showAddPinModal = function showAddPinModal() {
     
     // Reset form fields
     document.getElementById('add-pin-label').value = '';
+    document.getElementById('add-pin-initial-state').value = 'false';
     document.getElementById('add-pin-modbus-reg').value = '';
     document.getElementById('add-pin-action-type').value = 'set_output';
     document.getElementById('add-pin-action-value').value = 'true';
@@ -4719,6 +4725,7 @@ window.removeCondition = function removeCondition(index) {
 window.confirmAddPin = function confirmAddPin() {
     const gpPin = parseInt(document.getElementById('add-pin-gp-number').value);
     const label = document.getElementById('add-pin-label').value || `Output ${gpPin}`;
+    const initialState = document.getElementById('add-pin-initial-state').value === 'true';
     const modbusReg = parseInt(document.getElementById('add-pin-modbus-reg').value) || 0;
     const invert = document.getElementById('add-pin-invert').checked;
     
@@ -4728,8 +4735,19 @@ window.confirmAddPin = function confirmAddPin() {
         return;
     }
     
-    if (isNaN(modbusReg)) {
-        alert('Please enter a Modbus register number');
+    if (isNaN(modbusReg) || modbusReg === 0) {
+        alert('Please enter a Modbus coil address');
+        return;
+    }
+    
+    if (modbusReg < 100 || modbusReg > 200) {
+        alert('Modbus coil address must be between 100-200 (state monitoring coils)');
+        return;
+    }
+    
+    // Check for duplicate coil addresses
+    if (window.currentIOConfig?.pins?.some(p => p.modbusRegister === modbusReg)) {
+        alert(`Coil address ${modbusReg} is already in use by another pin`);
         return;
     }
     
@@ -4741,6 +4759,7 @@ window.confirmAddPin = function confirmAddPin() {
         pullup: false,
         invert: invert,
         latched: false,
+        initialState: initialState,
         modbusRegister: modbusReg,
         currentState: false,
         rules: []
@@ -4823,35 +4842,46 @@ window.updateRuleStatus = function updateRuleStatus() {
     fetch('/api/rules/status')
         .then(r => r.json())
         .then(data => {
+            console.log('[updateRuleStatus] Response:', data);
             if (data.pins) {
                 for (const pin of data.pins) {
+                    console.log(`[updateRuleStatus] Processing pin GP${pin.gpPin}, rules:`, pin.rules);
                     for (let idx = 0; idx < (pin.rules || []).length; idx++) {
                         const rule = pin.rules[idx];
-                        const element = document.getElementById(`rule-${pin.gpPin}-${idx}`);
-                        if (!element) continue;
+                        const statusElementId = `status-${pin.gpPin}-${idx}`;
+                        const statusSpan = document.getElementById(statusElementId);
                         
-                        const statusSpan = element.querySelector('.rule-status');
-                        if (statusSpan) {
-                            const actualValue = rule.trigger.actualValue !== undefined ? rule.trigger.actualValue : '?';
-                            const registerFound = rule.trigger.registerFound ? 'YES' : 'NO';
-                            const conditionMet = rule.trigger.conditionMet ? true : false;
-                            
-                            if (!rule.trigger.registerFound) {
-                                // Register not found
-                                statusSpan.textContent = `REG ${rule.trigger.register} NOT FOUND`;
-                                statusSpan.style.background = '#ffcccc';
-                                statusSpan.style.color = '#cc0000';
-                            } else if (conditionMet) {
-                                // Condition met - GREEN
-                                statusSpan.textContent = `✓ ${actualValue}`;
-                                statusSpan.style.background = '#ccffcc';
-                                statusSpan.style.color = '#00aa00';
-                            } else {
-                                // Condition not met - GRAY
-                                statusSpan.textContent = `✗ ${actualValue}`;
-                                statusSpan.style.background = '#e0e0e0';
-                                statusSpan.style.color = '#666666';
-                            }
+                        console.log(`[updateRuleStatus] Looking for element #${statusElementId}, found:`, statusSpan ? 'YES' : 'NO');
+                        
+                        if (!statusSpan) {
+                            console.log(`[updateRuleStatus] Skipping - element not found`);
+                            continue;
+                        }
+                        
+                        // Get overall condition met status
+                        const allConditionsMet = rule.allConditionsMet ? true : false;
+                        let actualValue = '?';
+                        
+                        // Use first condition's actual value for display
+                        if (rule.conditions && rule.conditions.length > 0) {
+                            actualValue = rule.conditions[0].actualValue !== undefined ? 
+                                          rule.conditions[0].actualValue : '?';
+                        }
+                        
+                        console.log(`[updateRuleStatus] Rule ${idx} - allConditionsMet: ${allConditionsMet}, actualValue: ${actualValue}`);
+                        
+                        if (allConditionsMet) {
+                            // All conditions met - GREEN (condition is TRUE)
+                            statusSpan.innerHTML = `✅ MET (${actualValue})`;
+                            statusSpan.style.background = '#ccffcc';
+                            statusSpan.style.color = '#00aa00';
+                            statusSpan.style.fontWeight = 'bold';
+                        } else {
+                            // Condition not met - RED (condition is FALSE)
+                            statusSpan.innerHTML = `❌ NOT MET (${actualValue})`;
+                            statusSpan.style.background = '#ffcccc';
+                            statusSpan.style.color = '#cc0000';
+                            statusSpan.style.fontWeight = 'bold';
                         }
                     }
                 }
@@ -4862,5 +4892,43 @@ window.updateRuleStatus = function updateRuleStatus() {
     // Poll every 1 second
     if (window.ruleStatusInterval) clearTimeout(window.ruleStatusInterval);
     window.ruleStatusInterval = setTimeout(window.updateRuleStatus, 1000);
+};
+
+// Update pin state checkboxes from live /iostatus data
+window.updatePinStatesDisplay = function updatePinStatesDisplay() {
+    fetch('/ioconfig')
+        .then(r => r.json())
+        .then(config => {
+            // Now fetch the live status
+            return fetch('/iostatus').then(r => r.json()).then(status => ({ config, status }));
+        })
+        .then(({ config, status }) => {
+            if (config.pins) {
+                for (const pin of config.pins) {
+                    if (pin.mode !== 'output') continue;  // Only update output pins
+                    
+                    // Get the live state from the pin's currentState
+                    const stateCheckbox = document.querySelector(`input[data-pin="${pin.gpPin}"]`);
+                    const stateSpan = stateCheckbox?.parentElement?.querySelector('.state-indicator');
+                    
+                    if (stateCheckbox && stateSpan) {
+                        // Update checkbox
+                        stateCheckbox.checked = pin.currentState;
+                        
+                        // Update visual indicator
+                        stateSpan.classList.remove('on', 'off');
+                        stateSpan.classList.add(pin.currentState ? 'on' : 'off');
+                        stateSpan.textContent = pin.currentState ? '🟢 HIGH' : '🔴 LOW';
+                        
+                        console.log(`[updatePinStates] GP${pin.gpPin} = ${pin.currentState ? 'HIGH' : 'LOW'}`);
+                    }
+                }
+            }
+        })
+        .catch(err => console.error('Error fetching pin states:', err));
+    
+    // Poll every 500ms for faster visual updates
+    if (window.pinStateInterval) clearTimeout(window.pinStateInterval);
+    window.pinStateInterval = setTimeout(window.updatePinStatesDisplay, 500);
 };
 
