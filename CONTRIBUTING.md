@@ -110,37 +110,102 @@ Fast Failure Conditions (reject PR / patch if):
 
 ## 5. REST API Contract (Firmware)
 
-| Method | Path | Handler | Purpose | Body / Response Notes |
-|--------|------|---------|---------|-----------------------|
-| GET | `/config` | `handleGetConfig` | Network + modbus + IO summary | Returns IPs, modbus status, counts. |
-| POST | `/config` | `handleSetConfig` | Update network & port (reboots) | Reject invalid IP/port; size limit 256 chars. |
-| GET | `/iostatus` | `handleGetIOStatus` | Live IO state snapshot | Includes latched arrays + analog + EZO meta. |
-| GET | `/ioconfig` | `handleGetIOConfig` | IO feature configuration | Pullup/invert/latch + output init. |
-| POST | `/ioconfig` | `handleSetIOConfig` | Mutate IO behavior live | Immediate pinMode updates for pullups. |
-| POST | `/setoutput` | `handleSetOutput` | Set digital output | Logical state propagated to all clients. |
-| POST | `/reset-latches` | `handleResetLatches` | Clear all DI latches | JSON success response. |
-| POST | `/reset-latch` | `handleResetSingleLatch` | Clear specific latch | Body `{ "input": <0-7> }`. |
-| GET | `/sensors/config` | `handleGetSensorConfig` | List sensor slots | Array with `enabled,type,i2cAddress`. |
-| POST | `/sensors/config` | `handleSetSensorConfig` | Replace sensor set | Validates length + names + I2C addr; reboots. |
-| POST | `/api/sensor/command` | `handleSensorCommand` | Send custom EZO command | Body: sensorIndex + command, async reply later in `/iostatus`. |
+### Core Configuration & Status
 
-Simulator duplicates shapes it needs for UI, but MAY add simulator‑only keys (flagged by `is_simulator`). Firmware MUST NOT depend on them.
+| Method | Path | Purpose | Body / Response Notes |
+|--------|------|---------|----------------------|
+| GET | `/config` | Network + modbus + IO summary | Returns IPs, modbus status, counts |
+| POST | `/config` | Update network settings | Applies immediately without reboot |
+| GET | `/iostatus` | Live IO state snapshot | Includes latched arrays + analog + sensor data |
+| GET | `/ioconfig` | IO feature configuration | Pullup/invert/latch + output init |
+| POST | `/ioconfig` | Update IO behavior | Immediate pinMode updates for pullups |
+| GET | `/io/config` | Get IO configuration (newer endpoint) | Returns IOConfig structure with pins + rules |
+| POST | `/io/config` | Set IO configuration (newer endpoint) | Saves to io_config.json, applies pins + rules |
+
+### Digital I/O Control
+
+| Method | Path | Purpose | Body / Response Notes |
+|--------|------|---------|----------------------|
+| POST | `/setoutput` | Set digital output | Query params: `output=<0-7>&state=<0|1>` |
+| POST | `/api/pin/unlock` | Unlock externally locked pin | Body: `{ "gpPin": <pin> }` |
+| POST | `/reset-latches` | Clear all DI latches | JSON success response |
+| POST | `/reset-latch` | Clear specific latch | Body: `{ "input": <0-7> }` |
+
+### Sensor Configuration & Data
+
+| Method | Path | Purpose | Body / Response Notes |
+|--------|------|---------|----------------------|
+| GET | `/sensors/config` | List sensor configurations | Array with enabled, type, protocol, pins, calibration |
+| POST | `/sensors/config` | Update sensor configuration | Saves to sensors.json, applies immediately |
+| GET | `/sensors/data` | Get current sensor readings | Raw + calibrated + modbus values for all sensors |
+| POST | `/api/sensor/command` | Send custom sensor command | Body: sensorIndex + command, async reply |
+| POST | `/api/sensor/calibration` | Update sensor calibration | Body: sensorIndex + calibration params |
+| POST | `/api/sensor/poll` | Manually trigger sensor poll | Body: sensorIndex |
+
+### Diagnostic & Monitoring
+
+| Method | Path | Purpose | Body / Response Notes |
+|--------|------|---------|----------------------|
+| GET | `/api/pins/map` | Get GPIO pin mapping | Shows available pins per protocol |
+| GET | `/api/sensors/status` | Get sensor health status | Last read time, errors, connection status |
+| GET | `/api/rules/status` | Get automation rules status | Rule execution count, last triggered |
+
+### Terminal Interface
+
+| Method | Path | Purpose | Body / Response Notes |
+|--------|------|---------|----------------------|
+| GET | `/terminal/logs` | Get terminal output buffer | Recent command outputs |
+| POST | `/terminal/command` | Execute terminal command | Body: `{ "command": "<cmd>" }` |
+| POST | `/terminal/start-watch` | Start protocol watch | Body: `{ "protocol": "I2C|UART|OneWire", "pin": "<id>" }` |
+| POST | `/terminal/stop-watch` | Stop protocol watch | Stops real-time traffic monitoring |
+| POST | `/terminal/send-command` | Send command to sensor/bus | Body: protocol, pin, command |
+
+### Notes
+
+- Simulator duplicates shapes it needs for UI, but MAY add simulator‑only keys (flagged by `is_simulator`)
+- Firmware MUST NOT depend on simulator-only fields
+- Some endpoints exist in both `/ioconfig` (legacy) and `/io/config` (newer) forms - both work
 
 ---
 
 ## 6. Modbus Register Allocation Strategy
 
-Current mapping (see `main.cpp` comments):
-* Discrete Inputs (FC2): 0–7  -> Digital Input logical states (post invert + latch logic)
-* Coils (FC1/FC5): 0–7       -> Digital Outputs (logical)
-* Coils (FC5 write pulse): 100–107 -> DI latch reset commands (write 1 => clears, auto resets to 0)
-* Input Registers (FC4): 0–2  -> Analog inputs (mV)
-* Input Registers (FC4): 3–4  -> Reserved for temperature / humidity (disabled until real sensor active)
+Current mapping (see `main.cpp` comments and `applySensorPresets()`):
+
+### Fixed I/O Registers
+* **Discrete Inputs (FC2): 0–7** → Digital Input logical states (post invert + latch logic)
+* **Coils (FC1/FC5): 0–7** → Digital Outputs (logical)
+* **Coils (FC5 write pulse): 100–107** → DI latch reset commands (write 1 → clears, auto resets to 0)
+* **Input Registers (FC4): 0–2** → Analog inputs (mV)
+
+### Sensor Registers (FC4 Input Registers)
+**Actively Allocated:**
+* **Register 10** → EZO pH sensor
+* **Register 11** → EZO EC sensor (conductivity)
+* **Register 12** → EZO DO sensor (dissolved oxygen)
+* **Register 13** → EZO RTD sensor (temperature)
+* **Register 14** → DS18B20 temperature (One-Wire)
+* **Register 15** → SHT30 temperature/humidity
+* **Register 16** → BME280 environmental (temp/hum/pressure)
+* **Register 17** → Generic One-Wire sensors
+* **Register 18** → Generic I2C sensors
+* **Register 19** → UART sensors
+* **Register 20+** → LIS3DH accelerometer (X/Y/Z uses 20, 21, 22)
+
+### Multi-Value Sensors
+Sensors with multiple outputs (e.g., LIS3DH X/Y/Z, BME280 temp/hum/press) use consecutive registers:
+- Primary value → `modbusRegister`
+- Secondary value → `modbusRegister + 1` (stored in `modbusValueB`)
+- Tertiary value → `modbusRegister + 2` (stored in `modbusValueC`)
+
+### Dynamic Allocation
+User-configured sensors can specify any register 0-65535 via `sensors.json`. Firmware applies defaults only if `modbusRegister == 0`.
 
 When adding new sensor registers:
 1. Reserve contiguous block; document start + length.
-2. Update this section and the comment block in `main.cpp`.
+2. Update this section and the preset table in `applySensorPresets()` in `main.cpp`.
 3. Avoid repurposing existing addresses (backward compatibility).
+4. For multi-output sensors, reserve N consecutive registers and document the mapping.
 
 Future expansion suggestion:
 | Range | Purpose (Proposed) |

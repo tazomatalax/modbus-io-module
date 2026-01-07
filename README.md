@@ -25,21 +25,30 @@ For detailed setup, see the **[Getting Started Guide](docs/guides/)**.
 ## Hardware
 
 - **Board**: Wiznet W5500-EVB-Pico (RP2040 + W5500)
-- **IO**: 8 DI (GP0-7), 8 DO (GP8-15), 3 AI (GP26-28)
-- **Sensors**: I2C bus (GP24/25) for EZO, BME280, DS18B20, and custom sensors
+- **IO**: 8 DI (GP0-7), 8 DO (GP8-15), 3 AI (GP26-28) - *Hardcoded pins, dynamic configuration in development*
+- **Sensors**: I2C (default GP4/GP5, dynamically configurable), UART, OneWire, SPI support
 - **Modbus**: TCP port 502 (configurable)
+
+**Note:** IO configuration is currently in hybrid mode - legacy hardcoded pin arrays coexist with new dynamic `io_config.json` system. Full migration to dynamic configuration planned for future release.
 
 For complete pinout and electrical specs, see **[Pinout & Interfaces](docs/hardware/pinout-and-interfaces.md)**.
 
 ## Documentation
 
+### Core Documentation
 - **[Contributing Guide](CONTRIBUTING.md)** – Development standards and workflow
 - **[Project Roadmap](ROADMAP.md)** – Strategic phases and feature planning
+- **[Changelog](CHANGELOG.md)** – Version history and release notes
+
+### Technical Documentation
 - **[Architecture Overview](docs/architecture/system-overview.md)** – Design and data flows
 - **[Hardware Pinout](docs/hardware/pinout-and-interfaces.md)** – GPIO and interfaces
 - **[Calibration Guide](docs/guides/calibration-guide.md)** – Sensor calibration formulas
 - **[Terminal Guide](docs/guides/terminal-guide.md)** – Diagnostic commands
 - **[Full Documentation Index](docs/README.md)** – Complete guide directory
+
+### Archive
+Historical planning documents and implementation notes are preserved in [archive/](archive/) for reference.
 
 ## Development
 

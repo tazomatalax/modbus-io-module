@@ -32,9 +32,13 @@ docs/
 │   └── terminal-guide.md           # Terminal commands and diagnostics
 ├── hardware/
 │   └── pinout-and-interfaces.md    # Pin assignments and electrical specifications
-├── technical/
-│   └── ezo-sensor-polling.md       # EZO sensor implementation details
-└── history/                         # Archive of past session notes (reference only)
+└── technical/
+    └── ezo-sensor-polling.md       # EZO sensor implementation details
+
+../archive/                          # Historical planning documents (obsolete, reference only)
+├── COEXISTENCE_MODEL_TEST.md       # Old Modbus coexistence testing guide
+├── I2C_MANAGER_INSTRUCTIONS.md     # Legacy I2C manager integration notes
+└── IO_CONFIG_REFACTOR.md           # Past IO configuration refactor planning
 ```
 
 ---
@@ -63,6 +67,9 @@ docs/
 
 ## Recent Changes
 
+- **2025-01-07**: Documentation organization cleanup
+  - Created archive/ for obsolete planning documents (COEXISTENCE_MODEL_TEST.md, I2C_MANAGER_INSTRUCTIONS.md, IO_CONFIG_REFACTOR.md)
+  - These were superseded by actual implementation and kept for historical reference only
 - **2025-10-22**: Documentation consolidated and reorganized
   - Merged PLAN.md and IMPROVEMENT_PLAN.md into ROADMAP.md
   - Renamed AGENTS.md to CONTRIBUTING.md
