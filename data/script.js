@@ -356,7 +356,10 @@ window.updateSensorTableBody = function updateSensorTableBody() {
             (sensor.i2cAddress ? `0x${sensor.i2cAddress.toString(16).toUpperCase().padStart(2, '0')}` : 'N/A');
         const enabledClass = sensor.enabled ? 'sensor-enabled' : 'sensor-disabled';
         const enabledText = sensor.enabled ? 'Yes' : 'No';
-        const hasCalibration = sensor.calibration && (sensor.calibration.offset !== undefined || sensor.calibration.scale !== undefined);
+        // Check for calibration - either nested calibration object or direct calibrationOffset/calibrationSlope fields
+        const hasCalibration = (sensor.calibration && (sensor.calibration.offset !== undefined || sensor.calibration.scale !== undefined)) ||
+            (sensor.calibrationOffset !== undefined && sensor.calibrationOffset !== 0) ||
+            (sensor.calibrationSlope !== undefined && sensor.calibrationSlope !== 1);
         const calibrationText = hasCalibration ? 'Yes' : 'No';
         const calibrationClass = hasCalibration ? 'calibration-enabled' : 'calibration-disabled';
         return `
