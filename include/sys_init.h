@@ -79,7 +79,7 @@ struct CommandArray {
 // Constants
 #define CONFIG_FILE "/config.json"
 #define SENSORS_FILE "/sensors.json"
-#define CONFIG_VERSION 7  // Increment this when config structure changes
+#define CONFIG_VERSION 8  // Increment this when config structure changes
 #define HOSTNAME_MAX_LENGTH 32
 #define MAX_MODBUS_CLIENTS 4  // Maximum number of concurrent Modbus clients
 #define MAX_SENSORS 10
@@ -87,10 +87,105 @@ struct CommandArray {
 // Global flags
 bool core0setupComplete = false;
 
-// Digital IO pins
+// I/O Configuration Structures (replacing hardcoded pin arrays)
+#define MAX_IO_PINS 16
+#define MAX_IO_RULES 50
+#define IO_CONFIG_FILE "/io_config.json"
+
+// Action types for automation rules
+enum class IOActionType {
+    SET_OUTPUT = 0,           // Set output to specific value
+    TOGGLE_OUTPUT = 1,        // Toggle output state
+    PULSE_OUTPUT = 2,         // Pulse output for duration
+    SET_AND_LATCH = 3,        // Set and hold until cleared
+    FOLLOW_CONDITION = 4      // Follow condition state (set=1 when true, 0 when false)
+};
+
+// Trigger condition operators
+enum class TriggerCondition {
+    EQUAL = 0,         // ==
+    NOT_EQUAL = 1,     // !=
+    LESS_THAN = 2,     // <
+    GREATER_THAN = 3,  // >
+    LESS_EQUAL = 4,    // <=
+    GREATER_EQUAL = 5  // >=
+};
+
+// Logic operators for combining multiple conditions
+enum class LogicOperator {
+    AND = 0,           // All conditions must be true
+    OR = 1             // Any condition must be true
+};
+
+// I/O Rule Action definition
+struct IOAction {
+    IOActionType type;
+    bool value;                    // For SET/TOGGLE
+    uint32_t pulseDurationMs;      // For PULSE
+};
+
+// Single trigger condition (for multi-condition rules)
+struct ConditionClause {
+    uint16_t modbusRegister;      // Source Modbus register to monitor
+    TriggerCondition condition;   // Comparison operator
+    int32_t triggerValue;         // Value to compare against
+    LogicOperator nextOperator;   // AND/OR to next condition
+};
+
+// I/O Rule Trigger definition (supports multiple conditions)
+struct IOTrigger {
+    ConditionClause conditions[3];  // Support up to 3 conditions per rule
+    uint8_t conditionCount;         // Number of active conditions (1-3)
+    bool lastTriggeredState;        // Track previous state (for edge detection)
+};
+
+// I/O Automation Rule
+struct IORule {
+    uint8_t id;
+    bool enabled;
+    char description[64];
+    IOTrigger trigger;
+    IOAction action;
+    uint8_t priority;             // 0 = highest priority
+    uint32_t lastExecutionTime;   // Timestamp of last execution
+};
+
+// Digital I/O Pin Configuration
+struct IOPin {
+    uint8_t gpPin;                // GPIO pin number (0-28)
+    char label[32];               // User-friendly label
+    bool isInput;                 // true = input, false = output
+    bool pullup;                  // For inputs: enable pullup
+    bool invert;                  // Invert logic
+    bool latched;                 // For inputs: currently latched
+    bool initialState;            // Power-up/boot default state (HIGH=true, LOW=false)
+    uint16_t modbusRegister;      // Associated Modbus register
+    IORule rules[5];              // Up to 5 rules per pin
+    uint8_t ruleCount;            // Number of active rules
+    
+    // Runtime state
+    bool currentState;            // Current GPIO state
+    bool previousState;           // Previous state (for edge detection)
+    uint32_t lastStateChange;     // Timestamp of last change
+    bool externallyLocked;        // Set to true when external write = 0 (rules disabled until UI unlock)
+};
+
+// Master I/O Configuration
+struct IOConfig {
+    uint8_t version;
+    IOPin pins[MAX_IO_PINS];
+    uint8_t pinCount;
+    IORule globalRules[MAX_IO_RULES];
+    uint8_t globalRuleCount;
+};
+
+// Digital IO pins (LEGACY - kept for backward compatibility during transition)
 const uint8_t DIGITAL_INPUTS[] = {0, 1, 2, 3, 4, 5, 6, 7};  // Digital input pins
 const uint8_t DIGITAL_OUTPUTS[] = {8, 9, 10, 11, 12, 13, 14, 15}; // Digital output pins
 const uint8_t ANALOG_INPUTS[] = {26, 27, 28};   // ADC pins
+
+// Reserved pins (cannot be configured as I/O - used by W5500 or system)
+const uint8_t RESERVED_PINS[] = {16, 17, 18, 19, 20, 21, 22};
 
 // Network and Modbus Configuration
 
@@ -123,6 +218,9 @@ struct Config {
     uint8_t subnet[4];
     uint16_t modbusPort;
     char hostname[HOSTNAME_MAX_LENGTH];
+    // TODO: Digital IO pin mappings (version 8+) - deferred for GPIO configuration refactor
+    // uint8_t diPin[8];         // Physical GPIO pin for digital input slot (255 = unmapped/unused)
+    // uint8_t doPin[8];         // Physical GPIO pin for digital output slot (255 = unmapped/unused)
     bool diPullup[8];         // Enable internal pullup for digital inputs
     bool diInvert[8];         // Invert logic for digital inputs
     bool diLatch[8];          // Enable latching for digital inputs (stay ON until read)
@@ -275,6 +373,10 @@ void loadConfig();
 void saveConfig();
 void loadSensorConfig();
 void saveSensorConfig();
+void loadIOConfig();
+void saveIOConfig();
+void applyIOConfigToPins();
+void evaluateIOAutomationRules();
 void updateIOpins();
 void resetLatches();
 void initializeEzoSensors();
@@ -331,6 +433,7 @@ void serveFileFromFS(WiFiClient& client, const String& filename, const String& c
 
 extern Config config;
 extern IOStatus ioStatus;
+extern IOConfig ioConfig;
 extern SensorConfig configuredSensors[MAX_SENSORS];
 extern ModbusClientConnection modbusClients[MAX_MODBUS_CLIENTS];
 extern int numConfiguredSensors;

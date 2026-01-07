@@ -1,4 +1,5 @@
 #include "sys_init.h"
+#include "i2c_bus_manager.h"
 #include <Adafruit_LIS3DH.h>
 #include <Adafruit_Sensor.h>
 
@@ -18,6 +19,9 @@ void handleLIS3DHSensors();  // Forward declaration for LIS3DH polling handler
 
 // LIS3DH accelerometer instances (one per sensor, max 8 sensors)
 Adafruit_LIS3DH* lis3dhSensors[MAX_SENSORS] = {nullptr};
+
+// I2C Bus Manager instance
+I2CBusManager i2cBusManager;
 
 // SensorConfig array definition (from sys_init.h extern)
 SensorConfig configuredSensors[MAX_SENSORS] = {};
@@ -165,6 +169,11 @@ void applySensorPresets() {
 // Global object definitions
 Config config; // Define the actual config object
 IOStatus ioStatus = {};
+IOConfig ioConfig = {};
+
+// Global coil state store (persists across client connections)
+// Coils 100-200 store output pin states
+uint16_t globalCoilState[201] = {0};  // Index 0-200, indices 100-200 used for output pin coils
 
 // Network configuration for W5500
 uint8_t mac[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED};
@@ -203,6 +212,7 @@ int oneWireQueueSize = 0;
 void handleSimpleHTTP();
 void updateIOForClient(int clientIndex);
 void routeRequest(WiFiClient& client, String method, String path, String body);
+void applyExternalModbusOverride();
 void sendFile(WiFiClient& client, String filename, String contentType);
 void send404(WiFiClient& client);
 void sendJSONConfig(WiFiClient& client);
@@ -212,6 +222,7 @@ void sendJSONSensorData(WiFiClient& client);
 void sendJSONSensorConfig(WiFiClient& client);
 void handlePOSTConfig(WiFiClient& client, String body);
 void handlePOSTSetOutput(WiFiClient& client, String body);
+void handlePOSTUnlockPin(WiFiClient& client, String body);
 void handlePOSTIOConfig(WiFiClient& client, String body);
 void handlePOSTResetLatches(WiFiClient& client);
 void handlePOSTResetSingleLatch(WiFiClient& client, String body);
@@ -252,6 +263,7 @@ void logNetworkTransaction(String protocol, String direction, String localAddr, 
 String executeTerminalCommand(String command, String pin, String protocol);
 
 // Bus operation management functions
+void processI2CBusManagerQueue();  // NEW: I2C Bus Manager aware polling
 void processI2CQueue();
 void processUARTQueue();
 void processOneWireQueue();
@@ -261,7 +273,240 @@ void updateBusQueues();
 
 // CRC validation for One-Wire sensors is implemented above
 
-// Bus queue processor implementations
+// ============================================================================
+// I2C BUS MANAGER POLLING - NEW SEQUENTIAL POLLING SYSTEM
+// ============================================================================
+// This function uses the I2C Bus Manager to sequentially poll sensors
+// across different pin pairs and buses without conflicts.
+void processI2CBusManagerQueue() {
+    // Get next sensor that needs polling (round-robin from bus manager)
+    uint8_t nextSensorIdx = i2cBusManager.getNextSensorToPoll(configuredSensors);
+    
+    if (nextSensorIdx == 255) {
+        return;  // No sensor needs polling yet
+    }
+    
+    SensorConfig& sensor = configuredSensors[nextSensorIdx];
+    int sda = sensor.sdaPin;
+    int scl = sensor.sclPin;
+    
+    if (sda < 0 || scl < 0) {
+        Serial.printf("[I2C Bus Manager] ERROR: Sensor %d (%s) has invalid pins\n", nextSensorIdx, sensor.name);
+        return;
+    }
+    
+    // Define the I2C transaction callback for this sensor
+    // This will execute after the pin switch is complete
+    auto performRead = [nextSensorIdx, sda, scl]() -> I2CTransactionResult {
+        SensorConfig& sensor = configuredSensors[nextSensorIdx];
+        
+        // Check if sensor has a command to send
+        bool hasCommand = strlen(sensor.command) > 0;
+        
+        // Handle based on sensor type
+        if (strcmp(sensor.type, "LIS3DH") == 0) {
+            // LIS3DH: Read 6 accelerometer bytes
+            Wire.beginTransmission(sensor.i2cAddress);
+            Wire.write(0xA8);  // 0x28 with auto-increment (OUT_X_L)
+            if (Wire.endTransmission(true) != 0) {
+                return I2CTransactionResult::ERROR_TRANSMISSION;
+            }
+            
+            delayMicroseconds(100);
+            Wire.requestFrom((int)sensor.i2cAddress, 6);
+            
+            if (!Wire.available()) {
+                return I2CTransactionResult::ERROR_READ_FAILED;
+            }
+            
+            uint8_t data[6] = {0};
+            for (int i = 0; i < 6 && Wire.available(); i++) {
+                data[i] = Wire.read();
+            }
+            
+            // Parse LIS3DH data (little-endian 16-bit values)
+            int16_t x_raw = ((int16_t)data[1] << 8) | data[0];
+            int16_t y_raw = ((int16_t)data[3] << 8) | data[2];
+            int16_t z_raw = ((int16_t)data[5] << 8) | data[4];
+            
+            // Shift by 6 bits (standard 10-bit mode)
+            x_raw >>= 6;
+            y_raw >>= 6;
+            z_raw >>= 6;
+            
+            // Scale to mg (3.906 mg/LSB for ±2g)
+            float x_mg = (float)x_raw * 3.906f;
+            float y_mg = (float)y_raw * 3.906f;
+            float z_mg = (float)z_raw * 3.906f;
+            
+            sensor.rawValue = x_mg;
+            sensor.rawValueB = y_mg;
+            sensor.rawValueC = z_mg;
+            
+            sensor.calibratedValue = applyCalibration(x_mg, sensor);
+            sensor.calibratedValueB = applyCalibrationB(y_mg, sensor);
+            sensor.calibratedValueC = applyCalibrationC(z_mg, sensor);
+            
+            sensor.modbusValue = (int)(sensor.calibratedValue * 100);
+            sensor.modbusValueB = (int)(sensor.calibratedValueB * 100);
+            sensor.modbusValueC = (int)(sensor.calibratedValueC * 100);
+            
+            logI2CTransaction(sensor.i2cAddress, "VAL", 
+                            "X: " + String(x_mg, 2) + " mg, Y: " + String(y_mg, 2) + " mg, Z: " + String(z_mg, 2) + " mg", 
+                            sensor.name);
+            return I2CTransactionResult::SUCCESS;
+            
+        } else if (strcmp(sensor.type, "SHT30") == 0) {
+            // SHT30: Send command, wait, then read
+            Wire.beginTransmission(sensor.i2cAddress);
+            Wire.write(0x2C);  // Measurement command
+            Wire.write(0x06);
+            if (Wire.endTransmission(true) != 0) {
+                return I2CTransactionResult::ERROR_TRANSMISSION;
+            }
+            
+            delay(sensor.delayBeforeRead > 0 ? sensor.delayBeforeRead : 15);
+            Wire.requestFrom((int)sensor.i2cAddress, 6);
+            
+            if (!Wire.available()) {
+                return I2CTransactionResult::ERROR_READ_FAILED;
+            }
+            
+            uint8_t data[6] = {0};
+            for (int i = 0; i < 6 && Wire.available(); i++) {
+                data[i] = Wire.read();
+            }
+            
+            // Parse SHT30 data
+            uint16_t temp_raw = ((uint16_t)data[0] << 8) | data[1];
+            uint16_t hum_raw = ((uint16_t)data[3] << 8) | data[4];
+            
+            float temperature = -45.0 + 175.0 * ((float)temp_raw / 65535.0);
+            float humidity = 100.0 * ((float)hum_raw / 65535.0);
+            
+            sensor.rawValue = temperature;
+            sensor.rawValueB = humidity;
+            
+            sensor.calibratedValue = applyCalibration(temperature, sensor);
+            sensor.calibratedValueB = applyCalibrationB(humidity, sensor);
+            
+            sensor.modbusValue = (int)(sensor.calibratedValue * 100);
+            sensor.modbusValueB = (int)(sensor.calibratedValueB * 100);
+            
+            logI2CTransaction(sensor.i2cAddress, "VAL", 
+                            "Temp: " + String(temperature) + "°C, Hum: " + String(humidity) + "%", 
+                            sensor.name);
+            return I2CTransactionResult::SUCCESS;
+            
+        } else if (strcmp(sensor.type, "EZO_PH") == 0 || strcmp(sensor.type, "EZO-PH") == 0) {
+            // EZO-PH: Send read command, wait for response
+            Wire.beginTransmission(sensor.i2cAddress);
+            Wire.write('R');  // Read command
+            Wire.write('\r');
+            if (Wire.endTransmission(true) != 0) {
+                return I2CTransactionResult::ERROR_TRANSMISSION;
+            }
+            
+            delay(sensor.delayBeforeRead > 0 ? sensor.delayBeforeRead : 900);
+            Wire.requestFrom((int)sensor.i2cAddress, 32);
+            
+            if (!Wire.available()) {
+                return I2CTransactionResult::ERROR_READ_FAILED;
+            }
+            
+            uint8_t response[32] = {0};
+            int idx = 0;
+            while (Wire.available() && idx < 31) {
+                response[idx++] = Wire.read();
+            }
+            
+            uint8_t statusCode = response[0];
+            if (statusCode == 1 && idx > 1) {
+                // Extract ASCII data after status byte
+                String dataStr = "";
+                for (int j = 1; j < idx; j++) {
+                    if (response[j] >= 32 && response[j] <= 126) {
+                        dataStr += (char)response[j];
+                    }
+                }
+                sensor.rawValue = dataStr.toFloat();
+                sensor.calibratedValue = applyCalibration(sensor.rawValue, sensor);
+                sensor.modbusValue = (int)(sensor.calibratedValue * 100);
+                
+                logI2CTransaction(sensor.i2cAddress, "VAL", "EZO-PH: " + String(sensor.rawValue, 2), sensor.name);
+                return I2CTransactionResult::SUCCESS;
+            } else if (statusCode == 254) {
+                logI2CTransaction(sensor.i2cAddress, "WARN", "EZO-PH: Still processing", sensor.name);
+                return I2CTransactionResult::ERROR_TIMEOUT;
+            } else {
+                logI2CTransaction(sensor.i2cAddress, "ERR", "EZO-PH: Status code " + String(statusCode), sensor.name);
+                return I2CTransactionResult::ERROR_READ_FAILED;
+            }
+            
+        } else {
+            // Generic I2C sensor: send command if present, then read
+            if (hasCommand) {
+                Wire.beginTransmission(sensor.i2cAddress);
+                // Send command bytes
+                String cmd = String(sensor.command);
+                for (int i = 0; i < cmd.length(); i++) {
+                    Wire.write((uint8_t)cmd[i]);
+                }
+                if (Wire.endTransmission(true) != 0) {
+                    return I2CTransactionResult::ERROR_TRANSMISSION;
+                }
+                
+                if (sensor.delayBeforeRead > 0) {
+                    delay(sensor.delayBeforeRead);
+                }
+            }
+            
+            // Read response
+            Wire.requestFrom((int)sensor.i2cAddress, 32);
+            if (!Wire.available()) {
+                return I2CTransactionResult::ERROR_READ_FAILED;
+            }
+            
+            uint8_t response[32] = {0};
+            int idx = 0;
+            while (Wire.available() && idx < 31) {
+                response[idx++] = Wire.read();
+            }
+            
+            // Store response for UI
+            String cleanResponse = "";
+            for (int j = 0; j < idx; j++) {
+                if (response[j] >= 32 && response[j] <= 126) {
+                    cleanResponse += (char)response[j];
+                }
+            }
+            strncpy(sensor.response, cleanResponse.c_str(), sizeof(sensor.response) - 1);
+            
+            // Parse based on parsing method
+            float value = parseSensorData((const char*)response, sensor);
+            sensor.rawValue = value;
+            sensor.calibratedValue = applyCalibration(value, sensor);
+            sensor.modbusValue = (int)(sensor.calibratedValue * 100);
+            
+            logI2CTransaction(sensor.i2cAddress, "VAL", "Generic: " + String(value, 2), sensor.name);
+            return I2CTransactionResult::SUCCESS;
+        }
+    };
+    
+    // Use the bus manager to perform the atomic transaction
+    I2CTransactionResult result = i2cBusManager.performAtomicTransaction(sda, scl, performRead);
+    
+    if (result != I2CTransactionResult::SUCCESS) {
+        Serial.printf("[I2C Bus Manager] Transaction failed for sensor %d (%s): error code %d\n", 
+                    nextSensorIdx, sensor.name, (int)result);
+        sensor.rawValue = -1000.0;  // Mark as error
+    }
+    
+    sensor.lastReadTime = millis();
+}
+
+// CRC validation for One-Wire sensors is implemented above (second occurrence removed)
+
 void processI2CQueue() {
     if (i2cQueueSize == 0) return;
     
@@ -1236,7 +1481,12 @@ void updateBusQueues() {
     }
     
     // Process queues
-    processI2CQueue();
+    // NEW: Use I2C Bus Manager for advanced multi-bus polling (recommended)
+    processI2CBusManagerQueue();
+    
+    // LEGACY: Keep old queue processor as fallback (can be removed once bus manager is fully tested)
+    // processI2CQueue();
+    
     processUARTQueue();
     processOneWireQueue();
 }
@@ -1515,6 +1765,60 @@ String executeTerminalCommand(String command, String pin, String protocol) {
         logUARTTransaction(pin, "TX", command);
         response = "UART command sent: " + command;
         logUARTTransaction(pin, "RX", response);
+    } else if (command.startsWith("i2c-diag")) {
+        // I2C Bus Manager diagnostic command
+        if (command == "i2c-diag-buses") {
+            response = "I2C Bus Manager Status:\n";
+            response += "Active buses: ";
+            response += "I2C0, I2C1\n";
+            response += "Sensors configured: " + String(numConfiguredSensors) + "\n";
+            i2cBusManager.printBusDiagnostics();
+            response += "See serial console for detailed bus diagnostics";
+        } else if (command == "i2c-diag-poll") {
+            response = "I2C polling sequence:\n";
+            for (int i = 0; i < numConfiguredSensors; i++) {
+                if (configuredSensors[i].enabled && strcmp(configuredSensors[i].protocol, "I2C") == 0) {
+                    response += String(i) + ": " + configuredSensors[i].name + 
+                              " (SDA=" + String(configuredSensors[i].sdaPin) + 
+                              " SCL=" + String(configuredSensors[i].sclPin) + 
+                              " Addr=0x" + String(configuredSensors[i].i2cAddress, HEX) + 
+                              " Interval=" + String(configuredSensors[i].updateInterval) + "ms)\n";
+                }
+            }
+            if (response.length() == 16) {  // Only has the header
+                response = "No I2C sensors configured";
+            }
+        } else if (command == "i2c-diag-conflicts") {
+            response = "Checking I2C pin conflicts...\n";
+            bool hasConflicts = false;
+            
+            for (int i = 0; i < numConfiguredSensors - 1; i++) {
+                if (configuredSensors[i].enabled && strcmp(configuredSensors[i].protocol, "I2C") == 0) {
+                    for (int j = i + 1; j < numConfiguredSensors; j++) {
+                        if (configuredSensors[j].enabled && strcmp(configuredSensors[j].protocol, "I2C") == 0) {
+                            // Check same pin pair but different address
+                            if (configuredSensors[i].sdaPin == configuredSensors[j].sdaPin &&
+                                configuredSensors[i].sclPin == configuredSensors[j].sclPin &&
+                                configuredSensors[i].i2cAddress == configuredSensors[j].i2cAddress) {
+                                response += "CONFLICT: " + String(configuredSensors[i].name) + 
+                                          " and " + String(configuredSensors[j].name) + 
+                                          " use same address 0x" + String(configuredSensors[i].i2cAddress, HEX) + "\n";
+                                hasConflicts = true;
+                            }
+                        }
+                    }
+                }
+            }
+            
+            if (!hasConflicts) {
+                response = "No I2C conflicts detected. All sensors have unique pin pairs and addresses.";
+            }
+        } else {
+            response = "I2C diagnostics commands:\n";
+            response += "  i2c-diag-buses   - Show bus status\n";
+            response += "  i2c-diag-poll    - Show polling sequence\n";
+            response += "  i2c-diag-conflicts - Check for conflicts";
+        }
     }
     
     return response;
@@ -1613,6 +1917,12 @@ void setup() {
     // Ensure presets are applied after initial config load
     applySensorPresets();
     
+    // Loading I/O configuration (NEW)
+    Serial.println("\n=== Loading I/O Configuration ===");
+    loadIOConfig();
+    applyIOConfigToPins();
+    Serial.println("================================\n");
+    
     // Initialize command queues
     Serial.printf("Sensors: %d configured\n", numConfiguredSensors);
     
@@ -1666,23 +1976,20 @@ void setup() {
     setupModbus();
     setupWebServer();
 
-    // Initialize I2C bus with default pins (GP4=SDA, GP5=SCL)
-    Wire.begin();
-    Serial.println("I2C initialized on default pins (GP4=SDA, GP5=SCL)");
+    // Initialize I2C Bus Manager
+    Serial.println("\n========================================");
+    Serial.println("Initializing I2C Bus Manager...");
+    Serial.println("========================================");
     
-    // Scan for I2C devices at startup
-    Serial.println("Scanning I2C bus...");
-    bool foundDevice = false;
-    for (int addr = 1; addr < 127; addr++) {
-        Wire.beginTransmission(addr);
-        if (Wire.endTransmission() == 0) {
-            Serial.printf("I2C device found at address 0x%02X\n", addr);
-            foundDevice = true;
-        }
-    }
-    if (!foundDevice) {
-        Serial.println("No I2C devices found");
-    }
+    i2cBusManager.initialize();
+    
+    // Discover active I2C buses based on configured sensors
+    i2cBusManager.discoverActiveBuses(configuredSensors, numConfiguredSensors);
+    
+    // Print diagnostics
+    i2cBusManager.printBusDiagnostics();
+    
+    Serial.println("I2C Bus Manager initialized successfully\n");
     
     // Initialize any LIS3DH sensors that are configured and enabled
     for (int i = 0; i < numConfiguredSensors; i++) {
@@ -2776,6 +3083,14 @@ void loop() {
                     modbusClients[i].server.coilWrite(j, ioStatus.dOut[j]);
                 }
                 
+                // Restore global coil states (100-200) for all output pins
+                for (int reg = 100; reg <= 200; reg++) {
+                    if (globalCoilState[reg] != 0) {
+                        modbusClients[i].server.coilWrite(reg, globalCoilState[reg]);
+                        Serial.printf("Restored coil %d = %d to new client\n", reg, globalCoilState[reg]);
+                    }
+                }
+                
                 connectedClients++;
                 clientAdded = true;
                 digitalWrite(LED_BUILTIN, HIGH);  // Turn on LED when at least one client is connected
@@ -2826,6 +3141,9 @@ void loop() {
     }
     
     updateIOpins();
+    // Evaluate I/O automation rules (NEW)
+    evaluateIOAutomationRules();
+    
     // updateSensorReadings();  // DISABLED - SHT30 sensors now handled in queue system
     handleEzoSensors(); // Handle EZO sensor communications with logging
     handleLIS3DHSensors(); // Handle LIS3DH accelerometer polling using Adafruit library (low-freq, non-blocking)
@@ -3058,35 +3376,48 @@ void loadConfig() {
     
     // Start with defaults
     config = DEFAULT_CONFIG;
+    Serial.printf("[Config] Starting with defaults - IP: %d.%d.%d.%d, Version: %d\n",
+        config.ip[0], config.ip[1], config.ip[2], config.ip[3], config.version);
     
     // Try to load from persistent storage (config.json)
+    // NOTE: This file is created by saveConfig() when user changes settings via web UI
+    // It is NOT overwritten by uploadfs unless filesystem is intentionally reflashed
     if (!LittleFS.exists(CONFIG_FILE)) {
-        Serial.println("No config file found, using defaults");
+        Serial.printf("[Config] File %s not found on LittleFS, using defaults\n", CONFIG_FILE);
+        Serial.println("[Config] >>> Tip: Change network settings via web UI to save a persistent config");
         return;
     }
     
     File file = LittleFS.open(CONFIG_FILE, "r");
     if (!file) {
-        Serial.println("Failed to open config file");
+        Serial.printf("[Config] Failed to open %s\n", CONFIG_FILE);
         return;
     }
     
     size_t size = file.size();
+    Serial.printf("[Config] File exists, size: %u bytes\n", (unsigned)size);
+    
     if (size == 0) {
-        Serial.println("Config file is empty, using defaults");
+        Serial.println("[Config] Config file is empty, using defaults");
         file.close();
         return;
     }
     
     // Parse JSON from file
-    StaticJsonDocument<1024> doc;
+    // Increased to 2048 to handle larger config with all IO settings
+    StaticJsonDocument<2048> doc;
     DeserializationError err = deserializeJson(doc, file);
     file.close();
     
     if (err) {
-        Serial.printf("Failed to parse config JSON: %s, using defaults\n", err.c_str());
+        Serial.printf("[Config] JSON parse error: %s (code: %d) - file size was %u bytes\n", err.c_str(), err.code(), (unsigned)size);
+        Serial.println("[Config] This usually means: 1) File is corrupted, 2) JSON buffer too small (increase StaticJsonDocument size), or 3) Invalid JSON syntax");
         return;
     }
+    
+    // Check version compatibility
+    int fileVersion = doc["version"] | -1;
+    Serial.printf("[Config] File version: %d, Expected version: %d\n", fileVersion, CONFIG_VERSION);
     
     // Load network settings from JSON
     config.version = doc["version"] | CONFIG_VERSION;
@@ -3105,7 +3436,12 @@ void loadConfig() {
             for (int i = 0; i < 4; i++) {
                 config.ip[i] = ipArray[i] | 0;
             }
+            Serial.printf("[Config] Loaded IP: %d.%d.%d.%d\n", config.ip[0], config.ip[1], config.ip[2], config.ip[3]);
+        } else {
+            Serial.printf("[Config] IP array size mismatch: %d != 4\n", (int)ipArray.size());
         }
+    } else {
+        Serial.println("[Config] IP field missing from JSON");
     }
     
     // Load gateway
@@ -3115,7 +3451,10 @@ void loadConfig() {
             for (int i = 0; i < 4; i++) {
                 config.gateway[i] = gwArray[i] | 0;
             }
+            Serial.printf("[Config] Loaded Gateway: %d.%d.%d.%d\n", config.gateway[0], config.gateway[1], config.gateway[2], config.gateway[3]);
         }
+    } else {
+        Serial.println("[Config] Gateway field missing from JSON");
     }
     
     // Load subnet mask
@@ -3125,8 +3464,29 @@ void loadConfig() {
             for (int i = 0; i < 4; i++) {
                 config.subnet[i] = subnetArray[i] | 0;
             }
+            Serial.printf("[Config] Loaded Subnet: %d.%d.%d.%d\n", config.subnet[0], config.subnet[1], config.subnet[2], config.subnet[3]);
         }
+    } else {
+        Serial.println("[Config] Subnet field missing from JSON");
     }
+    
+    // TODO: Load diPin and doPin arrays (new in version 8)
+    // These are for the dynamic GPIO pin allocation system
+    // Deferred: to be implemented as part of GPIO configuration refactor
+    // if (doc.containsKey("diPin") && doc["diPin"].is<JsonArray>()) {
+    //     JsonArray diPinArray = doc["diPin"];
+    //     for (int i = 0; i < 8 && i < (int)diPinArray.size(); i++) {
+    //         config.diPin[i] = diPinArray[i] | 255;
+    //     }
+    //     Serial.println("[Config] Loaded diPin configuration");
+    // }
+    // if (doc.containsKey("doPin") && doc["doPin"].is<JsonArray>()) {
+    //     JsonArray doPinArray = doc["doPin"];
+    //     for (int i = 0; i < 8 && i < (int)doPinArray.size(); i++) {
+    //         config.doPin[i] = doPinArray[i] | 255;
+    //     }
+    //     Serial.println("[Config] Loaded doPin configuration");
+    // }
     
     // Load IO configuration
     if (doc.containsKey("diPullup") && doc["diPullup"].is<JsonArray>()) {
@@ -3164,7 +3524,7 @@ void loadConfig() {
         }
     }
     
-    Serial.println("Network configuration loaded successfully");
+    Serial.println("[Config] Network configuration loaded successfully from persistent storage");
     Serial.print("  DHCP: "); Serial.println(config.dhcpEnabled ? "enabled" : "disabled");
     Serial.print("  IP: "); Serial.print(config.ip[0]); Serial.print("."); Serial.print(config.ip[1]); Serial.print("."); Serial.print(config.ip[2]); Serial.print("."); Serial.println(config.ip[3]);
     Serial.print("  Hostname: "); Serial.println(config.hostname);
@@ -3199,6 +3559,18 @@ void saveConfig() {
         subnetArray.add(config.subnet[i]);
     }
     
+    // TODO: Save diPin and doPin arrays (new in version 8)
+    // These are for the dynamic GPIO pin allocation system
+    // Deferred: to be implemented as part of GPIO configuration refactor
+    // JsonArray diPinArray = doc.createNestedArray("diPin");
+    // for (int i = 0; i < 8; i++) {
+    //     diPinArray.add(config.diPin[i]);
+    // }
+    // JsonArray doPinArray = doc.createNestedArray("doPin");
+    // for (int i = 0; i < 8; i++) {
+    //     doPinArray.add(config.doPin[i]);
+    // }
+    
     // Save IO configuration
     JsonArray diPullupArray = doc.createNestedArray("diPullup");
     for (int i = 0; i < 8; i++) {
@@ -3228,29 +3600,45 @@ void saveConfig() {
     // Write to file
     File file = LittleFS.open(CONFIG_FILE, "w");
     if (!file) {
-        Serial.println("Failed to open config file for writing");
+        Serial.println("[Config] Failed to open config file for writing");
         return;
     }
     
-    if (serializeJson(doc, file) == 0) {
-        Serial.println("Failed to write config JSON");
-    } else {
-        Serial.println("=== Network Configuration Saved Successfully ===");
-        Serial.print("  IP: "); Serial.print(config.ip[0]); Serial.print(".");
-        Serial.print(config.ip[1]); Serial.print("."); Serial.print(config.ip[2]); Serial.print(".");
-        Serial.println(config.ip[3]);
-        Serial.print("  Gateway: "); Serial.print(config.gateway[0]); Serial.print(".");
-        Serial.print(config.gateway[1]); Serial.print("."); Serial.print(config.gateway[2]); Serial.print(".");
-        Serial.println(config.gateway[3]);
-        Serial.print("  Subnet: "); Serial.print(config.subnet[0]); Serial.print(".");
-        Serial.print(config.subnet[1]); Serial.print("."); Serial.print(config.subnet[2]); Serial.print(".");
-        Serial.println(config.subnet[3]);
-        Serial.print("  Modbus Port: "); Serial.println(config.modbusPort);
-        Serial.print("  Hostname: "); Serial.println(config.hostname);
-        Serial.println("============================================");
+    size_t bytesWritten = serializeJson(doc, file);
+    file.close();  // Close file first
+    
+    // CRITICAL: Force LittleFS to sync to flash - without this, data may be lost on power loss!
+    // The file is in RAM cache but not on flash yet. Ending and restarting LittleFS forces a flush.
+    LittleFS.end();
+    delay(50);  // Small delay for flash write to complete
+    LittleFS.begin();
+    
+    if (bytesWritten == 0) {
+        Serial.println("[Config] Failed to write config JSON to file");
+        return;
     }
     
-    file.close();
+    // CRITICAL: Ensure data is written to flash before returning
+    // Without this, data may be lost on power loss or reboot
+    // Use end() and begin() to force a filesystem sync on RP2040/LittleFS
+    LittleFS.end();
+    delay(100);
+    LittleFS.begin();
+    delay(100);
+    
+    Serial.println("=== Network Configuration Saved Successfully (Flushed to Flash) ===");
+    Serial.print("  IP: "); Serial.print(config.ip[0]); Serial.print(".");
+    Serial.print(config.ip[1]); Serial.print("."); Serial.print(config.ip[2]); Serial.print(".");
+    Serial.println(config.ip[3]);
+    Serial.print("  Gateway: "); Serial.print(config.gateway[0]); Serial.print(".");
+    Serial.print(config.gateway[1]); Serial.print("."); Serial.print(config.gateway[2]); Serial.print(".");
+    Serial.println(config.gateway[3]);
+    Serial.print("  Subnet: "); Serial.print(config.subnet[0]); Serial.print(".");
+    Serial.print(config.subnet[1]); Serial.print("."); Serial.print(config.subnet[2]); Serial.print(".");
+    Serial.println(config.subnet[3]);
+    Serial.print("  Modbus Port: "); Serial.println(config.modbusPort);
+    Serial.print("  Hostname: "); Serial.println(config.hostname);
+    Serial.println("================================================================");
 }
 
 void loadSensorConfig() {
@@ -3495,6 +3883,701 @@ void saveSensorConfig() {
     
     // After saving, re-apply presets to ensure runtime config is correct
     applySensorPresets();
+}
+
+// ==================== I/O Configuration Functions ====================
+
+// Load I/O configuration from JSON file
+void loadIOConfig() {
+    Serial.println("[IO Config] Loading I/O configuration...");
+    
+    // Initialize with defaults
+    ioConfig.version = 1;
+    ioConfig.pinCount = 0;
+    ioConfig.globalRuleCount = 0;
+    
+    if (!LittleFS.exists(IO_CONFIG_FILE)) {
+        Serial.println("[IO Config] No io_config.json found, using defaults");
+        return;
+    }
+    
+    File file = LittleFS.open(IO_CONFIG_FILE, "r");
+    if (!file) {
+        Serial.println("[IO Config] Failed to open io_config.json");
+        return;
+    }
+    
+    size_t size = file.size();
+    if (size == 0) {
+        file.close();
+        Serial.println("[IO Config] io_config.json is empty");
+        return;
+    }
+    
+    StaticJsonDocument<4096> doc;
+    DeserializationError err = deserializeJson(doc, file);
+    file.close();
+    
+    if (err) {
+        Serial.printf("[IO Config] JSON parse error: %s\n", err.c_str());
+        return;
+    }
+    
+    // Load version
+    if (doc.containsKey("version")) {
+        ioConfig.version = doc["version"].as<uint8_t>();
+    }
+    
+    // Load pin configurations
+    if (doc.containsKey("pins") && doc["pins"].is<JsonArray>()) {
+        JsonArray pinsArray = doc["pins"];
+        ioConfig.pinCount = 0;
+        
+        for (JsonObject pin : pinsArray) {
+            if (ioConfig.pinCount >= MAX_IO_PINS) break;
+            
+            IOPin& ioPin = ioConfig.pins[ioConfig.pinCount];
+            
+            ioPin.gpPin = pin["gpPin"] | 0xFF;
+            strlcpy(ioPin.label, pin["label"] | "", sizeof(ioPin.label));
+            ioPin.isInput = pin["mode"] == "input";
+            ioPin.pullup = pin["pullup"] | false;
+            ioPin.invert = pin["invert"] | false;
+            ioPin.latched = pin["latched"] | false;
+            ioPin.initialState = pin["initialState"] | false;
+            ioPin.modbusRegister = pin["modbusRegister"] | 0xFFFF;
+            ioPin.currentState = false;
+            ioPin.previousState = false;
+            ioPin.lastStateChange = 0;
+            ioPin.ruleCount = 0;
+            
+            // Load rules for this pin (max 5 per pin)
+            if (pin.containsKey("rules") && pin["rules"].is<JsonArray>()) {
+                JsonArray rulesArray = pin["rules"];
+                for (JsonObject rule : rulesArray) {
+                    if (ioPin.ruleCount >= 5) break;
+                    
+                    IORule& ioRule = ioPin.rules[ioPin.ruleCount];
+                    ioRule.id = rule["id"] | (uint8_t)ioPin.ruleCount;
+                    ioRule.enabled = rule["enabled"] | true;
+                    strlcpy(ioRule.description, rule["description"] | "", sizeof(ioRule.description));
+                    ioRule.priority = rule["priority"] | (uint8_t)ioPin.ruleCount;
+                    ioRule.lastExecutionTime = 0;
+                    
+                    // Load trigger (multi-condition support)
+                    if (rule.containsKey("trigger")) {
+                        JsonObject trigger = rule["trigger"];
+                        ioRule.trigger.lastTriggeredState = false;
+                        ioRule.trigger.conditionCount = 0;
+                        
+                        // Load conditions array (new format supports multiple conditions)
+                        if (trigger.containsKey("conditions") && trigger["conditions"].is<JsonArray>()) {
+                            JsonArray conditionsArray = trigger["conditions"];
+                            for (JsonObject cond : conditionsArray) {
+                                if (ioRule.trigger.conditionCount >= 3) break;
+                                
+                                ConditionClause& clause = ioRule.trigger.conditions[ioRule.trigger.conditionCount];
+                                clause.modbusRegister = cond["register"] | 0;
+                                clause.triggerValue = cond["value"] | 0;
+                                
+                                String condStr = cond["condition"] | "";
+                                if (condStr == "==") clause.condition = TriggerCondition::EQUAL;
+                                else if (condStr == "!=") clause.condition = TriggerCondition::NOT_EQUAL;
+                                else if (condStr == "<") clause.condition = TriggerCondition::LESS_THAN;
+                                else if (condStr == ">") clause.condition = TriggerCondition::GREATER_THAN;
+                                else if (condStr == "<=") clause.condition = TriggerCondition::LESS_EQUAL;
+                                else if (condStr == ">=") clause.condition = TriggerCondition::GREATER_EQUAL;
+                                else clause.condition = TriggerCondition::EQUAL;
+                                
+                                String opStr = cond["nextOperator"] | "AND";
+                                clause.nextOperator = (opStr == "OR") ? LogicOperator::OR : LogicOperator::AND;
+                                
+                                ioRule.trigger.conditionCount++;
+                            }
+                        } else if (trigger.containsKey("modbusRegister")) {
+                            // LEGACY: Support old single-condition format for backward compatibility
+                            ioRule.trigger.conditionCount = 1;
+                            ConditionClause& clause = ioRule.trigger.conditions[0];
+                            clause.modbusRegister = trigger["modbusRegister"] | 0;
+                            clause.triggerValue = trigger["value"] | 0;
+                            clause.nextOperator = LogicOperator::AND;
+                            
+                            String condStr = trigger["condition"] | "";
+                            if (condStr == "==") clause.condition = TriggerCondition::EQUAL;
+                            else if (condStr == "!=") clause.condition = TriggerCondition::NOT_EQUAL;
+                            else if (condStr == "<") clause.condition = TriggerCondition::LESS_THAN;
+                            else if (condStr == ">") clause.condition = TriggerCondition::GREATER_THAN;
+                            else if (condStr == "<=") clause.condition = TriggerCondition::LESS_EQUAL;
+                            else if (condStr == ">=") clause.condition = TriggerCondition::GREATER_EQUAL;
+                            else clause.condition = TriggerCondition::EQUAL;
+                        }
+                    }
+                    
+                    // Load action
+                    if (rule.containsKey("action")) {
+                        JsonObject action = rule["action"];
+                        String actionType = action["type"] | "";
+                        if (actionType == "set_output") ioRule.action.type = IOActionType::SET_OUTPUT;
+                        else if (actionType == "toggle_output") ioRule.action.type = IOActionType::TOGGLE_OUTPUT;
+                        else if (actionType == "pulse_output") ioRule.action.type = IOActionType::PULSE_OUTPUT;
+                        else if (actionType == "set_and_latch") ioRule.action.type = IOActionType::SET_AND_LATCH;
+                        else ioRule.action.type = IOActionType::SET_OUTPUT;
+                        
+                        ioRule.action.value = action["value"] | false;
+                        ioRule.action.pulseDurationMs = action["pulseDuration"] | 100;
+                    }
+                    
+                    ioPin.ruleCount++;
+                }
+            }
+            
+            ioConfig.pinCount++;
+        }
+    }
+    
+    Serial.printf("[IO Config] Loaded %d pins\n", ioConfig.pinCount);
+}
+
+// Save I/O configuration to JSON file
+void saveIOConfig() {
+    Serial.println("[IO Config] Saving I/O configuration...");
+    
+    StaticJsonDocument<4096> doc;
+    doc["version"] = ioConfig.version;
+    
+    JsonArray pinsArray = doc.createNestedArray("pins");
+    
+    for (int i = 0; i < ioConfig.pinCount; i++) {
+        IOPin& ioPin = ioConfig.pins[i];
+        JsonObject pinObj = pinsArray.createNestedObject();
+        
+        pinObj["gpPin"] = ioPin.gpPin;
+        pinObj["label"] = ioPin.label;
+        pinObj["mode"] = ioPin.isInput ? "input" : "output";
+        pinObj["pullup"] = ioPin.pullup;
+        pinObj["invert"] = ioPin.invert;
+        pinObj["latched"] = ioPin.latched;
+        pinObj["initialState"] = ioPin.initialState;
+        pinObj["modbusRegister"] = ioPin.modbusRegister;
+        
+        // Save rules
+        if (ioPin.ruleCount > 0) {
+            JsonArray rulesArray = pinObj.createNestedArray("rules");
+            for (int j = 0; j < ioPin.ruleCount; j++) {
+                IORule& ioRule = ioPin.rules[j];
+                JsonObject ruleObj = rulesArray.createNestedObject();
+                
+                ruleObj["id"] = ioRule.id;
+                ruleObj["enabled"] = ioRule.enabled;
+                ruleObj["description"] = ioRule.description;
+                ruleObj["priority"] = ioRule.priority;
+                
+                // Save multi-condition trigger
+                JsonObject triggerObj = ruleObj.createNestedObject("trigger");
+                JsonArray conditionsArray = triggerObj.createNestedArray("conditions");
+                
+                for (int c = 0; c < ioRule.trigger.conditionCount && c < 3; c++) {
+                    ConditionClause& clause = ioRule.trigger.conditions[c];
+                    JsonObject condObj = conditionsArray.createNestedObject();
+                    
+                    condObj["register"] = clause.modbusRegister;
+                    condObj["value"] = clause.triggerValue;
+                    
+                    const char* condStr;
+                    switch(clause.condition) {
+                        case TriggerCondition::EQUAL: condStr = "=="; break;
+                        case TriggerCondition::NOT_EQUAL: condStr = "!="; break;
+                        case TriggerCondition::LESS_THAN: condStr = "<"; break;
+                        case TriggerCondition::GREATER_THAN: condStr = ">"; break;
+                        case TriggerCondition::LESS_EQUAL: condStr = "<="; break;
+                        case TriggerCondition::GREATER_EQUAL: condStr = ">="; break;
+                        default: condStr = "==";
+                    }
+                    condObj["condition"] = condStr;
+                    condObj["nextOperator"] = (clause.nextOperator == LogicOperator::OR) ? "OR" : "AND";
+                }
+                
+                JsonObject actionObj = ruleObj.createNestedObject("action");
+                const char* actionTypeStr;
+                switch(ioRule.action.type) {
+                    case IOActionType::SET_OUTPUT: actionTypeStr = "set_output"; break;
+                    case IOActionType::TOGGLE_OUTPUT: actionTypeStr = "toggle_output"; break;
+                    case IOActionType::PULSE_OUTPUT: actionTypeStr = "pulse_output"; break;
+                    case IOActionType::SET_AND_LATCH: actionTypeStr = "set_and_latch"; break;
+                    default: actionTypeStr = "set_output";
+                }
+                actionObj["type"] = actionTypeStr;
+                actionObj["value"] = ioRule.action.value;
+                actionObj["pulseDuration"] = ioRule.action.pulseDurationMs;
+            }
+        }
+    }
+    
+    File file = LittleFS.open(IO_CONFIG_FILE, "w");
+    if (!file) {
+        Serial.println("[IO Config] Failed to open io_config.json for writing");
+        return;
+    }
+    
+    if (serializeJson(doc, file) == 0) {
+        Serial.println("[IO Config] Failed to serialize JSON");
+    } else {
+        Serial.println("[IO Config] Configuration saved successfully");
+    }
+    file.close();
+}
+
+// Apply I/O configuration to GPIO pins
+void applyIOConfigToPins() {
+    Serial.println("[IO Config] Applying pin configuration...");
+    
+    for (int i = 0; i < ioConfig.pinCount; i++) {
+        IOPin& ioPin = ioConfig.pins[i];
+        
+        // Skip reserved pins
+        bool isReserved = false;
+        for (uint8_t reserved : RESERVED_PINS) {
+            if (ioPin.gpPin == reserved) {
+                isReserved = true;
+                Serial.printf("[IO Config] Skipping reserved pin GP%d (Ethernet)\n", ioPin.gpPin);
+                break;
+            }
+        }
+        if (isReserved) continue;
+        
+        // Check if pin is used by a sensor (sensor config takes priority)
+        bool usedBySensor = false;
+        for (int s = 0; s < numConfiguredSensors; s++) {
+            if (configuredSensors[s].enabled) {
+                if (configuredSensors[s].sdaPin == ioPin.gpPin || 
+                    configuredSensors[s].sclPin == ioPin.gpPin ||
+                    configuredSensors[s].dataPin == ioPin.gpPin ||
+                    configuredSensors[s].uartTxPin == ioPin.gpPin ||
+                    configuredSensors[s].uartRxPin == ioPin.gpPin ||
+                    configuredSensors[s].analogPin == ioPin.gpPin ||
+                    configuredSensors[s].oneWirePin == ioPin.gpPin ||
+                    configuredSensors[s].digitalPin == ioPin.gpPin) {
+                    usedBySensor = true;
+                    Serial.printf("[IO Config] Skipping GP%d (used by sensor '%s')\n", ioPin.gpPin, configuredSensors[s].name);
+                    break;
+                }
+            }
+        }
+        if (usedBySensor) continue;
+        
+        // Configure GPIO mode and pullup
+        if (ioPin.isInput) {
+            pinMode(ioPin.gpPin, ioPin.pullup ? INPUT_PULLUP : INPUT);
+            Serial.printf("[IO Config] GP%d configured as INPUT %s\n", ioPin.gpPin, 
+                         ioPin.pullup ? "(pullup)" : "(no pullup)");
+        } else {
+            pinMode(ioPin.gpPin, OUTPUT);
+            // Set initial state from configuration
+            ioPin.currentState = ioPin.initialState;
+            digitalWrite(ioPin.gpPin, ioPin.invert ? !ioPin.currentState : ioPin.currentState);
+            Serial.printf("[IO Config] GP%d configured as OUTPUT (initial: %s)\n", ioPin.gpPin,
+                         ioPin.currentState ? "HIGH" : "LOW");
+        }
+    }
+    
+    Serial.println("[IO Config] Pin configuration complete");
+}
+
+// Check for external Modbus writes to holding registers and apply them to pins (coexistence model)
+void applyExternalModbusOverride() {
+    for (int i = 0; i < ioConfig.pinCount; i++) {
+        IOPin& ioPin = ioConfig.pins[i];
+        
+        // Skip input pins
+        if (ioPin.isInput) continue;
+        
+        // Check if pin has a configured Modbus register
+        if (ioPin.modbusRegister == 0) continue;
+        
+        // Read the holding register value from any connected client
+        int32_t holdingRegValue = 0;
+        bool regFound = false;
+        
+        for (int c = 0; c < MAX_MODBUS_CLIENTS; c++) {
+            if (modbusClients[c].connected) {
+                holdingRegValue = modbusClients[c].server.holdingRegisterRead(ioPin.modbusRegister);
+                regFound = true;
+                break;
+            }
+        }
+        
+        // If external value was written, handle locking/unlocking logic
+        if (regFound) {
+            // LOCK: External write of 0 → disable rules, lock the pin OFF
+            if (holdingRegValue == 0) {
+                if (!ioPin.externallyLocked) {
+                    ioPin.externallyLocked = true;
+                    ioPin.currentState = false;
+                    digitalWrite(ioPin.gpPin, ioPin.invert ? HIGH : LOW);
+                    Serial.printf("[External Override] GP%d LOCKED OFF via register %d (write 0)\n",
+                                 ioPin.gpPin, ioPin.modbusRegister);
+                }
+            }
+            // UNLOCK: Any non-zero write → unlock and restore rule control
+            else if (ioPin.externallyLocked) {
+                ioPin.externallyLocked = false;
+                Serial.printf("[External Override] GP%d UNLOCKED via register %d (write %ld)\n",
+                             ioPin.gpPin, ioPin.modbusRegister, holdingRegValue);
+                // Don't apply the non-zero value; just unlock and let rules take over next cycle
+            }
+        }
+    }
+}
+
+// Helper function to read a register value from internal sources
+// Used by both rule evaluation and status reporting for consistency
+int32_t readRegisterValue(uint16_t registerNum) {
+    int32_t registerValue = 0;
+    
+    // Analog inputs (registers 0-2) from ADC
+    if (registerNum < 3) {
+        return ioStatus.aIn[registerNum];
+    }
+    
+    // Check if this register belongs to a configured sensor
+    for (int s = 0; s < numConfiguredSensors; s++) {
+        if (!configuredSensors[s].enabled) continue;
+        
+        // Check primary register
+        if (configuredSensors[s].modbusRegister == registerNum) {
+            return configuredSensors[s].modbusValue;
+        }
+        
+        // Check secondary register (B)
+        if (configuredSensors[s].modbusRegister + 1 == registerNum) {
+            return configuredSensors[s].modbusValueB;
+        }
+        
+        // Check tertiary register (C)
+        if (configuredSensors[s].modbusRegister + 2 == registerNum) {
+            return configuredSensors[s].modbusValueC;
+        }
+    }
+    
+    // If not a sensor register, try coil/output range
+    if (registerNum >= 100 && registerNum <= 200) {
+        for (int client = 0; client < MAX_MODBUS_CLIENTS; client++) {
+            if (modbusClients[client].connected) {
+                return modbusClients[client].server.coilRead(registerNum) ? 1 : 0;
+            }
+        }
+    }
+    
+    // Fall back to Modbus client if still not found
+    for (int client = 0; client < MAX_MODBUS_CLIENTS; client++) {
+        if (modbusClients[client].connected) {
+            return modbusClients[client].server.inputRegisterRead(registerNum);
+        }
+    }
+    
+    return 0;  // Default if not found
+}
+
+// Evaluate and execute I/O automation rules
+void evaluateIOAutomationRules() {
+    uint32_t now = millis();
+    
+    static bool firstRuleEval = true;
+    if (firstRuleEval) {
+        Serial.printf("\n\n[IO Rule] ⚠️  FIRST RULE EVALUATION CYCLE\n");
+        Serial.printf("[IO Rule] Configured sensors:\n");
+        for (int s = 0; s < numConfiguredSensors; s++) {
+            if (configuredSensors[s].enabled) {
+                Serial.printf("[IO Rule]   - '%s' (type=%s) reg %d = %ld\n",
+                             configuredSensors[s].name, configuredSensors[s].type,
+                             configuredSensors[s].modbusRegister, configuredSensors[s].modbusValue);
+            }
+        }
+        Serial.printf("[IO Rule] IO pins with rules:\n");
+        for (int i = 0; i < ioConfig.pinCount; i++) {
+            if (ioConfig.pins[i].ruleCount > 0) {
+                Serial.printf("[IO Rule]   - GP%d (currentState=%s, initialState=%s) - %d rules\n",
+                             ioConfig.pins[i].gpPin,
+                             ioConfig.pins[i].currentState ? "HIGH" : "LOW",
+                             ioConfig.pins[i].initialState ? "HIGH" : "LOW",
+                             ioConfig.pins[i].ruleCount);
+            }
+        }
+        firstRuleEval = false;
+        Serial.printf("[IO Rule] ========================================\n\n");
+    }
+    
+    // First check for external Modbus overrides (coexistence model)
+    // If SCADA writes to holding register, that takes priority over rules
+    applyExternalModbusOverride();
+    
+    for (int i = 0; i < ioConfig.pinCount; i++) {
+        IOPin& ioPin = ioConfig.pins[i];
+        
+        // Skip input pins, pins without rules, or externally locked pins
+        if (ioPin.isInput || ioPin.ruleCount == 0 || ioPin.externallyLocked) continue;
+        
+        // Sort rules by priority (lower = higher priority)
+        for (int j = 0; j < ioPin.ruleCount - 1; j++) {
+            for (int k = j + 1; k < ioPin.ruleCount; k++) {
+                if (ioPin.rules[k].priority < ioPin.rules[j].priority) {
+                    IORule temp = ioPin.rules[j];
+                    ioPin.rules[j] = ioPin.rules[k];
+                    ioPin.rules[k] = temp;
+                }
+            }
+        }
+        
+        // Evaluate each rule in priority order
+        for (int j = 0; j < ioPin.ruleCount; j++) {
+            IORule& rule = ioPin.rules[j];
+            if (!rule.enabled) continue;
+            
+            Serial.printf("\n[IO Rule] ========== EVALUATING RULE %d for GP%d ==========\n", j, ioPin.gpPin);
+            
+            // ===== MULTI-CONDITION EVALUATION =====
+            // Evaluate all conditions and combine with AND/OR logic
+            bool conditionsMet = true;  // Start with true for AND logic
+            bool firstCondition = true;
+            int32_t lastRegisterValue = 0;  // For logging FOLLOW_CONDITION
+            
+            for (int c = 0; c < rule.trigger.conditionCount && c < 3; c++) {
+                ConditionClause& clause = rule.trigger.conditions[c];
+                
+                Serial.printf("[IO Rule] Condition %d: Register %d %s %ld ?\n", c,
+                             clause.modbusRegister,
+                             clause.condition == TriggerCondition::EQUAL ? "==" :
+                             clause.condition == TriggerCondition::GREATER_THAN ? ">" :
+                             clause.condition == TriggerCondition::LESS_THAN ? "<" :
+                             clause.condition == TriggerCondition::NOT_EQUAL ? "!=" :
+                             clause.condition == TriggerCondition::GREATER_EQUAL ? ">=" :
+                             clause.condition == TriggerCondition::LESS_EQUAL ? "<=" : "?",
+                             clause.triggerValue);
+                
+                // Read register value using helper function
+                int32_t registerValue = readRegisterValue(clause.modbusRegister);
+                Serial.printf("[IO Rule]   → Read register %d = %ld\n", clause.modbusRegister, registerValue);
+                
+                // Save first register value for logging
+                if (c == 0) {
+                    lastRegisterValue = registerValue;
+                }
+                
+                
+                // Evaluate this condition
+                bool clauseTriggered = false;
+                switch(clause.condition) {
+                    case TriggerCondition::EQUAL:
+                        clauseTriggered = (registerValue == clause.triggerValue);
+                        break;
+                    case TriggerCondition::NOT_EQUAL:
+                        clauseTriggered = (registerValue != clause.triggerValue);
+                        break;
+                    case TriggerCondition::LESS_THAN:
+                        clauseTriggered = (registerValue < clause.triggerValue);
+                        break;
+                    case TriggerCondition::GREATER_THAN:
+                        clauseTriggered = (registerValue > clause.triggerValue);
+                        break;
+                    case TriggerCondition::LESS_EQUAL:
+                        clauseTriggered = (registerValue <= clause.triggerValue);
+                        break;
+                    case TriggerCondition::GREATER_EQUAL:
+                        clauseTriggered = (registerValue >= clause.triggerValue);
+                        break;
+                }
+                
+                Serial.printf("[IO Rule]   → Result: %ld %s %ld = %s\n",
+                             registerValue,
+                             clause.condition == TriggerCondition::EQUAL ? "==" :
+                             clause.condition == TriggerCondition::GREATER_THAN ? ">" :
+                             clause.condition == TriggerCondition::LESS_THAN ? "<" :
+                             clause.condition == TriggerCondition::NOT_EQUAL ? "!=" :
+                             clause.condition == TriggerCondition::GREATER_EQUAL ? ">=" :
+                             clause.condition == TriggerCondition::LESS_EQUAL ? "<=" : "?",
+                             clause.triggerValue,
+                             clauseTriggered ? "TRUE" : "FALSE");
+                
+                // Combine with previous conditions using AND/OR logic
+                if (firstCondition) {
+                    conditionsMet = clauseTriggered;
+                    firstCondition = false;
+                } else {
+                    // Use the operator from the PREVIOUS clause
+                    LogicOperator op = rule.trigger.conditions[c-1].nextOperator;
+                    if (op == LogicOperator::AND) {
+                        conditionsMet = conditionsMet && clauseTriggered;
+                    } else {  // OR
+                        conditionsMet = conditionsMet || clauseTriggered;
+                    }
+                }
+                
+                Serial.printf("[IO Rule DEBUG] GP%d Rule '%s' Condition %d: Reg%d %s %ld = %s\n",
+                             ioPin.gpPin, rule.description, c, clause.modbusRegister,
+                             clause.condition == TriggerCondition::EQUAL ? "==" :
+                             clause.condition == TriggerCondition::GREATER_THAN ? ">" : "?",
+                             clause.triggerValue, clauseTriggered ? "TRUE" : "FALSE");
+            }
+            
+            bool triggered = conditionsMet;
+            
+            // ===== ACTION EXECUTION =====
+            // For FOLLOW_CONDITION, always update the pin state (don't wait for edge)
+            if (rule.action.type == IOActionType::FOLLOW_CONDITION) {
+                // FOLLOW_CONDITION: Set pin = condition result
+                bool newState = triggered;
+                Serial.printf("[IO Rule] FOLLOW_CONDITION ACTION: Condition is %s → Pin should be %s\n",
+                             triggered ? "MET" : "NOT MET", newState ? "HIGH" : "LOW");
+                
+                if (ioPin.currentState != newState) {
+                    ioPin.currentState = newState;
+                    digitalWrite(ioPin.gpPin, ioPin.invert ? !ioPin.currentState : ioPin.currentState);
+                    Serial.printf("[IO Rule]   ✓ GPIO STATE CHANGED: GP%d = %s (physical: %s)\n",
+                                 ioPin.gpPin, ioPin.currentState ? "HIGH" : "LOW",
+                                 (ioPin.invert ? !ioPin.currentState : ioPin.currentState) ? "HIGH" : "LOW");
+                } else {
+                    Serial.printf("[IO Rule]   - No GPIO change needed for GP%d (already %s)\n",
+                                 ioPin.gpPin, ioPin.currentState ? "HIGH" : "LOW");
+                }
+                
+                // ALWAYS write state to Modbus coil for continuous monitoring
+                if (ioPin.modbusRegister > 0 && ioPin.modbusRegister <= 200) {
+                    // Write to global coil store (persists across connections)
+                    uint16_t coilValue = ioPin.currentState ? 1 : 0;
+                    globalCoilState[ioPin.modbusRegister] = coilValue;
+                    Serial.printf("[IO Rule]   ✓ COIL STORED: Register %d = %d (global store)\n",
+                                 ioPin.modbusRegister, coilValue);
+                    
+                    // Also write to all connected clients
+                    bool coilWritten = false;
+                    for (int c = 0; c < MAX_MODBUS_CLIENTS; c++) {
+                        if (modbusClients[c].connected) {
+                            modbusClients[c].server.coilWrite(ioPin.modbusRegister, coilValue);
+                            Serial.printf("[IO Rule]   ✓ COIL WRITE: Register %d = %d (client %d)\n",
+                                         ioPin.modbusRegister, coilValue, c);
+                            coilWritten = true;
+                            break;
+                        }
+                    }
+                    if (!coilWritten) {
+                        Serial.printf("[IO Rule]   ⚠ NO COIL WRITE: No Modbus client connected for GP%d reg %d\n",
+                                     ioPin.gpPin, ioPin.modbusRegister);
+                    }
+                } else {
+                    Serial.printf("[IO Rule]   ⚠ NO COIL: GP%d has no Modbus register configured\n", ioPin.gpPin);
+                }
+            }
+            // For other action types, only trigger on rising edge
+            else if (triggered && !rule.trigger.lastTriggeredState) {
+                rule.trigger.lastTriggeredState = true;
+                rule.lastExecutionTime = now;
+                
+                Serial.printf("\n[IO Rule] ✓✓✓ RULE FIRED (RISING EDGE): GP%d Rule %d '%s' - Condition went from FALSE→TRUE\n",
+                             ioPin.gpPin, j, rule.description);
+                
+                switch(rule.action.type) {
+                    case IOActionType::SET_OUTPUT:
+                        ioPin.currentState = rule.action.value;
+                        digitalWrite(ioPin.gpPin, ioPin.invert ? !ioPin.currentState : ioPin.currentState);
+                        Serial.printf("[IO Rule] SET_OUTPUT: Rule '%s' GP%d = %s\n", 
+                                     rule.description, ioPin.gpPin, ioPin.currentState ? "HIGH" : "LOW");
+                        
+                        // Write to Modbus coil
+                        if (ioPin.modbusRegister > 0 && ioPin.modbusRegister <= 200) {
+                            // Write to global coil store (persists across connections)
+                            globalCoilState[ioPin.modbusRegister] = ioPin.currentState ? 1 : 0;
+                            Serial.printf("[IO Rule]   ✓ SET_OUTPUT: Stored coil %d = %d in global store\n",
+                                         ioPin.modbusRegister, ioPin.currentState ? 1 : 0);
+                            
+                            // Also write to all connected clients
+                            bool coilWritten = false;
+                            for (int c = 0; c < MAX_MODBUS_CLIENTS; c++) {
+                                if (modbusClients[c].connected) {
+                                    modbusClients[c].server.coilWrite(ioPin.modbusRegister, ioPin.currentState ? 1 : 0);
+                                    Serial.printf("[IO Rule]   ✓ SET_OUTPUT: Wrote coil %d = %d for GP%d (client %d)\n",
+                                                 ioPin.modbusRegister, ioPin.currentState ? 1 : 0, ioPin.gpPin, c);
+                                    coilWritten = true;
+                                    break;
+                                }
+                            }
+                            if (!coilWritten) {
+                                Serial.printf("[IO Rule]   ⚠ SET_OUTPUT: WARNING - No Modbus client connected, but coil stored globally\n");
+                            }
+                        } else {
+                            Serial.printf("[IO Rule]   ⚠ SET_OUTPUT: WARNING - Invalid or no Modbus register for GP%d\n", ioPin.gpPin);
+                        }
+                        break;
+                    
+                    case IOActionType::TOGGLE_OUTPUT:
+                        ioPin.currentState = !ioPin.currentState;
+                        digitalWrite(ioPin.gpPin, ioPin.invert ? !ioPin.currentState : ioPin.currentState);
+                        Serial.printf("[IO Rule] TOGGLE_OUTPUT: Rule '%s' GP%d toggled to %s\n",
+                                     rule.description, ioPin.gpPin, ioPin.currentState ? "HIGH" : "LOW");
+                        if (ioPin.modbusRegister > 0) {
+                            for (int c = 0; c < MAX_MODBUS_CLIENTS; c++) {
+                                if (modbusClients[c].connected) {
+                                    modbusClients[c].server.coilWrite(ioPin.modbusRegister, ioPin.currentState ? 1 : 0);
+                                    Serial.printf("[IO Rule] TOGGLE_OUTPUT: Wrote coil %d = %d for GP%d\n",
+                                                 ioPin.modbusRegister, ioPin.currentState ? 1 : 0, ioPin.gpPin);
+                                    break;
+                                }
+                            }
+                        }
+                        break;
+                    
+                    case IOActionType::PULSE_OUTPUT:
+                        digitalWrite(ioPin.gpPin, ioPin.invert ? LOW : HIGH);
+                        Serial.printf("[IO Rule] PULSE_OUTPUT: Rule '%s' GP%d pulsed for %ldms\n",
+                                     rule.description, ioPin.gpPin, rule.action.pulseDurationMs);
+                        break;
+                    
+                    case IOActionType::SET_AND_LATCH:
+                        ioPin.currentState = rule.action.value;
+                        ioPin.latched = true;
+                        digitalWrite(ioPin.gpPin, ioPin.invert ? !ioPin.currentState : ioPin.currentState);
+                        Serial.printf("[IO Rule] SET_AND_LATCH: Rule '%s' GP%d latched to %s\n",
+                                     rule.description, ioPin.gpPin, ioPin.currentState ? "HIGH" : "LOW");
+                        
+                        // Write to Modbus coil
+                        if (ioPin.modbusRegister > 0 && ioPin.modbusRegister <= 200) {
+                            // Write to global coil store (persists across connections)
+                            globalCoilState[ioPin.modbusRegister] = ioPin.currentState ? 1 : 0;
+                            Serial.printf("[IO Rule]   ✓ SET_AND_LATCH: Stored coil %d = %d in global store\n",
+                                         ioPin.modbusRegister, ioPin.currentState ? 1 : 0);
+                            
+                            // Also write to all connected clients
+                            bool coilWritten = false;
+                            for (int c = 0; c < MAX_MODBUS_CLIENTS; c++) {
+                                if (modbusClients[c].connected) {
+                                    modbusClients[c].server.coilWrite(ioPin.modbusRegister, ioPin.currentState ? 1 : 0);
+                                    Serial.printf("[IO Rule]   ✓ SET_AND_LATCH: Wrote coil %d = %d for GP%d (client %d)\n",
+                                                 ioPin.modbusRegister, ioPin.currentState ? 1 : 0, ioPin.gpPin, c);
+                                    coilWritten = true;
+                                    break;
+                                }
+                            }
+                            if (!coilWritten) {
+                                Serial.printf("[IO Rule]   ⚠ SET_AND_LATCH: WARNING - No Modbus client connected, but coil stored globally\n");
+                            }
+                        } else {
+                            Serial.printf("[IO Rule]   ⚠ SET_AND_LATCH: WARNING - Invalid or no Modbus register for GP%d\n", ioPin.gpPin);
+                        }
+                        break;
+                    
+                    default:
+                        break;
+                }
+            }
+            
+            // Reset trigger state when condition is no longer met (for edge-triggered actions)
+            if (!triggered && rule.trigger.lastTriggeredState && rule.action.type != IOActionType::FOLLOW_CONDITION) {
+                rule.trigger.lastTriggeredState = false;
+                Serial.printf("[IO Rule] ✗✗✗ CONDITION RESET (FALLING EDGE): GP%d Rule %d - Condition went from TRUE→FALSE\n",
+                             ioPin.gpPin, j);
+                rule.trigger.lastTriggeredState = false;
+            }
+        }
+    }
 }
 
 // Reset all latched inputs
@@ -3879,6 +4962,7 @@ void handleSimpleHTTP() {
 // Forward declarations
 void sendJSONPinMap(WiFiClient& client);
 void sendJSONSensorPinStatus(WiFiClient& client);
+void sendJSONRulesStatus(WiFiClient& client);
 void sendJSON(WiFiClient& client, String json); // Ensure sendJSON is declared
 
 // Implementation: Return available pins for each protocol
@@ -3920,6 +5004,122 @@ void sendJSONSensorPinStatus(WiFiClient& client) {
     serializeJson(doc, response);
     sendJSON(client, response);
 }
+
+// Implementation: Return rule evaluation status for debugging
+void sendJSONRulesStatus(WiFiClient& client) {
+    StaticJsonDocument<8192> doc;
+    JsonArray pinsArray = doc.createNestedArray("pins");
+    
+    for (int i = 0; i < ioConfig.pinCount; i++) {
+        IOPin& pin = ioConfig.pins[i];
+        if (pin.ruleCount == 0) continue;  // Skip pins without rules
+        
+        JsonObject pinObj = pinsArray.createNestedObject();
+        pinObj["gpPin"] = pin.gpPin;
+        pinObj["label"] = pin.label;
+        pinObj["currentState"] = pin.currentState;
+        
+        JsonArray rulesArray = pinObj.createNestedArray("rules");
+        
+        for (int j = 0; j < pin.ruleCount; j++) {
+            IORule& rule = pin.rules[j];
+            JsonObject ruleObj = rulesArray.createNestedObject();
+            
+            ruleObj["id"] = rule.id;
+            ruleObj["enabled"] = rule.enabled;
+            ruleObj["description"] = rule.description;
+            
+            // Evaluate multi-conditions
+            JsonArray conditionsArray = ruleObj.createNestedArray("conditions");
+            bool allConditionsMet = true;
+            bool firstCondition = true;
+            
+            for (int c = 0; c < rule.trigger.conditionCount && c < 3; c++) {
+                ConditionClause& clause = rule.trigger.conditions[c];
+                JsonObject condObj = conditionsArray.createNestedObject();
+                
+                // Read register value using helper function (same as rule evaluation)
+                int32_t registerValue = readRegisterValue(clause.modbusRegister);
+                
+                // Build condition string
+                const char* condStr;
+                switch(clause.condition) {
+                    case TriggerCondition::EQUAL: condStr = "=="; break;
+                    case TriggerCondition::NOT_EQUAL: condStr = "!="; break;
+                    case TriggerCondition::LESS_THAN: condStr = "<"; break;
+                    case TriggerCondition::GREATER_THAN: condStr = ">"; break;
+                    case TriggerCondition::LESS_EQUAL: condStr = "<="; break;
+                    case TriggerCondition::GREATER_EQUAL: condStr = ">="; break;
+                    default: condStr = "==";
+                }
+                
+                // Evaluate this condition
+                bool clauseMet = false;
+                switch(clause.condition) {
+                    case TriggerCondition::EQUAL:
+                        clauseMet = (registerValue == clause.triggerValue);
+                        break;
+                    case TriggerCondition::NOT_EQUAL:
+                        clauseMet = (registerValue != clause.triggerValue);
+                        break;
+                    case TriggerCondition::LESS_THAN:
+                        clauseMet = (registerValue < clause.triggerValue);
+                        break;
+                    case TriggerCondition::GREATER_THAN:
+                        clauseMet = (registerValue > clause.triggerValue);
+                        break;
+                    case TriggerCondition::LESS_EQUAL:
+                        clauseMet = (registerValue <= clause.triggerValue);
+                        break;
+                    case TriggerCondition::GREATER_EQUAL:
+                        clauseMet = (registerValue >= clause.triggerValue);
+                        break;
+                }
+                
+                // Combine with previous conditions
+                if (firstCondition) {
+                    allConditionsMet = clauseMet;
+                    firstCondition = false;
+                } else {
+                    LogicOperator op = rule.trigger.conditions[c-1].nextOperator;
+                    if (op == LogicOperator::AND) {
+                        allConditionsMet = allConditionsMet && clauseMet;
+                    } else {
+                        allConditionsMet = allConditionsMet || clauseMet;
+                    }
+                }
+                
+                condObj["register"] = clause.modbusRegister;
+                condObj["condition"] = condStr;
+                condObj["triggerValue"] = clause.triggerValue;
+                condObj["actualValue"] = registerValue;
+                condObj["clauseMet"] = clauseMet;
+                condObj["nextOperator"] = (clause.nextOperator == LogicOperator::OR) ? "OR" : "AND";
+            }
+            
+            ruleObj["allConditionsMet"] = allConditionsMet;
+            
+            const char* actionTypeStr;
+            switch(rule.action.type) {
+                case IOActionType::SET_OUTPUT: actionTypeStr = "set_output"; break;
+                case IOActionType::TOGGLE_OUTPUT: actionTypeStr = "toggle_output"; break;
+                case IOActionType::PULSE_OUTPUT: actionTypeStr = "pulse_output"; break;
+                case IOActionType::SET_AND_LATCH: actionTypeStr = "set_and_latch"; break;
+                case IOActionType::FOLLOW_CONDITION: actionTypeStr = "follow_condition"; break;
+                default: actionTypeStr = "set_output";
+            }
+            
+            JsonObject actionObj = ruleObj.createNestedObject("action");
+            actionObj["type"] = actionTypeStr;
+            actionObj["value"] = rule.action.value;
+        }
+    }
+    
+    String response;
+    serializeJson(doc, response);
+    sendJSON(client, response);
+}
+
 void sendJSON(WiFiClient& client, String json); // Ensure sendJSON is declared
 
 void sendJSONConfig(WiFiClient& client) {
@@ -4013,6 +5213,8 @@ void routeRequest(WiFiClient& client, String method, String path, String body) {
             Serial.println("DEBUG: sendJSONIOStatus completed");
         } else if (path == "/ioconfig") {
             sendJSONIOConfig(client);
+        } else if (path == "/io/config") {
+            sendJSONIOConfig(client);
         } else if (path == "/sensors/config") {
             sendJSONSensorConfig(client);
         } else if (path == "/sensors/data") {
@@ -4021,6 +5223,8 @@ void routeRequest(WiFiClient& client, String method, String path, String body) {
             sendJSONPinMap(client);
         } else if (path == "/api/sensors/status") {
             sendJSONSensorPinStatus(client);
+        } else if (path == "/api/rules/status") {
+            sendJSONRulesStatus(client);
         } else if (path == "/terminal/logs") {
             // Send terminal buffer for bus traffic monitoring
             StaticJsonDocument<2048> terminalDoc;
@@ -4058,7 +5262,11 @@ void routeRequest(WiFiClient& client, String method, String path, String body) {
             handlePOSTConfig(client, body);
         } else if (path == "/setoutput") {
             handlePOSTSetOutput(client, body);
+        } else if (path == "/api/pin/unlock") {
+            handlePOSTUnlockPin(client, body);
         } else if (path == "/ioconfig") {
+            handlePOSTIOConfig(client, body);
+        } else if (path == "/io/config") {
             handlePOSTIOConfig(client, body);
         } else if (path == "/reset-latches") {
             handlePOSTResetLatches(client);
@@ -4265,32 +5473,80 @@ void sendJSONIOStatus(WiFiClient& client) {
 }
 
 void sendJSONIOConfig(WiFiClient& client) {
-    StaticJsonDocument<1024> doc;
-
-    JsonArray diPullupArray = doc.createNestedArray("diPullup");
-    JsonArray diInvertArray = doc.createNestedArray("diInvert");
-    JsonArray diLatchArray = doc.createNestedArray("diLatch");
-    JsonArray diStateArray = doc.createNestedArray("diState");      // Display: digital input states
-    JsonArray diLatchedArray = doc.createNestedArray("diLatched");  // Display: latched states
-
-    for (int i = 0; i < 8; i++) {
-        diPullupArray.add(config.diPullup[i]);
-        diInvertArray.add(config.diInvert[i]);
-        diLatchArray.add(config.diLatch[i]);
-        diStateArray.add(ioStatus.dInRaw[i]);        // Actual pin state (HIGH/LOW)
-        diLatchedArray.add(ioStatus.dInLatched[i]);  // Latched state (true/false)
+    // Send the dynamic IO configuration from ioConfig struct
+    StaticJsonDocument<4096> doc;
+    
+    doc["version"] = ioConfig.version;
+    
+    JsonArray pinsArray = doc.createNestedArray("pins");
+    
+    for (int i = 0; i < ioConfig.pinCount; i++) {
+        IOPin& pin = ioConfig.pins[i];
+        JsonObject pinObj = pinsArray.createNestedObject();
+        
+        pinObj["gpPin"] = pin.gpPin;
+        pinObj["label"] = pin.label;
+        pinObj["mode"] = pin.isInput ? "input" : "output";
+        pinObj["pullup"] = pin.pullup;
+        pinObj["invert"] = pin.invert;
+        pinObj["latched"] = pin.latched;
+        pinObj["modbusRegister"] = pin.modbusRegister;
+        pinObj["currentState"] = pin.currentState;
+        
+        // Include rules if any
+        if (pin.ruleCount > 0) {
+            JsonArray rulesArray = pinObj.createNestedArray("rules");
+            for (int j = 0; j < pin.ruleCount; j++) {
+                IORule& rule = pin.rules[j];
+                JsonObject ruleObj = rulesArray.createNestedObject();
+                
+                ruleObj["id"] = rule.id;
+                ruleObj["enabled"] = rule.enabled;
+                ruleObj["description"] = rule.description;
+                ruleObj["priority"] = rule.priority;
+                
+                // Serialize multi-condition trigger
+                JsonObject triggerObj = ruleObj.createNestedObject("trigger");
+                JsonArray conditionsArray = triggerObj.createNestedArray("conditions");
+                
+                for (int c = 0; c < rule.trigger.conditionCount && c < 3; c++) {
+                    ConditionClause& clause = rule.trigger.conditions[c];
+                    JsonObject condObj = conditionsArray.createNestedObject();
+                    
+                    condObj["register"] = clause.modbusRegister;
+                    condObj["value"] = clause.triggerValue;
+                    
+                    const char* condStr;
+                    switch(clause.condition) {
+                        case TriggerCondition::EQUAL: condStr = "=="; break;
+                        case TriggerCondition::NOT_EQUAL: condStr = "!="; break;
+                        case TriggerCondition::LESS_THAN: condStr = "<"; break;
+                        case TriggerCondition::GREATER_THAN: condStr = ">"; break;
+                        case TriggerCondition::LESS_EQUAL: condStr = "<="; break;
+                        case TriggerCondition::GREATER_EQUAL: condStr = ">="; break;
+                        default: condStr = "==";
+                    }
+                    condObj["condition"] = condStr;
+                    condObj["nextOperator"] = (clause.nextOperator == LogicOperator::OR) ? "OR" : "AND";
+                }
+                
+                JsonObject actionObj = ruleObj.createNestedObject("action");
+                const char* actionTypeStr;
+                switch(rule.action.type) {
+                    case IOActionType::SET_OUTPUT: actionTypeStr = "set_output"; break;
+                    case IOActionType::TOGGLE_OUTPUT: actionTypeStr = "toggle_output"; break;
+                    case IOActionType::PULSE_OUTPUT: actionTypeStr = "pulse_output"; break;
+                    case IOActionType::SET_AND_LATCH: actionTypeStr = "set_and_latch"; break;
+                    case IOActionType::FOLLOW_CONDITION: actionTypeStr = "follow_condition"; break;
+                    default: actionTypeStr = "set_output";
+                }
+                actionObj["type"] = actionTypeStr;
+                actionObj["value"] = rule.action.value;
+                actionObj["pulseDuration"] = rule.action.pulseDurationMs;
+            }
+        }
     }
-
-    JsonArray doInvertArray = doc.createNestedArray("doInvert");
-    JsonArray doInitialStateArray = doc.createNestedArray("doInitialState");
-    JsonArray doStateArray = doc.createNestedArray("doState");      // Display: digital output states
-
-    for (int i = 0; i < 8; i++) {
-        doInvertArray.add(config.doInvert[i]);
-        doInitialStateArray.add(config.doInitialState[i]);
-        doStateArray.add(ioStatus.dOut[i]);          // Actual output state (HIGH/LOW)
-    }
-
+    
     String response;
     serializeJson(doc, response);
     sendJSON(client, response);
@@ -5058,6 +6314,27 @@ void handlePOSTSetOutput(WiFiClient& client, String body) {
         ioStatus.dOut[outputIndex] = state;
         digitalWrite(DIGITAL_OUTPUTS[outputIndex], config.doInvert[outputIndex] ? !state : state);
         
+        // Find the corresponding IOPin and update it
+        uint8_t gpPin = DIGITAL_OUTPUTS[outputIndex];
+        for (int i = 0; i < ioConfig.pinCount; i++) {
+            if (ioConfig.pins[i].gpPin == gpPin) {
+                ioConfig.pins[i].currentState = (state == 1);
+                
+                // Write state to Modbus holding register (state monitoring)
+                if (ioConfig.pins[i].modbusRegister > 0 && connectedClients > 0) {
+                    for (int c = 0; c < MAX_MODBUS_CLIENTS; c++) {
+                        if (modbusClients[c].connected) {
+                            modbusClients[c].server.holdingRegisterWrite(ioConfig.pins[i].modbusRegister, state ? 1 : 0);
+                            Serial.printf("[Web UI] GP%d state written to Modbus register %d: %d\n", 
+                                         gpPin, ioConfig.pins[i].modbusRegister, state ? 1 : 0);
+                            break;
+                        }
+                    }
+                }
+                break;
+            }
+        }
+        
         client.println("HTTP/1.1 200 OK");
         client.println("Content-Type: application/json");
         client.println("Connection: close");
@@ -5070,26 +6347,192 @@ void handlePOSTSetOutput(WiFiClient& client, String body) {
     }
 }
 
-void handlePOSTIOConfig(WiFiClient& client, String body) {
-    StaticJsonDocument<1024> doc;
+void handlePOSTUnlockPin(WiFiClient& client, String body) {
+    StaticJsonDocument<256> doc;
     DeserializationError error = deserializeJson(doc, body);
     
-    if (!error) {
-        // Update IO configuration
-        if (doc.containsKey("diPullup")) {
-            JsonArray array = doc["diPullup"];
-            for (int i = 0; i < 8 && i < array.size(); i++) {
-                config.diPullup[i] = array[i];
-            }
-        }
-        saveConfig();
+    if (error) {
+        client.println("HTTP/1.1 400 Bad Request");
+        client.println("Content-Type: application/json");
+        client.println("Connection: close");
+        client.println();
+        client.println("{\"success\":false,\"error\":\"Invalid JSON\"}");
+        return;
     }
     
-    client.println("HTTP/1.1 200 OK");
-    client.println("Content-Type: application/json");
-    client.println("Connection: close");
-    client.println();
-    client.println("{\"success\":true}");
+    if (!doc.containsKey("gpPin")) {
+        client.println("HTTP/1.1 400 Bad Request");
+        client.println("Content-Type: application/json");
+        client.println("Connection: close");
+        client.println();
+        client.println("{\"success\":false,\"error\":\"Missing gpPin\"}");
+        return;
+    }
+    
+    uint8_t gpPin = doc["gpPin"];
+    bool found = false;
+    
+    // Find and unlock the pin
+    for (int i = 0; i < ioConfig.pinCount; i++) {
+        if (ioConfig.pins[i].gpPin == gpPin) {
+            ioConfig.pins[i].externallyLocked = false;
+            found = true;
+            Serial.printf("[Web UI] GP%d UNLOCKED via web interface\n", gpPin);
+            
+            // Send success response
+            StaticJsonDocument<128> respDoc;
+            respDoc["success"] = true;
+            respDoc["gpPin"] = gpPin;
+            respDoc["message"] = "Pin unlocked, automation rules reactivated";
+            
+            String response;
+            serializeJson(respDoc, response);
+            sendJSON(client, response);
+            return;
+        }
+    }
+    
+    if (!found) {
+        client.println("HTTP/1.1 404 Not Found");
+        client.println("Content-Type: application/json");
+        client.println("Connection: close");
+        client.println();
+        client.println("{\"success\":false,\"error\":\"Pin not found\"}");
+        return;
+    }
+}
+
+void handlePOSTIOConfig(WiFiClient& client, String body) {
+    Serial.printf("[IO Config] POST received - Body length: %d bytes\n", body.length());
+    
+    StaticJsonDocument<8192> doc;
+    DeserializationError error = deserializeJson(doc, body);
+    
+    if (error) {
+        Serial.printf("[IO Config] JSON parse error: %s\n", error.c_str());
+        client.println("HTTP/1.1 400 Bad Request");
+        client.println("Content-Type: application/json");
+        client.println("Connection: close");
+        client.println();
+        client.println("{\"success\":false,\"error\":\"Invalid JSON\"}");
+        return;
+    }
+    
+    // Update IO configuration from received JSON
+    if (doc.containsKey("pins") && doc["pins"].is<JsonArray>()) {
+        JsonArray pinsArray = doc["pins"];
+        ioConfig.pinCount = 0;
+        
+        for (JsonObject pin : pinsArray) {
+            if (ioConfig.pinCount >= MAX_IO_PINS) break;
+            
+            IOPin& ioPin = ioConfig.pins[ioConfig.pinCount];
+            
+            ioPin.gpPin = pin["gpPin"] | 0xFF;
+            strlcpy(ioPin.label, pin["label"] | "", sizeof(ioPin.label));
+            ioPin.isInput = pin["mode"] == "input";
+            ioPin.pullup = pin["pullup"] | false;
+            ioPin.invert = pin["invert"] | false;
+            ioPin.latched = pin["latched"] | false;
+            ioPin.modbusRegister = pin["modbusRegister"] | 0xFFFF;
+            ioPin.currentState = pin["currentState"] | false;
+            ioPin.ruleCount = 0;
+            
+            // Deserialize rules if present
+            if (pin.containsKey("rules") && pin["rules"].is<JsonArray>()) {
+                JsonArray rulesArray = pin["rules"];
+                for (JsonObject rule : rulesArray) {
+                    if (ioPin.ruleCount >= 5) break;  // Max 5 rules per pin (see IOPin.rules[5] in sys_init.h)
+                    
+                    IORule& ioRule = ioPin.rules[ioPin.ruleCount];
+                    
+                    ioRule.id = rule["id"] | 1;
+                    ioRule.enabled = rule["enabled"] | true;
+                    strlcpy(ioRule.description, rule["description"] | "", sizeof(ioRule.description));
+                    ioRule.priority = rule["priority"] | 1;
+                    ioRule.trigger.conditionCount = 0;
+                    
+                    // Deserialize trigger conditions
+                    if (rule.containsKey("trigger") && rule["trigger"].is<JsonObject>()) {
+                        JsonObject trigger = rule["trigger"];
+                        if (trigger.containsKey("conditions") && trigger["conditions"].is<JsonArray>()) {
+                            JsonArray conditionsArray = trigger["conditions"];
+                            for (JsonObject condition : conditionsArray) {
+                                if (ioRule.trigger.conditionCount >= 3) break;
+                                
+                                ConditionClause& clause = ioRule.trigger.conditions[ioRule.trigger.conditionCount];
+                                
+                                clause.modbusRegister = condition["register"] | 0;
+                                clause.triggerValue = condition["value"] | 0;
+                                
+                                const char* condStr = condition["condition"] | "==";
+                                if (strcmp(condStr, "==") == 0) clause.condition = TriggerCondition::EQUAL;
+                                else if (strcmp(condStr, "!=") == 0) clause.condition = TriggerCondition::NOT_EQUAL;
+                                else if (strcmp(condStr, "<") == 0) clause.condition = TriggerCondition::LESS_THAN;
+                                else if (strcmp(condStr, ">") == 0) clause.condition = TriggerCondition::GREATER_THAN;
+                                else if (strcmp(condStr, "<=") == 0) clause.condition = TriggerCondition::LESS_EQUAL;
+                                else if (strcmp(condStr, ">=") == 0) clause.condition = TriggerCondition::GREATER_EQUAL;
+                                else clause.condition = TriggerCondition::EQUAL;
+                                
+                                const char* opStr = condition["nextOperator"] | "AND";
+                                clause.nextOperator = (strcmp(opStr, "OR") == 0) ? LogicOperator::OR : LogicOperator::AND;
+                                
+                                ioRule.trigger.conditionCount++;
+                            }
+                        }
+                    }
+                    
+                    ioRule.trigger.lastTriggeredState = false;
+                    ioRule.lastExecutionTime = 0;
+                    
+                    // Deserialize action
+                    if (rule.containsKey("action") && rule["action"].is<JsonObject>()) {
+                        JsonObject action = rule["action"];
+                        const char* actionTypeStr = action["type"] | "set_output";
+                        
+                        if (strcmp(actionTypeStr, "set_output") == 0) ioRule.action.type = IOActionType::SET_OUTPUT;
+                        else if (strcmp(actionTypeStr, "toggle_output") == 0) ioRule.action.type = IOActionType::TOGGLE_OUTPUT;
+                        else if (strcmp(actionTypeStr, "pulse_output") == 0) ioRule.action.type = IOActionType::PULSE_OUTPUT;
+                        else if (strcmp(actionTypeStr, "set_and_latch") == 0) ioRule.action.type = IOActionType::SET_AND_LATCH;
+                        else if (strcmp(actionTypeStr, "follow_condition") == 0) ioRule.action.type = IOActionType::FOLLOW_CONDITION;
+                        else ioRule.action.type = IOActionType::SET_OUTPUT;
+                        
+                        ioRule.action.value = action["value"] | false;
+                        ioRule.action.pulseDurationMs = action["pulseDuration"] | 100;
+                    }
+                    
+                    ioPin.ruleCount++;
+                    Serial.printf("[IO Config] Loaded rule: GP%d rule %d with %d conditions\n",
+                                 ioPin.gpPin, ioPin.ruleCount, ioRule.trigger.conditionCount);
+                }
+            }
+            
+            Serial.printf("[IO Config] Updated GP%d: %s (%s, pullup=%d, invert=%d, rules=%d)\n",
+                         ioPin.gpPin, ioPin.label, ioPin.isInput ? "IN" : "OUT",
+                         ioPin.pullup, ioPin.invert, ioPin.ruleCount);
+            
+            ioConfig.pinCount++;
+        }
+        
+        // Save and apply configuration
+        saveIOConfig();
+        applyIOConfigToPins();
+        
+        Serial.printf("[IO Config] Saved %d pins\n", ioConfig.pinCount);
+        
+        client.println("HTTP/1.1 200 OK");
+        client.println("Content-Type: application/json");
+        client.println("Connection: close");
+        client.println();
+        client.println("{\"success\":true,\"message\":\"IO configuration updated\"}");
+    } else {
+        Serial.println("[IO Config] Missing or invalid pins array");
+        client.println("HTTP/1.1 400 Bad Request");
+        client.println("Content-Type: application/json");
+        client.println("Connection: close");
+        client.println();
+        client.println("{\"success\":false,\"error\":\"Missing pins array\"}");
+    }
 }
 
 void handlePOSTResetLatches(WiFiClient& client) {
