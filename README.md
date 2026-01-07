@@ -36,6 +36,7 @@ For complete pinout and electrical specs, see **[Pinout & Interfaces](docs/hardw
 ## Documentation
 
 ### Core Documentation
+- **[Agent Implementation Guide](AGENTS.md)** – Quick-start for AI coding agents
 - **[Contributing Guide](CONTRIBUTING.md)** – Development standards and workflow
 - **[Project Roadmap](ROADMAP.md)** – Strategic phases and feature planning
 - **[Changelog](CHANGELOG.md)** – Version history and release notes
