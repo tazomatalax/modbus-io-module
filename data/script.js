@@ -4857,23 +4857,19 @@ window.confirmAddPin = function confirmAddPin() {
 // Poll rule status to show real-time condition feedback
 window.updateRuleStatus = function updateRuleStatus() {
     fetch('/api/rules/status')
-        .then(r => r.json())
+        .then(r => {
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            return r.json();
+        })
         .then(data => {
-            console.log('[updateRuleStatus] Response:', data);
             if (data.pins) {
                 for (const pin of data.pins) {
-                    console.log(`[updateRuleStatus] Processing pin GP${pin.gpPin}, rules:`, pin.rules);
                     for (let idx = 0; idx < (pin.rules || []).length; idx++) {
                         const rule = pin.rules[idx];
                         const statusElementId = `status-${pin.gpPin}-${idx}`;
                         const statusSpan = document.getElementById(statusElementId);
                         
-                        console.log(`[updateRuleStatus] Looking for element #${statusElementId}, found:`, statusSpan ? 'YES' : 'NO');
-                        
-                        if (!statusSpan) {
-                            console.log(`[updateRuleStatus] Skipping - element not found`);
-                            continue;
-                        }
+                        if (!statusSpan) continue;
                         
                         // Get overall condition met status
                         const allConditionsMet = rule.allConditionsMet ? true : false;
@@ -4884,8 +4880,6 @@ window.updateRuleStatus = function updateRuleStatus() {
                             actualValue = rule.conditions[0].actualValue !== undefined ? 
                                           rule.conditions[0].actualValue : '?';
                         }
-                        
-                        console.log(`[updateRuleStatus] Rule ${idx} - allConditionsMet: ${allConditionsMet}, actualValue: ${actualValue}`);
                         
                         if (allConditionsMet) {
                             // All conditions met - GREEN (condition is TRUE)
@@ -4904,20 +4898,30 @@ window.updateRuleStatus = function updateRuleStatus() {
                 }
             }
         })
-        .catch(err => console.error('Error fetching rule status:', err));
+        .catch(err => {
+            // Silent catch - don't spam console on connection issues
+        });
     
-    // Poll every 1 second
+    // Poll every 3 seconds to reduce load on device
     if (window.ruleStatusInterval) clearTimeout(window.ruleStatusInterval);
-    window.ruleStatusInterval = setTimeout(window.updateRuleStatus, 1000);
+    window.ruleStatusInterval = setTimeout(window.updateRuleStatus, 3000);
 };
 
 // Update pin state checkboxes from live /iostatus data
 window.updatePinStatesDisplay = function updatePinStatesDisplay() {
     fetch('/ioconfig')
-        .then(r => r.json())
+        .then(r => {
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            return r.json();
+        })
         .then(config => {
             // Now fetch the live status
-            return fetch('/iostatus').then(r => r.json()).then(status => ({ config, status }));
+            return fetch('/iostatus')
+                .then(r => {
+                    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                    return r.json();
+                })
+                .then(status => ({ config, status }));
         })
         .then(({ config, status }) => {
             if (config.pins) {
@@ -4936,16 +4940,16 @@ window.updatePinStatesDisplay = function updatePinStatesDisplay() {
                         stateSpan.classList.remove('on', 'off');
                         stateSpan.classList.add(pin.currentState ? 'on' : 'off');
                         stateSpan.textContent = pin.currentState ? '🟢 HIGH' : '🔴 LOW';
-                        
-                        console.log(`[updatePinStates] GP${pin.gpPin} = ${pin.currentState ? 'HIGH' : 'LOW'}`);
                     }
                 }
             }
         })
-        .catch(err => console.error('Error fetching pin states:', err));
+        .catch(err => {
+            // Silent catch - don't spam console on connection issues
+        });
     
-    // Poll every 500ms for faster visual updates
+    // Poll every 3 seconds to reduce load on device
     if (window.pinStateInterval) clearTimeout(window.pinStateInterval);
-    window.pinStateInterval = setTimeout(window.updatePinStatesDisplay, 500);
+    window.pinStateInterval = setTimeout(window.updatePinStatesDisplay, 3000);
 };
 
