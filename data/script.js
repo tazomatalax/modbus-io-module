@@ -197,6 +197,23 @@ window.loadNetworkConfig = function loadNetworkConfig() {
                 document.getElementById('hostname').value = data.hostname || 'modbus-io-module';
                 document.getElementById('modbus_port').value = data.modbusPort || 502;
                 
+                // Update header display elements
+                const currentIP = document.getElementById('current-ip');
+                const currentHostname = document.getElementById('current-hostname');
+                const currentModbusPort = document.getElementById('current-modbus-port');
+                const modbusStatusText = document.getElementById('modbus-status-text');
+                const modbusStatus = document.getElementById('modbus-status');
+                const deviceType = document.getElementById('device-type');
+                const firmwareVersion = document.getElementById('firmware-version');
+                
+                if (currentIP) currentIP.textContent = data.localIP || formatIPArray(data.ip) || 'Unknown';
+                if (currentHostname) currentHostname.textContent = data.hostname || 'modbus-io-module';
+                if (currentModbusPort) currentModbusPort.textContent = data.modbusPort || 502;
+                if (modbusStatusText) modbusStatusText.textContent = data.status === 'connected' ? 'Connected' : 'Disconnected';
+                if (modbusStatus) modbusStatus.className = 'status-indicator ' + (data.status === 'connected' ? 'connected' : 'disconnected');
+                if (deviceType) deviceType.textContent = 'W5500-EVB-PoE-Pico';
+                if (firmwareVersion) firmwareVersion.textContent = 'v1.0';
+                
                 showToast('Network configuration loaded', 'success');
             })
             .catch(error => {

@@ -3036,13 +3036,53 @@ void loop() {
     
     // Print stats every 5 seconds
     if (now - lastStats >= 5000) {
-        Serial.print("Loop frequency: ");
+        Serial.println("\n========================================");
+        Serial.print("Device IP: ");
+        Serial.println(eth.localIP());
+        Serial.print("Hostname: ");
+        Serial.println(config.hostname);
+        Serial.println("----------------------------------------");
+        Serial.print("Loop: ");
         Serial.print(loopCount / 5);
-        Serial.println(" Hz");
-        Serial.print("Web requests/5s: ");
-        Serial.println(webRequests);
-        Serial.print("Free RAM: ");
-        Serial.println(rp2040.getFreeHeap());
+        Serial.print(" Hz | RAM: ");
+        Serial.print(rp2040.getFreeHeap());
+        Serial.print(" | Web: ");
+        Serial.print(webRequests);
+        Serial.print("/5s | Modbus clients: ");
+        Serial.println(connectedClients);
+        
+        // Print sensor readings
+        if (numConfiguredSensors > 0) {
+            Serial.println("----------------------------------------");
+            Serial.println("SENSOR READINGS:");
+            for (int i = 0; i < numConfiguredSensors; i++) {
+                if (configuredSensors[i].enabled) {
+                    Serial.printf("  [%d] %s: ", i, configuredSensors[i].name);
+                    
+                    // Check sensor type for multi-value display
+                    if (strcmp(configuredSensors[i].type, "LIS3DH") == 0) {
+                        Serial.printf("X=%.1f Y=%.1f Z=%.1f mg (Reg %d-%d)\n",
+                            configuredSensors[i].calibratedValue,
+                            configuredSensors[i].calibratedValueB,
+                            configuredSensors[i].calibratedValueC,
+                            configuredSensors[i].modbusRegister,
+                            configuredSensors[i].modbusRegister + 2);
+                    } else if (strcmp(configuredSensors[i].type, "SHT30") == 0) {
+                        Serial.printf("T=%.1f°C H=%.1f%% (Reg %d-%d)\n",
+                            configuredSensors[i].calibratedValue,
+                            configuredSensors[i].calibratedValueB,
+                            configuredSensors[i].modbusRegister,
+                            configuredSensors[i].modbusRegister + 1);
+                    } else {
+                        Serial.printf("%.2f (Reg %d)\n",
+                            configuredSensors[i].calibratedValue,
+                            configuredSensors[i].modbusRegister);
+                    }
+                }
+            }
+        }
+        Serial.println("========================================\n");
+        
         loopCount = 0;
         webRequests = 0;
         lastStats = now;
@@ -4890,9 +4930,6 @@ void handleSimpleHTTP() {
             lastDebugPrint = millis();
         }
         
-        Serial.print("Client Connected - Free RAM: ");
-        Serial.println(rp2040.getFreeHeap());
-        
         String request = "";
         String method = "";
         String path = "";
@@ -4925,7 +4962,6 @@ void handleSimpleHTTP() {
                     }
                 }
                 request = line;
-                Serial.println("HTTP Request: " + method + " " + path);
             }
             if (line.startsWith("Content-Length:")) {
                 contentLength = line.substring(15).toInt();
@@ -4950,12 +4986,9 @@ void handleSimpleHTTP() {
         logNetworkTransaction("HTTP", "RX", localIP, remoteIP, requestData);
 
         // Route the request to existing handlers
-        Serial.println("Routing request...");
-        Serial.println("DEBUG: Method='" + method + "' Path='" + path + "'");
         routeRequest(client, method, path, body);
         delay(50);  // Give W5500 time to buffer response
         client.stop();
-        Serial.println("=== WEB CLIENT DISCONNECTED ===");
     }
 }
 
@@ -5162,10 +5195,6 @@ void sendJSONConfig(WiFiClient& client) {
 }
 
 void routeRequest(WiFiClient& client, String method, String path, String body) {
-    Serial.println("=== ROUTING REQUEST ===");
-    Serial.println("Method: " + method);
-    Serial.println("Path: " + path);
-    
     // Handle OPTIONS requests for CORS preflight
     if (method == "OPTIONS") {
         client.println("HTTP/1.1 200 OK");
@@ -5178,15 +5207,11 @@ void routeRequest(WiFiClient& client, String method, String path, String body) {
     }
     
     // Simple routing to existing handler functions
-    Serial.printf("[HTTP] Method: %s, Path: '%s' (length: %d)\n", method.c_str(), path.c_str(), path.length());
-    
     if (method == "GET") {
         if (path == "/" || path == "/index.html") {
-            Serial.println("Serving embedded index.html");
             sendFile(client, "/index.html", "text/html");
         } else if (path == "/test") {
             // Simple test page
-            Serial.println("Serving test page");
             client.println("HTTP/1.1 200 OK");
             client.println("Content-Type: text/html");
             client.println("Connection: close");
@@ -5208,9 +5233,7 @@ void routeRequest(WiFiClient& client, String method, String path, String body) {
         } else if (path == "/config") {
             sendJSONConfig(client);
         } else if (path == "/iostatus") {
-            Serial.println("DEBUG: Routing to sendJSONIOStatus");
             sendJSONIOStatus(client);
-            Serial.println("DEBUG: sendJSONIOStatus completed");
         } else if (path == "/ioconfig") {
             sendJSONIOConfig(client);
         } else if (path == "/io/config") {
@@ -5323,24 +5346,6 @@ void sendFile(WiFiClient& client, String filename, String contentType) {
 }
 
 void sendJSONIOStatus(WiFiClient& client) {
-    static unsigned long lastCall = 0;
-    unsigned long now = millis();
-    
-    Serial.println("DEBUG: sendJSONIOStatus called");
-    
-    // Debug timing between calls
-    if (lastCall != 0) {
-        unsigned long delta = now - lastCall;
-        if (delta > 1000) { // Log if more than 1 second between calls
-            Serial.print("IOStatus delay: ");
-            Serial.print(delta);
-            Serial.println("ms");
-        }
-    }
-    lastCall = now;
-    
-    Serial.printf("[DEBUG] Generating IOStatus JSON for %d sensors\n", numConfiguredSensors);
-    
     if (!client.connected()) {
         Serial.println("ERROR: Client not connected in sendJSONIOStatus");
         return;
