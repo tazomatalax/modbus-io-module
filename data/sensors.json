@@ -22,5 +22,53 @@
       "scale_z": 1.0
     }
   },
-  "sensors": []
+  "sensors": [
+    {
+      "enabled": true,
+      "name": "IMU - Centrifuge Vibration",
+      "type": "LIS3DH",
+      "protocol": "I2C",
+      "i2cAddress": 24,
+      "updateInterval": 1000,
+      "modbusRegister": 10,
+      "calibrationOffset": 0.0,
+      "calibrationSlope": 1.0,
+      "calibrationOffsetB": 0.0,
+      "calibrationSlopeB": 1.0,
+      "calibrationOffsetC": 0.0,
+      "calibrationSlopeC": 1.0
+    },
+    {
+      "enabled": true,
+      "name": "pH Sensor - Dewatering",
+      "type": "EZO_PH",
+      "protocol": "I2C",
+      "i2cAddress": 72,
+      "updateInterval": 5000,
+      "modbusRegister": 30,
+      "calibrationOffset": 0.0,
+      "calibrationSlope": 1.0
+    },
+    {
+      "enabled": true,
+      "name": "Conductivity Sensor - Dewatering",
+      "type": "EZO_EC",
+      "protocol": "I2C",
+      "i2cAddress": 100,
+      "updateInterval": 5000,
+      "modbusRegister": 31,
+      "calibrationOffset": 0.0,
+      "calibrationSlope": 1.0
+    },
+    {
+      "enabled": false,
+      "name": "Flow Meter - Dewatering",
+      "type": "RS485_MODBUS",
+      "protocol": "RS485",
+      "slaveAddress": 1,
+      "baudRate": 9600,
+      "modbusRegister": 40,
+      "_note": "RS485 flow meter - placeholder, not yet connected"
+    }
+  ]
 }

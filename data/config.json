@@ -2,9 +2,9 @@
   "_comment": "This file is ONLY used as initial filesystem template. Runtime config is persisted to /config.json on device. To apply changes permanently, modify this file and run 'platformio run --target uploadfs'. User changes via web UI are saved to /config.json and persist across reboots.",
   "version": 8,
   "dhcpEnabled": true,
-  "ip": [192, 168, 100, 15],
+  "ip": [192, 168, 100, 14],
   "gateway": [192, 168, 100, 1],
   "subnet": [255, 255, 255, 0],
   "modbusPort": 502,
-  "hostname": "modbus-io-pico6"
+  "hostname": "modbus-io-pico5"
 }
