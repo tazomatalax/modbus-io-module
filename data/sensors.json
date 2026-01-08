@@ -22,5 +22,49 @@
       "scale_z": 1.0
     }
   },
-  "sensors": []
+  "sensors": [
+    {
+      "enabled": true,
+      "name": "IMU1 - Hot Tank Vibration",
+      "type": "LIS3DH",
+      "protocol": "I2C",
+      "i2cAddress": 24,
+      "pollingIntervalMs": 1000,
+      "modbusRegister": 10,
+      "calibration": {
+        "offset_x": 0.0,
+        "offset_y": 0.0,
+        "offset_z": 0.0,
+        "scale_x": 1.0,
+        "scale_y": 1.0,
+        "scale_z": 1.0
+      }
+    },
+    {
+      "enabled": true,
+      "name": "IMU2 - Tank Outlet Vibration",
+      "type": "LIS3DH",
+      "protocol": "I2C",
+      "i2cAddress": 25,
+      "pollingIntervalMs": 1000,
+      "modbusRegister": 13,
+      "calibration": {
+        "offset_x": 0.0,
+        "offset_y": 0.0,
+        "offset_z": 0.0,
+        "scale_x": 1.0,
+        "scale_y": 1.0,
+        "scale_z": 1.0
+      }
+    },
+    {
+      "enabled": true,
+      "name": "Temperature Sensor - Hot Tank",
+      "type": "DS18B20",
+      "protocol": "OneWire",
+      "pin": 26,
+      "pollingIntervalMs": 2000,
+      "modbusRegister": 20
+    }
+  ]
 }
