@@ -1,3 +1,31 @@
+// Track sensor values and timestamps for stale detection
+// Key: sensor name, Value: { lastValue, lastChangeTime }
+const sensorValueTracker = new Map();
+
+// Check if sensor data is stale (no value change in last 15 seconds)
+function isSensorDataStale(sensor) {
+    const key = sensor.name || sensor.type;
+    const currentValue = sensor.raw_value;
+    const now = Date.now();
+    
+    if (!sensorValueTracker.has(key)) {
+        sensorValueTracker.set(key, { lastValue: currentValue, lastChangeTime: now });
+        return false; // First reading, not stale
+    }
+    
+    const tracker = sensorValueTracker.get(key);
+    
+    // If value changed, update tracker
+    if (tracker.lastValue !== currentValue) {
+        tracker.lastValue = currentValue;
+        tracker.lastChangeTime = now;
+        return false;
+    }
+    
+    // Value hasn't changed - check how long
+    return (now - tracker.lastChangeTime) > 15000; // Stale after 15 seconds of no change
+}
+
 // Simple toast notification function
 window.showToast = function showToast(message, type = 'info', persistent = false, duration = 3000) {
     let toastContainer = document.getElementById('toast-container');
@@ -2660,9 +2688,8 @@ function updateProtocolSensorFlow(protocol, sensors, containerId) {
         const sensorDiv = document.createElement('div');
         sensorDiv.className = 'sensor-dataflow-item';
         
-        const now = Date.now();
-        const lastRead = sensor.last_read_time || 0;
-        const staleData = (now - lastRead) > 10000; // More than 10 seconds old
+        // Use browser-side tracking for stale detection instead of firmware timestamp
+        const staleData = isSensorDataStale(sensor);
         
         let rawDataDisplay = '';
         if (sensor.raw_i2c_data && sensor.raw_i2c_data.length > 0) {
