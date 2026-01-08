@@ -1,26 +1,31 @@
 {
-  "_comment": "Sensor Configuration - Empty by default. Add sensors via web UI.",
+  "_comment": "Pico 2 - Motor on Cold Process Tank - Sensor Configuration",
   "_architecture": "This file is synced to device LittleFS /sensors.json",
-  "_registers_note": "Any register 0-65535 can be used. Registers 0-2 are also used for analog inputs if enabled.",
-  "_example_spi_lis3dh": {
-    "description": "SPI LIS3DH example - Copy this structure to 'sensors' array to add accelerometer via SPI",
-    "enabled": false,
-    "name": "Accelerometer (SPI)",
-    "type": "LIS3DH_SPI",
-    "protocol": "SPI",
-    "spiChipSelect": 22,
-    "spiBus": "hw0",
-    "spiFrequency": 500000,
-    "pollingIntervalMs": 1000,
-    "modbusRegister": 10,
-    "calibration": {
-      "offset_x": 0.0,
-      "offset_y": 0.0,
-      "offset_z": 0.0,
-      "scale_x": 1.0,
-      "scale_y": 1.0,
-      "scale_z": 1.0
-    }
+  "_registers_note": "Registers: IMU X/Y/Z = 10-12",
+  "_node_info": {
+    "node_id": 2,
+    "location": "Motor on cold process tank",
+    "ip_address": "192.168.100.11",
+    "sensors_connected": ["IMU"]
   },
-  "sensors": []
+  "sensors": [
+    {
+      "enabled": true,
+      "name": "Motor Vibration",
+      "type": "LIS3DH",
+      "protocol": "I2C",
+      "i2cAddress": 24,
+      "sdaPin": 4,
+      "sclPin": 5,
+      "updateInterval": 1000,
+      "modbusRegister": 10,
+      "calibrationOffset": 0.0,
+      "calibrationSlope": 1.0,
+      "calibrationOffsetB": 0.0,
+      "calibrationSlopeB": 1.0,
+      "calibrationOffsetC": 0.0,
+      "calibrationSlopeC": 1.0,
+      "_note": "LIS3DH at 0x18, outputs X/Y/Z to registers 10-12"
+    }
+  ]
 }
