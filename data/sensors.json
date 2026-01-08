@@ -62,7 +62,7 @@
       "name": "Temperature Sensor - Hot Tank",
       "type": "DS18B20",
       "protocol": "OneWire",
-      "pin": 26,
+      "pin": 28,
       "pollingIntervalMs": 2000,
       "modbusRegister": 20
     }
