@@ -61,10 +61,13 @@
       "enabled": true,
       "name": "Temperature Sensor - Hot Tank",
       "type": "DS18B20",
-      "protocol": "OneWire",
-      "pin": 28,
-      "pollingIntervalMs": 2000,
-      "modbusRegister": 20
+      "protocol": "One-Wire",
+      "oneWirePin": 28,
+      "updateInterval": 2000,
+      "oneWireConversionTime": 750,
+      "modbusRegister": 20,
+      "calibrationOffset": 0.0,
+      "calibrationSlope": 1.0
     }
   ]
 }
