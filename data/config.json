@@ -3,7 +3,7 @@
   "_architecture": "This file is synced to device LittleFS /config.json",
   "version": 8,
   "dhcpEnabled": true,
-  "ip": [192, 168, 100, 12],
+  "ip": [192, 168, 100, 30],
   "gateway": [192, 168, 100, 1],
   "subnet": [255, 255, 255, 0],
   "modbusPort": 502,

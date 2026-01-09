@@ -1,11 +1,11 @@
 {
   "_comment": "Pico 3 - Cold Buffer Tank - Sensor Configuration",
   "_architecture": "This file is synced to device LittleFS /sensors.json",
-  "_registers_note": "Registers: IMU1 X/Y/Z = 10-12, IMU2 X/Y/Z = 13-15, Weight = 20",
+  "_registers_note": "AgriSea Register Scheme: Temp=1-10, Vibration=11-30, pH/EC=51-60, Weight=61-70, Flow=71-80",
   "_node_info": {
     "node_id": 3,
     "location": "Cold buffer tank",
-    "ip_address": "192.168.100.12",
+    "ip_address": "192.168.100.30",
     "sensors_connected": ["IMU1", "IMU2"],
     "sensors_planned": ["Weight"]
   },
@@ -19,14 +19,14 @@
       "sdaPin": 4,
       "sclPin": 5,
       "updateInterval": 1000,
-      "modbusRegister": 10,
+      "modbusRegister": 11,
       "calibrationOffset": 0.0,
       "calibrationSlope": 1.0,
       "calibrationOffsetB": 0.0,
       "calibrationSlopeB": 1.0,
       "calibrationOffsetC": 0.0,
       "calibrationSlopeC": 1.0,
-      "_note": "LIS3DH at 0x18, outputs X/Y/Z to registers 10-12"
+      "_note": "LIS3DH at 0x18, outputs X/Y/Z to registers 11-13"
     },
     {
       "enabled": true,
@@ -37,14 +37,14 @@
       "sdaPin": 4,
       "sclPin": 5,
       "updateInterval": 1000,
-      "modbusRegister": 13,
+      "modbusRegister": 14,
       "calibrationOffset": 0.0,
       "calibrationSlope": 1.0,
       "calibrationOffsetB": 0.0,
       "calibrationSlopeB": 1.0,
       "calibrationOffsetC": 0.0,
       "calibrationSlopeC": 1.0,
-      "_note": "LIS3DH at 0x19, outputs X/Y/Z to registers 13-15"
+      "_note": "LIS3DH at 0x19, outputs X/Y/Z to registers 14-16"
     },
     {
       "enabled": false,
@@ -54,7 +54,7 @@
       "dataPin": 0,
       "clockPin": 1,
       "updateInterval": 500,
-      "modbusRegister": 20,
+      "modbusRegister": 61,
       "calibrationOffset": 0.0,
       "calibrationSlope": 1.0,
       "_note": "Weight sensor - disabled until connected. Update dataPin/clockPin as needed."
