@@ -1,7 +1,7 @@
 {
   "_comment": "Pico 1 - Cold Buffer to Cold Process Pump - Sensor Configuration",
   "_architecture": "This file is synced to device LittleFS /sensors.json",
-  "_registers_note": "Registers: IMU X/Y/Z = 10-12, Flow = 20, Temp = 25",
+  "_registers_note": "AgriSea Register Scheme: Temp=1-10, Vibration=11-30, pH/EC=51-60, Weight=61-70, Flow=71-80",
   "_node_info": {
     "node_id": 1,
     "location": "Cold buffer to cold process pump",
@@ -19,14 +19,14 @@
       "sdaPin": 4,
       "sclPin": 5,
       "updateInterval": 1000,
-      "modbusRegister": 10,
+      "modbusRegister": 11,
       "calibrationOffset": 0.0,
       "calibrationSlope": 1.0,
       "calibrationOffsetB": 0.0,
       "calibrationSlopeB": 1.0,
       "calibrationOffsetC": 0.0,
       "calibrationSlopeC": 1.0,
-      "_note": "LIS3DH at 0x18, outputs X/Y/Z to registers 10-12"
+      "_note": "LIS3DH at 0x19, outputs X/Y/Z to registers 11-13"
     },
     {
       "enabled": true,
@@ -36,7 +36,7 @@
       "oneWirePin": 28,
       "updateInterval": 2000,
       "oneWireConversionTime": 750,
-      "modbusRegister": 25,
+      "modbusRegister": 1,
       "calibrationOffset": 0.0,
       "calibrationSlope": 1.0
     },
@@ -53,7 +53,7 @@
       "registerAddress": 1,
       "registerCount": 10,
       "updateInterval": 1000,
-      "modbusRegister": 20,
+      "modbusRegister": 71,
       "calibrationOffset": 0.0,
       "calibrationSlope": 1.0,
       "_note": "Flow meter - disabled until baud rate confirmed. Try 9600, 19200, 38400 if not working."
