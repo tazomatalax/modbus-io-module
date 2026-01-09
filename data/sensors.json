@@ -1,12 +1,12 @@
 {
   "_comment": "Pico 6 - Hot Buffer Tank - Sensor Configuration",
   "_architecture": "This file is synced to device LittleFS /sensors.json",
-  "_registers_note": "Registers: IMU1 X/Y/Z = 10-12, IMU2 X/Y/Z = 13-15, Temp = 20, Weight = 25",
+  "_registers_note": "AgriSea Register Scheme: Temp=1-10, Vibration=11-30, pH/EC=51-60, Weight=61-70, Flow=71-80",
   "_node_info": {
     "node_id": 6,
     "location": "Hot buffer tank",
-    "ip_address": "192.168.100.15",
-    "sensors_connected": ["IMU1", "IMU2", "Temperature"],
+    "ip_address": "192.168.100.60",
+    "sensors_connected": ["IMU1", "IMU2", "Temperature x3"],
     "sensors_planned": ["Weight"]
   },
   "sensors": [
@@ -19,13 +19,14 @@
       "sdaPin": 4,
       "sclPin": 5,
       "updateInterval": 1000,
-      "modbusRegister": 10,
+      "modbusRegister": 11,
       "calibrationOffset": 0.0,
       "calibrationSlope": 1.0,
       "calibrationOffsetB": 0.0,
       "calibrationSlopeB": 1.0,
       "calibrationOffsetC": 0.0,
-      "calibrationSlopeC": 1.0
+      "calibrationSlopeC": 1.0,
+      "_note": "LIS3DH at 0x18, outputs X/Y/Z to registers 11-13"
     },
     {
       "enabled": true,
@@ -36,47 +37,48 @@
       "sdaPin": 4,
       "sclPin": 5,
       "updateInterval": 1000,
-      "modbusRegister": 13,
+      "modbusRegister": 14,
       "calibrationOffset": 0.0,
       "calibrationSlope": 1.0,
       "calibrationOffsetB": 0.0,
       "calibrationSlopeB": 1.0,
       "calibrationOffsetC": 0.0,
-      "calibrationSlopeC": 1.0
+      "calibrationSlopeC": 1.0,
+      "_note": "LIS3DH at 0x19, outputs X/Y/Z to registers 14-16"
     },
     {
       "enabled": true,
-      "name": "Temp1",
+      "name": "Temp1 - Tank Top",
       "type": "DS18B20",
       "protocol": "One-Wire",
       "oneWirePin": 22,
       "updateInterval": 2000,
       "oneWireConversionTime": 750,
-      "modbusRegister": 20,
+      "modbusRegister": 1,
       "calibrationOffset": 0.0,
       "calibrationSlope": 1.0
     },
     {
       "enabled": true,
-      "name": "Temp2",
+      "name": "Temp2 - Tank Middle",
       "type": "DS18B20",
       "protocol": "One-Wire",
       "oneWirePin": 26,
       "updateInterval": 2000,
       "oneWireConversionTime": 750,
-      "modbusRegister": 21,
+      "modbusRegister": 2,
       "calibrationOffset": 0.0,
       "calibrationSlope": 1.0
     },
     {
       "enabled": true,
-      "name": "Temp3",
+      "name": "Temp3 - Tank Bottom",
       "type": "DS18B20",
       "protocol": "One-Wire",
       "oneWirePin": 28,
       "updateInterval": 2000,
       "oneWireConversionTime": 750,
-      "modbusRegister": 22,
+      "modbusRegister": 3,
       "calibrationOffset": 0.0,
       "calibrationSlope": 1.0
     },
@@ -88,7 +90,7 @@
       "dataPin": 2,
       "sclPin": 3,
       "updateInterval": 500,
-      "modbusRegister": 25,
+      "modbusRegister": 61,
       "calibrationOffset": 0.0,
       "calibrationSlope": 1.0,
       "_note": "Weight sensor - planned, not yet connected"
