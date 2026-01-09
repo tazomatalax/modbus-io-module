@@ -1,11 +1,11 @@
 {
   "_comment": "Pico 2 - Motor on Cold Process Tank - Sensor Configuration",
   "_architecture": "This file is synced to device LittleFS /sensors.json",
-  "_registers_note": "Registers: IMU X/Y/Z = 10-12",
+  "_registers_note": "AgriSea Register Scheme: Temp=1-10, Vibration=11-30, pH/EC=51-60, Weight=61-70, Flow=71-80",
   "_node_info": {
     "node_id": 2,
     "location": "Motor on cold process tank",
-    "ip_address": "192.168.100.11",
+    "ip_address": "192.168.100.20",
     "sensors_connected": ["IMU"]
   },
   "sensors": [
@@ -18,14 +18,14 @@
       "sdaPin": 4,
       "sclPin": 5,
       "updateInterval": 1000,
-      "modbusRegister": 10,
+      "modbusRegister": 11,
       "calibrationOffset": 0.0,
       "calibrationSlope": 1.0,
       "calibrationOffsetB": 0.0,
       "calibrationSlopeB": 1.0,
       "calibrationOffsetC": 0.0,
       "calibrationSlopeC": 1.0,
-      "_note": "LIS3DH at 0x18, outputs X/Y/Z to registers 10-12"
+      "_note": "LIS3DH at 0x18, outputs X/Y/Z to registers 11-13"
     }
   ]
 }
