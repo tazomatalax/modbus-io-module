@@ -69,48 +69,48 @@ void applySensorPresets() {
             if (strlen(configuredSensors[i].command) == 0) strcpy(configuredSensors[i].command, "R\r");
             if (strlen(configuredSensors[i].protocol) == 0) strcpy(configuredSensors[i].protocol, "I2C");
             if (configuredSensors[i].updateInterval == 0) configuredSensors[i].updateInterval = 5000;
-            if (configuredSensors[i].modbusRegister == 0) configuredSensors[i].modbusRegister = 10;
+            if (configuredSensors[i].modbusRegister == 0) configuredSensors[i].modbusRegister = 51;
         } else if (strcmp(configuredSensors[i].type, "EZO-EC") == 0) {
             if (configuredSensors[i].i2cAddress == 0) configuredSensors[i].i2cAddress = 0x64;
             if (strlen(configuredSensors[i].command) == 0) strcpy(configuredSensors[i].command, "R");
             if (strlen(configuredSensors[i].protocol) == 0) strcpy(configuredSensors[i].protocol, "I2C");
             if (configuredSensors[i].updateInterval == 0) configuredSensors[i].updateInterval = 5000;
-            if (configuredSensors[i].modbusRegister == 0) configuredSensors[i].modbusRegister = 11;
+            if (configuredSensors[i].modbusRegister == 0) configuredSensors[i].modbusRegister = 52;
         } else if (strcmp(configuredSensors[i].type, "EZO-DO") == 0) {
             if (configuredSensors[i].i2cAddress == 0) configuredSensors[i].i2cAddress = 0x61;
             if (strlen(configuredSensors[i].command) == 0) strcpy(configuredSensors[i].command, "R");
             if (strlen(configuredSensors[i].protocol) == 0) strcpy(configuredSensors[i].protocol, "I2C");
             if (configuredSensors[i].updateInterval == 0) configuredSensors[i].updateInterval = 5000;
-            if (configuredSensors[i].modbusRegister == 0) configuredSensors[i].modbusRegister = 12;
+            if (configuredSensors[i].modbusRegister == 0) configuredSensors[i].modbusRegister = 53;
         } else if (strcmp(configuredSensors[i].type, "EZO-RTD") == 0) {
             if (configuredSensors[i].i2cAddress == 0) configuredSensors[i].i2cAddress = 0x66;
             if (strlen(configuredSensors[i].command) == 0) strcpy(configuredSensors[i].command, "R");
             if (strlen(configuredSensors[i].protocol) == 0) strcpy(configuredSensors[i].protocol, "I2C");
             if (configuredSensors[i].updateInterval == 0) configuredSensors[i].updateInterval = 5000;
-            if (configuredSensors[i].modbusRegister == 0) configuredSensors[i].modbusRegister = 13;
+            if (configuredSensors[i].modbusRegister == 0) configuredSensors[i].modbusRegister = 1;
         } else if (strcmp(configuredSensors[i].type, "SHT30") == 0) {
             if (configuredSensors[i].i2cAddress == 0) configuredSensors[i].i2cAddress = 0x44;
             if (strlen(configuredSensors[i].command) == 0) strcpy(configuredSensors[i].command, "0x2C06");  // SHT30 measurement command
             if (strlen(configuredSensors[i].protocol) == 0) strcpy(configuredSensors[i].protocol, "I2C");
             if (configuredSensors[i].updateInterval == 0) configuredSensors[i].updateInterval = 1000;
             // Don't override manually configured modbus register!
-            if (configuredSensors[i].modbusRegister == 0) configuredSensors[i].modbusRegister = 15;
+            if (configuredSensors[i].modbusRegister == 0) configuredSensors[i].modbusRegister = 2;
         } else if (strcmp(configuredSensors[i].type, "BME280") == 0) {
             if (configuredSensors[i].i2cAddress == 0) configuredSensors[i].i2cAddress = 0x76;
             if (strlen(configuredSensors[i].protocol) == 0) strcpy(configuredSensors[i].protocol, "I2C");
             if (configuredSensors[i].updateInterval == 0) configuredSensors[i].updateInterval = 1000;
-            if (configuredSensors[i].modbusRegister == 0) configuredSensors[i].modbusRegister = 16;
+            if (configuredSensors[i].modbusRegister == 0) configuredSensors[i].modbusRegister = 3;
         } else if (strcmp(configuredSensors[i].type, "DS18B20") == 0) {
             if (strlen(configuredSensors[i].protocol) == 0) strcpy(configuredSensors[i].protocol, "One-Wire");
             if (configuredSensors[i].updateInterval == 0) configuredSensors[i].updateInterval = 2000;
-            if (configuredSensors[i].modbusRegister == 0) configuredSensors[i].modbusRegister = 14;
+            if (configuredSensors[i].modbusRegister == 0) configuredSensors[i].modbusRegister = 4;
         } else if (strcmp(configuredSensors[i].type, "LIS3DH") == 0) {
             if (configuredSensors[i].i2cAddress == 0) configuredSensors[i].i2cAddress = 0x18;
             // LIS3DH uses direct register read, NOT a command - clear any existing command
             memset(configuredSensors[i].command, 0, sizeof(configuredSensors[i].command));
             if (strlen(configuredSensors[i].protocol) == 0) strcpy(configuredSensors[i].protocol, "I2C");
             if (configuredSensors[i].updateInterval == 0) configuredSensors[i].updateInterval = 1000;
-            if (configuredSensors[i].modbusRegister == 0) configuredSensors[i].modbusRegister = 20;
+            if (configuredSensors[i].modbusRegister == 0) configuredSensors[i].modbusRegister = 11;
         } else if (strcmp(configuredSensors[i].type, "Generic One-Wire") == 0) {
             if (strlen(configuredSensors[i].protocol) == 0) strcpy(configuredSensors[i].protocol, "One-Wire");
             if (configuredSensors[i].updateInterval == 0) configuredSensors[i].updateInterval = 2000;
@@ -3846,8 +3846,9 @@ void loadSensorConfig() {
 }
 
 void saveSensorConfig() {
-    // Create JSON document
-    StaticJsonDocument<2048> doc;
+    // Create JSON document - 8192 bytes supports ~18 sensors @ ~445 bytes each
+    // Bug fix: was 2048 which caused truncation with 5+ sensors
+    StaticJsonDocument<8192> doc;
     JsonArray sensorsArray = doc.createNestedArray("sensors");
     // Add each configured sensor to the array
     for (int i = 0; i < numConfiguredSensors; i++) {
@@ -5969,7 +5970,9 @@ float parseSensorData(const char* rawData, const SensorConfig& sensor) {
 }
 
 void sendJSONSensorConfig(WiFiClient& client) {
-    StaticJsonDocument<2048> doc;
+    // 8192 bytes supports ~18 sensors @ ~445 bytes each
+    // Bug fix: was 2048 which caused truncation with 5+ sensors
+    StaticJsonDocument<8192> doc;
     JsonArray sensorsArray = doc.createNestedArray("sensors");
     
     for (int i = 0; i < numConfiguredSensors; i++) {
@@ -6574,7 +6577,9 @@ void handlePOSTSensorConfig(WiFiClient& client, String body) {
     Serial.printf("POST /sensors/config - Body length: %d bytes\n", body.length());
     Serial.printf("Body content: %s\n", body.c_str());
     
-    StaticJsonDocument<4096> doc; // Increased from 2048 to 4096
+    // 8192 bytes supports ~18 sensors @ ~445 bytes each
+    // Bug fix: was 4096 which could still truncate large configs
+    StaticJsonDocument<8192> doc;
     DeserializationError error = deserializeJson(doc, body);
     if (error) {
         Serial.printf("JSON deserialization error: %s\n", error.c_str());
