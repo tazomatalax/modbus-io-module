@@ -1,5 +1,6 @@
 #include "sys_init.h"
 #include "i2c_bus_manager.h"
+#include "vibration.h"
 #include <Adafruit_LIS3DH.h>
 #include <Adafruit_Sensor.h>
 
@@ -26,6 +27,9 @@ I2CBusManager i2cBusManager;
 // SensorConfig array definition (from sys_init.h extern)
 SensorConfig configuredSensors[MAX_SENSORS] = {};
 int numConfiguredSensors = 0;
+
+// Core synchronization flag (for multicore vibration module)
+bool core0setupComplete = false;
 
 // Preset table for named sensors
 struct SensorPreset {
@@ -212,6 +216,7 @@ int oneWireQueueSize = 0;
 void handleSimpleHTTP();
 void updateIOForClient(int clientIndex);
 void routeRequest(WiFiClient& client, String method, String path, String body);
+void sendJSONVibration(WiFiClient& client);
 void applyExternalModbusOverride();
 void sendFile(WiFiClient& client, String filename, String contentType);
 void send404(WiFiClient& client);
@@ -2064,6 +2069,13 @@ void setup() {
             delay(500);  // Wait 500ms for first data to be available
         }
     }
+
+    // Initialize vibration analysis module (runs on Core 1)
+    Serial.println("\n========================================");
+    Serial.println("Initializing Vibration Analysis Module...");
+    Serial.println("========================================");
+    initVibrationModule();
+    Serial.println("Vibration module initialized - Core 1 will start sampling\n");
 
     // Start watchdog
     rp2040.wdt_begin(WDT_TIMEOUT);
@@ -5249,6 +5261,9 @@ void routeRequest(WiFiClient& client, String method, String path, String body) {
             sendJSONSensorPinStatus(client);
         } else if (path == "/api/rules/status") {
             sendJSONRulesStatus(client);
+        } else if (path == "/vibration") {
+            // Send vibration analysis statistics
+            sendJSONVibration(client);
         } else if (path == "/terminal/logs") {
             // Send terminal buffer for bus traffic monitoring
             StaticJsonDocument<2048> terminalDoc;
@@ -5967,6 +5982,93 @@ float parseSensorData(const char* rawData, const SensorConfig& sensor) {
     
     // Unknown method, fallback to raw parsing
     return atof(rawData);
+}
+
+// ============================================================================
+// VIBRATION ANALYSIS REST ENDPOINT
+// GET /vibration - Returns high-frequency vibration statistics
+// ============================================================================
+void sendJSONVibration(WiFiClient& client) {
+    StaticJsonDocument<1536> doc;
+    
+    // Module configuration
+    doc["sample_rate_hz"] = VIBRATION_SAMPLE_RATE_HZ;
+    doc["window_samples"] = VIBRATION_WINDOW_SAMPLES;
+    doc["update_interval_ms"] = VIBRATION_UPDATE_INTERVAL_MS;
+    doc["sensor_count"] = numVibrationSensors;
+    doc["enabled"] = vibrationEnabled;
+    doc["data_ready"] = vibrationDataReady;
+    
+    // Sensor array
+    JsonArray sensorsArray = doc.createNestedArray("sensors");
+    
+    for (int i = 0; i < numVibrationSensors; i++) {
+        VibrationStats* stats = getVibrationStatsByIndex(i);
+        if (stats == nullptr) continue;
+        
+        JsonObject sensor = sensorsArray.createNestedObject();
+        sensor["index"] = i;
+        sensor["i2c_address"] = vibrationSensors[i].i2cAddress;
+        sensor["valid"] = stats->valid;
+        sensor["sample_count"] = stats->sampleCount;
+        sensor["last_update"] = stats->lastUpdateTime;
+        
+        // Modbus register base for this sensor
+        int regBase = (i == 0) ? VIBRATION_REG_BASE_SENSOR1 : VIBRATION_REG_BASE_SENSOR2;
+        sensor["modbus_register_base"] = regBase;
+        
+        if (stats->valid) {
+            // RMS values in milligravity (mg)
+            JsonObject rms = sensor.createNestedObject("rms_mg");
+            rms["x"] = round(stats->rmsX * 100) / 100.0;
+            rms["y"] = round(stats->rmsY * 100) / 100.0;
+            rms["z"] = round(stats->rmsZ * 100) / 100.0;
+            rms["magnitude"] = round(stats->rmsMagnitude * 100) / 100.0;
+            
+            // Peak values in milligravity (mg)
+            JsonObject peak = sensor.createNestedObject("peak_mg");
+            peak["x"] = round(stats->peakX * 100) / 100.0;
+            peak["y"] = round(stats->peakY * 100) / 100.0;
+            peak["z"] = round(stats->peakZ * 100) / 100.0;
+            peak["magnitude"] = round(stats->peakMagnitude * 100) / 100.0;
+            
+            // Crest factor (dimensionless ratio)
+            JsonObject crest = sensor.createNestedObject("crest_factor");
+            crest["x"] = round(stats->crestFactorX * 100) / 100.0;
+            crest["y"] = round(stats->crestFactorY * 100) / 100.0;
+            crest["z"] = round(stats->crestFactorZ * 100) / 100.0;
+            
+            // Velocity RMS in mm/s (industry standard for machine condition)
+            JsonObject velocity = sensor.createNestedObject("velocity_rms_mm_s");
+            velocity["x"] = round(stats->velocityRmsX * 100) / 100.0;
+            velocity["y"] = round(stats->velocityRmsY * 100) / 100.0;
+            velocity["z"] = round(stats->velocityRmsZ * 100) / 100.0;
+            
+            // Include ISO 10816-3 severity assessment (simplified)
+            // Velocity RMS thresholds for small machines:
+            // < 1.8 mm/s = Good, 1.8-4.5 = Satisfactory, 4.5-11.2 = Unsatisfactory, > 11.2 = Unacceptable
+            float maxVelocity = fmaxf(fmaxf(stats->velocityRmsX, stats->velocityRmsY), stats->velocityRmsZ);
+            if (maxVelocity < 1.8) {
+                sensor["condition"] = "good";
+            } else if (maxVelocity < 4.5) {
+                sensor["condition"] = "satisfactory";
+            } else if (maxVelocity < 11.2) {
+                sensor["condition"] = "unsatisfactory";
+            } else {
+                sensor["condition"] = "unacceptable";
+            }
+            
+            // Crest factor warning (indicates bearing damage)
+            float maxCrest = fmaxf(fmaxf(stats->crestFactorX, stats->crestFactorY), stats->crestFactorZ);
+            if (maxCrest > 5.0) {
+                sensor["bearing_warning"] = true;
+            }
+        }
+    }
+    
+    String jsonBuffer;
+    serializeJson(doc, jsonBuffer);
+    sendJSON(client, jsonBuffer);
 }
 
 void sendJSONSensorConfig(WiFiClient& client) {
@@ -7444,6 +7546,60 @@ void updateIOForClient(int clientIndex) {
                 modbusClients[clientIndex].server.inputRegisterWrite(configuredSensors[i].modbusRegister + 2, configuredSensors[i].modbusValueC);
             }
             // Future: Add BME280 (temp, hum, pressure) and other multi-output sensors here
+        }
+    }
+    
+    // ========================================================================
+    // VIBRATION ANALYSIS REGISTERS (High-frequency statistics from Core 1)
+    // ========================================================================
+    // Sensor 1: Registers 20-33
+    // Sensor 2: Registers 40-53
+    // See vibration-analysis-implementation-plan.md for full register map
+    //
+    // | Register | Field             | Description                | Scale   |
+    // |----------|-------------------|----------------------------|---------|
+    // | 20/40    | rms_x            | X-axis RMS acceleration    | ×100 mg |
+    // | 21/41    | rms_y            | Y-axis RMS acceleration    | ×100 mg |
+    // | 22/42    | rms_z            | Z-axis RMS acceleration    | ×100 mg |
+    // | 23/43    | rms_magnitude    | Combined RMS               | ×100 mg |
+    // | 24/44    | peak_x           | X-axis peak                | ×100 mg |
+    // | 25/45    | peak_y           | Y-axis peak                | ×100 mg |
+    // | 26/46    | peak_z           | Z-axis peak                | ×100 mg |
+    // | 27/47    | peak_magnitude   | Combined peak              | ×100 mg |
+    // | 28/48    | crest_factor_x   | X crest factor             | ×100    |
+    // | 29/49    | crest_factor_y   | Y crest factor             | ×100    |
+    // | 30/50    | crest_factor_z   | Z crest factor             | ×100    |
+    // | 31/51    | velocity_rms_x   | X velocity RMS             | ×100 mm/s |
+    // | 32/52    | velocity_rms_y   | Y velocity RMS             | ×100 mm/s |
+    // | 33/53    | velocity_rms_z   | Z velocity RMS             | ×100 mm/s |
+    // ========================================================================
+    
+    for (int vs = 0; vs < numVibrationSensors; vs++) {
+        VibrationStats* stats = getVibrationStatsByIndex(vs);
+        if (stats != nullptr && stats->valid) {
+            int regBase = (vs == 0) ? VIBRATION_REG_BASE_SENSOR1 : VIBRATION_REG_BASE_SENSOR2;
+            
+            // RMS values (×100 for decimal precision)
+            modbusClients[clientIndex].server.inputRegisterWrite(regBase + 0, (int16_t)(stats->rmsX * 100));
+            modbusClients[clientIndex].server.inputRegisterWrite(regBase + 1, (int16_t)(stats->rmsY * 100));
+            modbusClients[clientIndex].server.inputRegisterWrite(regBase + 2, (int16_t)(stats->rmsZ * 100));
+            modbusClients[clientIndex].server.inputRegisterWrite(regBase + 3, (int16_t)(stats->rmsMagnitude * 100));
+            
+            // Peak values (×100 for decimal precision)
+            modbusClients[clientIndex].server.inputRegisterWrite(regBase + 4, (int16_t)(stats->peakX * 100));
+            modbusClients[clientIndex].server.inputRegisterWrite(regBase + 5, (int16_t)(stats->peakY * 100));
+            modbusClients[clientIndex].server.inputRegisterWrite(regBase + 6, (int16_t)(stats->peakZ * 100));
+            modbusClients[clientIndex].server.inputRegisterWrite(regBase + 7, (int16_t)(stats->peakMagnitude * 100));
+            
+            // Crest factor (×100)
+            modbusClients[clientIndex].server.inputRegisterWrite(regBase + 8, (int16_t)(stats->crestFactorX * 100));
+            modbusClients[clientIndex].server.inputRegisterWrite(regBase + 9, (int16_t)(stats->crestFactorY * 100));
+            modbusClients[clientIndex].server.inputRegisterWrite(regBase + 10, (int16_t)(stats->crestFactorZ * 100));
+            
+            // Velocity RMS (×100 mm/s)
+            modbusClients[clientIndex].server.inputRegisterWrite(regBase + 11, (int16_t)(stats->velocityRmsX * 100));
+            modbusClients[clientIndex].server.inputRegisterWrite(regBase + 12, (int16_t)(stats->velocityRmsY * 100));
+            modbusClients[clientIndex].server.inputRegisterWrite(regBase + 13, (int16_t)(stats->velocityRmsZ * 100));
         }
     }
     
