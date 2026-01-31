@@ -84,8 +84,8 @@ struct CommandArray {
 #define MAX_MODBUS_CLIENTS 4  // Maximum number of concurrent Modbus clients
 #define MAX_SENSORS 10
 
-// Global flags
-bool core0setupComplete = false;
+// Global flags (defined in main.cpp)
+extern bool core0setupComplete;
 
 // I/O Configuration Structures (replacing hardcoded pin arrays)
 #define MAX_IO_PINS 16
@@ -352,6 +352,90 @@ struct ModbusClientConnection {
 extern ModbusClientConnection modbusClients[MAX_MODBUS_CLIENTS];
 extern int connectedClients;
 
+// ============================================================================
+// VIBRATION ANALYSIS CONFIGURATION (Phase 1: High-Frequency Statistics)
+// ============================================================================
+// Vibration analysis runs on Core 1, sampling LIS3DH sensors at high frequency
+// and computing statistics that are exposed via Modbus and REST at lower rates.
+
+#define VIBRATION_SAMPLE_RATE_HZ 500     // Target sample rate for vibration capture
+#define VIBRATION_WINDOW_SAMPLES 512     // ~1 second window at 500 Hz
+#define VIBRATION_UPDATE_INTERVAL_MS 1000 // Report statistics every 1 second
+#define MAX_VIBRATION_SENSORS 2          // Maximum LIS3DH sensors for vibration analysis
+
+// Vibration statistics structure (per sensor)
+struct VibrationStats {
+    // RMS values (mg - milligravity)
+    float rmsX;
+    float rmsY;
+    float rmsZ;
+    float rmsMagnitude;  // √(X² + Y² + Z²)
+    
+    // Peak values (mg)
+    float peakX;
+    float peakY;
+    float peakZ;
+    float peakMagnitude;
+    
+    // Crest factor (Peak / RMS) - indicates impulsive vibration
+    float crestFactorX;
+    float crestFactorY;
+    float crestFactorZ;
+    
+    // Velocity RMS (mm/s) - integrated from acceleration
+    float velocityRmsX;
+    float velocityRmsY;
+    float velocityRmsZ;
+    
+    // Metadata
+    uint32_t sampleCount;
+    uint32_t lastUpdateTime;
+    bool valid;
+};
+
+// Per-sensor vibration state (managed by Core 1)
+struct VibrationSensorState {
+    uint8_t i2cAddress;
+    uint8_t sdaPin;
+    uint8_t sclPin;
+    bool enabled;
+    uint8_t sensorIndex;  // Index in configuredSensors[] array
+    
+    // Circular buffer for samples (stored in raw ADC units to save memory)
+    int16_t samplesX[VIBRATION_WINDOW_SAMPLES];
+    int16_t samplesY[VIBRATION_WINDOW_SAMPLES];
+    int16_t samplesZ[VIBRATION_WINDOW_SAMPLES];
+    uint16_t sampleIndex;
+    uint16_t sampleCount;
+    
+    // Running accumulators for efficient RMS calculation
+    int64_t sumSquaresX;
+    int64_t sumSquaresY;
+    int64_t sumSquaresZ;
+    int16_t maxX, maxY, maxZ;
+    int16_t minX, minY, minZ;
+    
+    // Output statistics (computed and made available to Core 0)
+    VibrationStats stats;
+};
+
+// Global vibration state (extern declarations)
+extern VibrationSensorState vibrationSensors[MAX_VIBRATION_SENSORS];
+extern int numVibrationSensors;
+extern volatile bool vibrationDataReady;
+extern volatile bool vibrationEnabled;
+
+// Vibration module function declarations
+void initVibrationModule();
+VibrationStats* getVibrationStats(uint8_t i2cAddress);
+VibrationStats* getVibrationStatsByIndex(int index);
+
+// Modbus register allocation for vibration data
+// Sensor 1: Registers 20-33
+// Sensor 2: Registers 40-53
+#define VIBRATION_REG_BASE_SENSOR1 20
+#define VIBRATION_REG_BASE_SENSOR2 40
+
 // Default configuration
 const Config DEFAULT_CONFIG = {
     .version = CONFIG_VERSION,
@@ -382,8 +466,8 @@ void resetLatches();
 void initializeEzoSensors();
 void handleEzoSensors();
 
-// File serving helper for main.cpp
-void serveFileFromFS(WiFiClient& client, const String& filename, const String& contentType) {
+// File serving helper for main.cpp (inline to avoid multiple definition)
+inline void serveFileFromFS(WiFiClient& client, const String& filename, const String& contentType) {
     Serial.print("[serveFileFromFS] Requested filename: ");
     Serial.println(filename);
     Serial.print("[serveFileFromFS] Content-Type: ");
