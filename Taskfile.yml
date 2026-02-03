@@ -1,0 +1,310 @@
+version: '3'
+
+# Taskfile for Modbus IO Module - Multi-Device Firmware Management
+# Usage: task <command>
+# Example: task upload:pico3
+#
+# Install task runner: https://taskfile.dev/installation/
+# Windows (Chocolatey): choco install go-task
+# Windows (Scoop): scoop install task
+
+vars:
+  # PlatformIO command
+  PIO: pio
+
+tasks:
+  # ===========================================================================
+  # Default task - show help
+  # ===========================================================================
+  default:
+    desc: Show available tasks
+    cmds:
+      - task --list
+
+  # ===========================================================================
+  # Build tasks - compile firmware without uploading
+  # ===========================================================================
+  build:pico1:
+    desc: "Build firmware for Pico 1 (Cold Buffer Pump - 192.168.100.10)"
+    cmds:
+      - "{{.PIO}} run -e pico1"
+
+  build:pico2:
+    desc: "Build firmware for Pico 2 (Cold Process Tank Motor - 192.168.100.20)"
+    cmds:
+      - "{{.PIO}} run -e pico2"
+
+  build:pico3:
+    desc: "Build firmware for Pico 3 (Cold Buffer Tank - 192.168.100.30)"
+    cmds:
+      - "{{.PIO}} run -e pico3"
+
+  build:pico4:
+    desc: "Build firmware for Pico 4 (Hot Process Tank - 192.168.100.40)"
+    cmds:
+      - "{{.PIO}} run -e pico4"
+
+  build:pico5:
+    desc: "Build firmware for Pico 5 (Dewatering Centrifuge - 192.168.100.50)"
+    cmds:
+      - "{{.PIO}} run -e pico5"
+
+  build:pico6:
+    desc: "Build firmware for Pico 6 (Hot Buffer Tank - 192.168.100.60)"
+    cmds:
+      - "{{.PIO}} run -e pico6"
+
+  build:all:
+    desc: "Build firmware for all Pico devices"
+    cmds:
+      - task: build:pico1
+      - task: build:pico2
+      - task: build:pico3
+      - task: build:pico4
+      - task: build:pico5
+      - task: build:pico6
+
+  # ===========================================================================
+  # Upload firmware tasks
+  # ===========================================================================
+  upload:pico1:
+    desc: "Upload firmware to Pico 1 (Cold Buffer Pump)"
+    cmds:
+      - "{{.PIO}} run -e pico1 -t upload"
+
+  upload:pico2:
+    desc: "Upload firmware to Pico 2 (Cold Process Tank Motor)"
+    cmds:
+      - "{{.PIO}} run -e pico2 -t upload"
+
+  upload:pico3:
+    desc: "Upload firmware to Pico 3 (Cold Buffer Tank)"
+    cmds:
+      - "{{.PIO}} run -e pico3 -t upload"
+
+  upload:pico4:
+    desc: "Upload firmware to Pico 4 (Hot Process Tank)"
+    cmds:
+      - "{{.PIO}} run -e pico4 -t upload"
+
+  upload:pico5:
+    desc: "Upload firmware to Pico 5 (Dewatering Centrifuge)"
+    cmds:
+      - "{{.PIO}} run -e pico5 -t upload"
+
+  upload:pico6:
+    desc: "Upload firmware to Pico 6 (Hot Buffer Tank)"
+    cmds:
+      - "{{.PIO}} run -e pico6 -t upload"
+
+  # ===========================================================================
+  # Upload filesystem tasks (config + web UI)
+  # ===========================================================================
+  uploadfs:pico1:
+    desc: "Upload filesystem to Pico 1 (config + web UI)"
+    cmds:
+      - "{{.PIO}} run -e pico1 -t uploadfs"
+
+  uploadfs:pico2:
+    desc: "Upload filesystem to Pico 2 (config + web UI)"
+    cmds:
+      - "{{.PIO}} run -e pico2 -t uploadfs"
+
+  uploadfs:pico3:
+    desc: "Upload filesystem to Pico 3 (config + web UI)"
+    cmds:
+      - "{{.PIO}} run -e pico3 -t uploadfs"
+
+  uploadfs:pico4:
+    desc: "Upload filesystem to Pico 4 (config + web UI)"
+    cmds:
+      - "{{.PIO}} run -e pico4 -t uploadfs"
+
+  uploadfs:pico5:
+    desc: "Upload filesystem to Pico 5 (config + web UI)"
+    cmds:
+      - "{{.PIO}} run -e pico5 -t uploadfs"
+
+  uploadfs:pico6:
+    desc: "Upload filesystem to Pico 6 (config + web UI)"
+    cmds:
+      - "{{.PIO}} run -e pico6 -t uploadfs"
+
+  # ===========================================================================
+  # Full deployment tasks (firmware + filesystem)
+  # ===========================================================================
+  deploy:pico1:
+    desc: "Deploy everything to Pico 1 (firmware + filesystem)"
+    cmds:
+      - task: upload:pico1
+      - task: uploadfs:pico1
+
+  deploy:pico2:
+    desc: "Deploy everything to Pico 2 (firmware + filesystem)"
+    cmds:
+      - task: upload:pico2
+      - task: uploadfs:pico2
+
+  deploy:pico3:
+    desc: "Deploy everything to Pico 3 (firmware + filesystem)"
+    cmds:
+      - task: upload:pico3
+      - task: uploadfs:pico3
+
+  deploy:pico4:
+    desc: "Deploy everything to Pico 4 (firmware + filesystem)"
+    cmds:
+      - task: upload:pico4
+      - task: uploadfs:pico4
+
+  deploy:pico5:
+    desc: "Deploy everything to Pico 5 (firmware + filesystem)"
+    cmds:
+      - task: upload:pico5
+      - task: uploadfs:pico5
+
+  deploy:pico6:
+    desc: "Deploy everything to Pico 6 (firmware + filesystem)"
+    cmds:
+      - task: upload:pico6
+      - task: uploadfs:pico6
+
+  # ===========================================================================
+  # Update only configs (when sensors/network settings change)
+  # ===========================================================================
+  config:pico1:
+    desc: "Update only config files for Pico 1 (faster than full uploadfs)"
+    cmds:
+      - task: uploadfs:pico1
+
+  config:pico2:
+    desc: "Update only config files for Pico 2"
+    cmds:
+      - task: uploadfs:pico2
+
+  config:pico3:
+    desc: "Update only config files for Pico 3"
+    cmds:
+      - task: uploadfs:pico3
+
+  config:pico4:
+    desc: "Update only config files for Pico 4"
+    cmds:
+      - task: uploadfs:pico4
+
+  config:pico5:
+    desc: "Update only config files for Pico 5"
+    cmds:
+      - task: uploadfs:pico5
+
+  config:pico6:
+    desc: "Update only config files for Pico 6"
+    cmds:
+      - task: uploadfs:pico6
+
+  # ===========================================================================
+  # Maintenance tasks
+  # ===========================================================================
+  clean:
+    desc: "Clean build artifacts"
+    cmds:
+      - "{{.PIO}} run -t clean"
+
+  clean:all:
+    desc: "Deep clean - remove all build files"
+    cmds:
+      - rm -rf .pio
+
+  list:
+    desc: "List all PlatformIO environments"
+    cmds:
+      - "{{.PIO}} run --list-targets"
+
+  monitor:
+    desc: "Open serial monitor (auto-detect port)"
+    cmds:
+      - "{{.PIO}} device monitor"
+
+  # ===========================================================================
+  # Development helpers
+  # ===========================================================================
+  check:
+    desc: "Check code without building"
+    cmds:
+      - "{{.PIO}} check"
+
+  test:
+    desc: "Run tests"
+    cmds:
+      - "{{.PIO}} test"
+
+  # ===========================================================================
+  # Simulator tasks
+  # ===========================================================================
+  sim:install:
+    desc: "Install simulator dependencies"
+    dir: simulator
+    cmds:
+      - npm install
+
+  sim:start:
+    desc: "Start web UI simulator"
+    dir: simulator
+    cmds:
+      - npm start
+
+  sim:dev:
+    desc: "Start simulator in watch mode"
+    dir: simulator
+    cmds:
+      - npm run dev
+
+  # ===========================================================================
+  # Batch operations
+  # ===========================================================================
+  flash:all:
+    desc: "Flash firmware to ALL connected Picos (DANGEROUS - connect only target devices)"
+    prompt: "This will flash ALL connected devices. Continue?"
+    cmds:
+      - task: upload:pico1
+      - task: upload:pico2
+      - task: upload:pico3
+      - task: upload:pico4
+      - task: upload:pico5
+      - task: upload:pico6
+
+  # ===========================================================================
+  # Quick reference
+  # ===========================================================================
+  help:
+    desc: "Show detailed help and usage examples"
+    cmds:
+      - |
+        echo ""
+        echo "==================================================================="
+        echo "Modbus IO Module - Quick Reference"
+        echo "==================================================================="
+        echo ""
+        echo "COMMON WORKFLOWS:"
+        echo "  task upload:pico3        - Flash firmware to Pico 3"
+        echo "  task uploadfs:pico3      - Upload configs + web UI to Pico 3"
+        echo "  task deploy:pico3        - Do both (firmware + filesystem)"
+        echo "  task config:pico3        - Update only config files"
+        echo "  task monitor             - Open serial monitor"
+        echo ""
+        echo "DEVICE MAP:"
+        echo "  pico1 - Cold Buffer Pump (192.168.100.10)"
+        echo "  pico2 - Cold Process Tank Motor (192.168.100.20)"
+        echo "  pico3 - Cold Buffer Tank (192.168.100.30)"
+        echo "  pico4 - Hot Process Tank (192.168.100.40)"
+        echo "  pico5 - Dewatering Centrifuge (192.168.100.50)"
+        echo "  pico6 - Hot Buffer Tank (192.168.100.60)"
+        echo ""
+        echo "DEVELOPMENT:"
+        echo "  task build:pico1         - Build without uploading"
+        echo "  task clean               - Clean build artifacts"
+        echo "  task sim:start           - Start web UI simulator"
+        echo ""
+        echo "For all tasks: task --list"
+        echo "==================================================================="
+        echo ""
