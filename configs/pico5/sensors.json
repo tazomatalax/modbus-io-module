@@ -1,0 +1,66 @@
+{
+  "_comment": "Pico 5 - Dewatering Centrifuge - Sensor Configuration",
+  "_architecture": "This file is synced to device LittleFS /sensors.json",
+  "_registers_note": "AgriSea Register Scheme: Temp=1-10, Vibration=11-30, pH/EC=51-60, Weight=61-70, Flow=71-80",
+  "_node_info": {
+    "node_id": 5,
+    "location": "Dewatering centrifuge",
+    "ip_address": "192.168.100.50",
+    "sensors_connected": ["IMU", "pH", "EC"],
+    "sensors_planned": ["Flow Meter"]
+  },
+  "sensors": [
+    {
+      "enabled": true,
+      "name": "IMU - Centrifuge Vibration",
+      "type": "LIS3DH",
+      "protocol": "I2C",
+      "i2cAddress": 24,
+      "sdaPin": 4,
+      "sclPin": 5,
+      "updateInterval": 1000,
+      "modbusRegister": 11,
+      "calibrationOffset": 0.0,
+      "calibrationSlope": 1.0,
+      "calibrationOffsetB": 0.0,
+      "calibrationSlopeB": 1.0,
+      "calibrationOffsetC": 0.0,
+      "calibrationSlopeC": 1.0,
+      "_note": "LIS3DH at 0x18, outputs X/Y/Z to registers 11-13"
+    },
+    {
+      "enabled": true,
+      "name": "pH Sensor - Dewatering",
+      "type": "EZO_PH",
+      "protocol": "I2C",
+      "i2cAddress": 72,
+      "updateInterval": 5000,
+      "modbusRegister": 51,
+      "calibrationOffset": 0.0,
+      "calibrationSlope": 1.0,
+      "_note": "Atlas Scientific EZO-pH at 0x48, output to register 51"
+    },
+    {
+      "enabled": true,
+      "name": "Conductivity Sensor - Dewatering",
+      "type": "EZO_EC",
+      "protocol": "I2C",
+      "i2cAddress": 100,
+      "updateInterval": 5000,
+      "modbusRegister": 52,
+      "calibrationOffset": 0.0,
+      "calibrationSlope": 1.0,
+      "_note": "Atlas Scientific EZO-EC at 0x64, output to register 52"
+    },
+    {
+      "enabled": false,
+      "name": "Flow Meter - Dewatering",
+      "type": "RS485_MODBUS",
+      "protocol": "RS485",
+      "slaveAddress": 1,
+      "baudRate": 9600,
+      "modbusRegister": 71,
+      "_note": "RS485 flow meter - placeholder, not yet connected"
+    }
+  ]
+}

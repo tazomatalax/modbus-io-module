@@ -1,0 +1,61 @@
+{
+  "_comment": "Pico 4 - Hot Process Tank - Sensor Configuration",
+  "_architecture": "This file is synced to device LittleFS /sensors.json",
+  "_registers_note": "AgriSea Register Scheme: Temp=1-10, Vibration=11-30, pH/EC=51-60, Weight=61-70, Flow=71-80",
+  "_node_info": {
+    "node_id": 4,
+    "location": "Hot process tank",
+    "ip_address": "192.168.100.40",
+    "sensors_connected": ["IMU1", "IMU2", "Temperature"]
+  },
+  "sensors": [
+    {
+      "enabled": true,
+      "name": "IMU1 - Hot Tank Vibration",
+      "type": "LIS3DH",
+      "protocol": "I2C",
+      "i2cAddress": 24,
+      "sdaPin": 4,
+      "sclPin": 5,
+      "updateInterval": 1000,
+      "modbusRegister": 11,
+      "calibrationOffset": 0.0,
+      "calibrationSlope": 1.0,
+      "calibrationOffsetB": 0.0,
+      "calibrationSlopeB": 1.0,
+      "calibrationOffsetC": 0.0,
+      "calibrationSlopeC": 1.0,
+      "_note": "LIS3DH at 0x18, outputs X/Y/Z to registers 11-13"
+    },
+    {
+      "enabled": true,
+      "name": "IMU2 - Tank Outlet Vibration",
+      "type": "LIS3DH",
+      "protocol": "I2C",
+      "i2cAddress": 25,
+      "sdaPin": 4,
+      "sclPin": 5,
+      "updateInterval": 1000,
+      "modbusRegister": 14,
+      "calibrationOffset": 0.0,
+      "calibrationSlope": 1.0,
+      "calibrationOffsetB": 0.0,
+      "calibrationSlopeB": 1.0,
+      "calibrationOffsetC": 0.0,
+      "calibrationSlopeC": 1.0,
+      "_note": "LIS3DH at 0x19, outputs X/Y/Z to registers 14-16"
+    },
+    {
+      "enabled": true,
+      "name": "Temperature Sensor - Hot Tank",
+      "type": "DS18B20",
+      "protocol": "One-Wire",
+      "oneWirePin": 28,
+      "updateInterval": 2000,
+      "oneWireConversionTime": 750,
+      "modbusRegister": 1,
+      "calibrationOffset": 0.0,
+      "calibrationSlope": 1.0
+    }
+  ]
+}
